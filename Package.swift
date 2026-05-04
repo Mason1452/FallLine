@@ -35,5 +35,11 @@ let package = Package(
                 .linkedFramework("CoreImage"),
             ]
         ),
+
+        // MARK: - 测试
+        .testTarget(
+            name: "VideoVisionCoreTests",
+            dependencies: ["VideoVisionCore"]
+        ),
     ]
 )

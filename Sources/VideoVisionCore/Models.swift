@@ -81,8 +81,28 @@ public struct BodyPoseData: Codable {
     public let leftCalfLeanAngle: MetricWithConfidence<Double>?
     public let rightCalfLeanAngle: MetricWithConfidence<Double>?
 
-    /// 相对重心高度（0~1，基于人体比例，与站位远近无关）
-    public let centerOfGravity: MetricWithConfidence<String>?
+    /// 相对重心高度（hipRatio，0~1 连续值，基于人体比例，与站位远近无关）
+    /// 值越小 = 髋部越靠近脚踝 = 重心越低（理想滑雪姿态）
+    public let centerOfGravity: MetricWithConfidence<Double>?
+
+    /// 有符号身体倾斜角。正值表示向画面右侧倾斜，负值表示向画面左侧倾斜。
+    public let signedBodyLeanAngle: MetricWithConfidence<Double>?
+    /// 有符号小腿倾斜角。正值表示小腿向画面右侧倾斜，负值表示向画面左侧倾斜。
+    public let signedCalfLeanAngle: MetricWithConfidence<Double>?
+    /// 髋部中心点 X 坐标（Vision 归一化坐标，0...1）。
+    public let hipCenterX: MetricWithConfidence<Double>?
+    /// 脚踝中心点 X 坐标（Vision 归一化坐标，0...1）。
+    public let ankleCenterX: MetricWithConfidence<Double>?
+    /// 身体中心点 X 坐标（肩、髋、踝可见中心的平均）。
+    public let bodyCenterX: MetricWithConfidence<Double>?
+    /// 髋部中心点 Y 坐标（Vision 归一化坐标，0...1）。
+    public let hipCenterY: MetricWithConfidence<Double>?
+    /// 脚踝中心点 Y 坐标（Vision 归一化坐标，0...1）。
+    public let ankleCenterY: MetricWithConfidence<Double>?
+    /// 身体中心点 Y 坐标（肩、髋、踝可见中心的平均）。
+    public let bodyCenterY: MetricWithConfidence<Double>?
+    /// 用左右脚踝连线代理的板身角度。0 度指向画面右侧，逆时针为正，范围 [-180, 180)。
+    public let ankleProxyBoardAngle: MetricWithConfidence<Double>?
 
     public init(
         detected: Bool,
@@ -94,7 +114,16 @@ public struct BodyPoseData: Codable {
         rightKneeBendAngle: MetricWithConfidence<Double>?,
         leftCalfLeanAngle: MetricWithConfidence<Double>?,
         rightCalfLeanAngle: MetricWithConfidence<Double>?,
-        centerOfGravity: MetricWithConfidence<String>?
+        centerOfGravity: MetricWithConfidence<Double>?,
+        signedBodyLeanAngle: MetricWithConfidence<Double>? = nil,
+        signedCalfLeanAngle: MetricWithConfidence<Double>? = nil,
+        hipCenterX: MetricWithConfidence<Double>? = nil,
+        ankleCenterX: MetricWithConfidence<Double>? = nil,
+        bodyCenterX: MetricWithConfidence<Double>? = nil,
+        hipCenterY: MetricWithConfidence<Double>? = nil,
+        ankleCenterY: MetricWithConfidence<Double>? = nil,
+        bodyCenterY: MetricWithConfidence<Double>? = nil,
+        ankleProxyBoardAngle: MetricWithConfidence<Double>? = nil
     ) {
         self.detected = detected
         self.visibility = visibility
@@ -106,6 +135,15 @@ public struct BodyPoseData: Codable {
         self.leftCalfLeanAngle = leftCalfLeanAngle
         self.rightCalfLeanAngle = rightCalfLeanAngle
         self.centerOfGravity = centerOfGravity
+        self.signedBodyLeanAngle = signedBodyLeanAngle
+        self.signedCalfLeanAngle = signedCalfLeanAngle
+        self.hipCenterX = hipCenterX
+        self.ankleCenterX = ankleCenterX
+        self.bodyCenterX = bodyCenterX
+        self.hipCenterY = hipCenterY
+        self.ankleCenterY = ankleCenterY
+        self.bodyCenterY = bodyCenterY
+        self.ankleProxyBoardAngle = ankleProxyBoardAngle
     }
 }
 
@@ -118,6 +156,12 @@ public struct PoseScore: Codable {
     public let calfLeanScore: Double        // 小腿倾斜得分（权重20%）
     public let gravityScore: Double         // 重心得分（权重20%）
     public let symmetryScore: Double        // 对称性得分（权重15%）
+    public let totalConfidence: Double
+    public let forwardLeanConfidence: Double
+    public let kneeBendConfidence: Double
+    public let calfLeanConfidence: Double
+    public let gravityConfidence: Double
+    public let symmetryConfidence: Double
     public let level: String                // "初级" / "中级" / "高级" / "专业"
     public let suggestions: [String]        // 改进建议
 
@@ -128,6 +172,12 @@ public struct PoseScore: Codable {
         calfLeanScore: Double,
         gravityScore: Double,
         symmetryScore: Double,
+        totalConfidence: Double = 0,
+        forwardLeanConfidence: Double = 0,
+        kneeBendConfidence: Double = 0,
+        calfLeanConfidence: Double = 0,
+        gravityConfidence: Double = 0,
+        symmetryConfidence: Double = 0,
         level: String,
         suggestions: [String]
     ) {
@@ -137,8 +187,49 @@ public struct PoseScore: Codable {
         self.calfLeanScore = calfLeanScore
         self.gravityScore = gravityScore
         self.symmetryScore = symmetryScore
+        self.totalConfidence = max(0, min(1, totalConfidence))
+        self.forwardLeanConfidence = max(0, min(1, forwardLeanConfidence))
+        self.kneeBendConfidence = max(0, min(1, kneeBendConfidence))
+        self.calfLeanConfidence = max(0, min(1, calfLeanConfidence))
+        self.gravityConfidence = max(0, min(1, gravityConfidence))
+        self.symmetryConfidence = max(0, min(1, symmetryConfidence))
         self.level = level
         self.suggestions = suggestions
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case totalScore
+        case forwardLeanScore
+        case kneeBendScore
+        case calfLeanScore
+        case gravityScore
+        case symmetryScore
+        case totalConfidence
+        case forwardLeanConfidence
+        case kneeBendConfidence
+        case calfLeanConfidence
+        case gravityConfidence
+        case symmetryConfidence
+        case level
+        case suggestions
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        totalScore = try container.decode(Double.self, forKey: .totalScore)
+        forwardLeanScore = try container.decode(Double.self, forKey: .forwardLeanScore)
+        kneeBendScore = try container.decode(Double.self, forKey: .kneeBendScore)
+        calfLeanScore = try container.decode(Double.self, forKey: .calfLeanScore)
+        gravityScore = try container.decode(Double.self, forKey: .gravityScore)
+        symmetryScore = try container.decode(Double.self, forKey: .symmetryScore)
+        totalConfidence = try container.decodeIfPresent(Double.self, forKey: .totalConfidence) ?? 0
+        forwardLeanConfidence = try container.decodeIfPresent(Double.self, forKey: .forwardLeanConfidence) ?? 0
+        kneeBendConfidence = try container.decodeIfPresent(Double.self, forKey: .kneeBendConfidence) ?? 0
+        calfLeanConfidence = try container.decodeIfPresent(Double.self, forKey: .calfLeanConfidence) ?? 0
+        gravityConfidence = try container.decodeIfPresent(Double.self, forKey: .gravityConfidence) ?? 0
+        symmetryConfidence = try container.decodeIfPresent(Double.self, forKey: .symmetryConfidence) ?? 0
+        level = try container.decode(String.self, forKey: .level)
+        suggestions = try container.decode([String].self, forKey: .suggestions)
     }
 }
 
@@ -157,6 +248,9 @@ public struct SkiDerivedMetrics: Codable {
     /// 前后支撑（0-100）：前倾 + 重心 + 稳定性
     public let foreAftSupportScore: Double
     public let foreAftSupportLabel: String
+    public let edgeQualityConfidence: Double
+    public let pressureSupportConfidence: Double
+    public let foreAftSupportConfidence: Double
 
     public init(
         edgeQualityScore: Double,
@@ -164,7 +258,10 @@ public struct SkiDerivedMetrics: Codable {
         pressureSupportScore: Double,
         pressureSupportLabel: String,
         foreAftSupportScore: Double,
-        foreAftSupportLabel: String
+        foreAftSupportLabel: String,
+        edgeQualityConfidence: Double = 0,
+        pressureSupportConfidence: Double = 0,
+        foreAftSupportConfidence: Double = 0
     ) {
         self.edgeQualityScore = edgeQualityScore
         self.edgeQualityLabel = edgeQualityLabel
@@ -172,6 +269,34 @@ public struct SkiDerivedMetrics: Codable {
         self.pressureSupportLabel = pressureSupportLabel
         self.foreAftSupportScore = foreAftSupportScore
         self.foreAftSupportLabel = foreAftSupportLabel
+        self.edgeQualityConfidence = max(0, min(1, edgeQualityConfidence))
+        self.pressureSupportConfidence = max(0, min(1, pressureSupportConfidence))
+        self.foreAftSupportConfidence = max(0, min(1, foreAftSupportConfidence))
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case edgeQualityScore
+        case edgeQualityLabel
+        case pressureSupportScore
+        case pressureSupportLabel
+        case foreAftSupportScore
+        case foreAftSupportLabel
+        case edgeQualityConfidence
+        case pressureSupportConfidence
+        case foreAftSupportConfidence
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        edgeQualityScore = try container.decode(Double.self, forKey: .edgeQualityScore)
+        edgeQualityLabel = try container.decode(String.self, forKey: .edgeQualityLabel)
+        pressureSupportScore = try container.decode(Double.self, forKey: .pressureSupportScore)
+        pressureSupportLabel = try container.decode(String.self, forKey: .pressureSupportLabel)
+        foreAftSupportScore = try container.decode(Double.self, forKey: .foreAftSupportScore)
+        foreAftSupportLabel = try container.decode(String.self, forKey: .foreAftSupportLabel)
+        edgeQualityConfidence = try container.decodeIfPresent(Double.self, forKey: .edgeQualityConfidence) ?? 0
+        pressureSupportConfidence = try container.decodeIfPresent(Double.self, forKey: .pressureSupportConfidence) ?? 0
+        foreAftSupportConfidence = try container.decodeIfPresent(Double.self, forKey: .foreAftSupportConfidence) ?? 0
     }
 }
 
@@ -196,6 +321,299 @@ public struct KeyMoment: Codable {
     }
 }
 
+// MARK: - 高光时刻
+
+/// 标记视频中滑得最好的连续片段。
+public struct HighlightMoment: Codable {
+    public let startTime: String
+    public let endTime: String
+    public let startSeconds: Double
+    public let endSeconds: Double
+    public let duration: Double
+    public let score: Double
+    public let confidence: Double
+    public let title: String
+    public let description: String
+
+    public init(
+        startTime: String,
+        endTime: String,
+        startSeconds: Double,
+        endSeconds: Double,
+        duration: Double,
+        score: Double,
+        confidence: Double,
+        title: String,
+        description: String
+    ) {
+        self.startTime = startTime
+        self.endTime = endTime
+        self.startSeconds = startSeconds
+        self.endSeconds = endSeconds
+        self.duration = duration
+        self.score = max(0, min(100, score))
+        self.confidence = max(0, min(1, confidence))
+        self.title = title
+        self.description = description
+    }
+}
+
+// MARK: - 转弯阶段分析
+
+/// 画面方向上的压刃方向。v1 不推断 toe side / heel side。
+public enum EdgeDirection: String, Codable, CaseIterable {
+    case imageLeft
+    case imageRight
+    case neutral
+    case unknown
+}
+
+/// 单板转弯中的粗阶段。
+public enum TurnPhase: String, Codable, CaseIterable {
+    case transition
+    case initiation
+    case shaping
+    case release
+}
+
+/// 单帧转弯阶段分析。
+public struct TurnFrameAnalysis: Codable {
+    public let time: Double
+    public let edgeSignal: Double
+    public let edgeDirection: EdgeDirection
+    public let phase: TurnPhase
+    public let confidence: Double
+
+    public init(time: Double, edgeSignal: Double, edgeDirection: EdgeDirection, phase: TurnPhase, confidence: Double) {
+        self.time = time
+        self.edgeSignal = edgeSignal
+        self.edgeDirection = edgeDirection
+        self.phase = phase
+        self.confidence = confidence
+    }
+}
+
+/// 一次连续同向压刃片段。
+public struct TurnSegment: Codable {
+    public let startTime: Double
+    public let endTime: Double
+    public let startTimeString: String
+    public let endTimeString: String
+    public let edgeDirection: EdgeDirection
+    public let frameCount: Int
+    public let phaseDistribution: [String: Double]
+    public let mainIssue: String
+
+    public init(
+        startTime: Double,
+        endTime: Double,
+        startTimeString: String,
+        endTimeString: String,
+        edgeDirection: EdgeDirection,
+        frameCount: Int,
+        phaseDistribution: [String: Double],
+        mainIssue: String
+    ) {
+        self.startTime = startTime
+        self.endTime = endTime
+        self.startTimeString = startTimeString
+        self.endTimeString = endTimeString
+        self.edgeDirection = edgeDirection
+        self.frameCount = frameCount
+        self.phaseDistribution = phaseDistribution
+        self.mainIssue = mainIssue
+    }
+}
+
+/// 顶层转弯分析结果。
+public struct TurnAnalysis: Codable {
+    public let frames: [TurnFrameAnalysis]
+    public let segments: [TurnSegment]
+
+    public static let empty = TurnAnalysis(frames: [], segments: [])
+
+    public init(frames: [TurnFrameAnalysis], segments: [TurnSegment]) {
+        self.frames = frames
+        self.segments = segments
+    }
+}
+
+// MARK: - 重心阶段适配分析
+
+/// 单帧重心是否适合当前滑行阶段/转弯阶段。
+public struct CenterOfMassFrameAnalysis: Codable {
+    public let time: Double
+    public let hipRatio: Double
+    public let targetRangeLower: Double
+    public let targetRangeUpper: Double
+    public let phase: TurnPhase?
+    public let score: Double
+    public let confidence: Double
+    public let issue: String
+
+    public init(
+        time: Double,
+        hipRatio: Double,
+        targetRangeLower: Double,
+        targetRangeUpper: Double,
+        phase: TurnPhase?,
+        score: Double,
+        confidence: Double,
+        issue: String
+    ) {
+        self.time = time
+        self.hipRatio = hipRatio
+        self.targetRangeLower = targetRangeLower
+        self.targetRangeUpper = targetRangeUpper
+        self.phase = phase
+        self.score = max(0, min(100, score))
+        self.confidence = max(0, min(1, confidence))
+        self.issue = issue
+    }
+}
+
+/// 顶层重心阶段适配分析结果。旧 `PoseScore.gravityScore` 保留作为兼容字段。
+public struct CenterOfMassAnalysis: Codable {
+    public let cogStageFitScore: Double
+    public let confidence: Double
+    public let label: String
+    public let stage: String
+    public let frameCount: Int
+    public let mainIssue: String?
+    public let frames: [CenterOfMassFrameAnalysis]
+
+    public static let empty = CenterOfMassAnalysis(
+        cogStageFitScore: 0,
+        confidence: 0,
+        label: "无检测数据",
+        stage: "unknown",
+        frameCount: 0,
+        mainIssue: nil,
+        frames: []
+    )
+
+    public init(
+        cogStageFitScore: Double,
+        confidence: Double,
+        label: String,
+        stage: String,
+        frameCount: Int,
+        mainIssue: String?,
+        frames: [CenterOfMassFrameAnalysis]
+    ) {
+        self.cogStageFitScore = max(0, min(100, cogStageFitScore))
+        self.confidence = max(0, min(1, confidence))
+        self.label = label
+        self.stage = stage
+        self.frameCount = frameCount
+        self.mainIssue = mainIssue
+        self.frames = frames
+    }
+}
+
+// MARK: - 板身方向与横滑分析
+
+/// 板身线条识别来源。v1 使用脚踝连线作为低成本代理。
+public enum BoardObservationSource: String, Codable, CaseIterable {
+    case ankleProxy
+}
+
+/// 单帧板身线条观测。
+public struct BoardObservation: Codable {
+    public let source: BoardObservationSource
+    public let axisAngle: Double
+    public let centerX: Double
+    public let centerY: Double
+    public let confidence: Double
+
+    public init(
+        source: BoardObservationSource,
+        axisAngle: Double,
+        centerX: Double,
+        centerY: Double,
+        confidence: Double
+    ) {
+        self.source = source
+        self.axisAngle = axisAngle
+        self.centerX = centerX
+        self.centerY = centerY
+        self.confidence = max(0, min(1, confidence))
+    }
+}
+
+/// 单帧板身与运动方向关系。
+public struct BoardKinematics: Codable {
+    public let boardAngle: Double
+    public let travelAngle: Double
+    /// 板身方向与移动方向的夹角，范围 0...90。越小越接近沿板身走刃，越大越接近横滑。
+    public let sideslipAngle: Double
+    public let carvingConfidence: Double
+    public let confidence: Double
+
+    public init(
+        boardAngle: Double,
+        travelAngle: Double,
+        sideslipAngle: Double,
+        carvingConfidence: Double,
+        confidence: Double
+    ) {
+        self.boardAngle = boardAngle
+        self.travelAngle = travelAngle
+        self.sideslipAngle = max(0, min(90, sideslipAngle))
+        self.carvingConfidence = max(0, min(100, carvingConfidence))
+        self.confidence = max(0, min(1, confidence))
+    }
+}
+
+/// 单帧板身方向分析。
+public struct BoardFrameAnalysis: Codable {
+    public let time: Double
+    public let observation: BoardObservation
+    public let kinematics: BoardKinematics?
+
+    public init(time: Double, observation: BoardObservation, kinematics: BoardKinematics?) {
+        self.time = time
+        self.observation = observation
+        self.kinematics = kinematics
+    }
+}
+
+/// 全视频板身与横滑概要。
+public struct BoardAnalysisSummary: Codable {
+    public let frameCount: Int
+    public let averageSideslipAngle: Double?
+    public let carvingConfidence: Double?
+    public let confidence: Double
+    public let source: BoardObservationSource
+
+    public init(
+        frameCount: Int,
+        averageSideslipAngle: Double?,
+        carvingConfidence: Double?,
+        confidence: Double,
+        source: BoardObservationSource
+    ) {
+        self.frameCount = frameCount
+        self.averageSideslipAngle = averageSideslipAngle
+        self.carvingConfidence = carvingConfidence
+        self.confidence = max(0, min(1, confidence))
+        self.source = source
+    }
+}
+
+/// 顶层板身方向与横滑分析结果。
+public struct BoardAnalysis: Codable {
+    public let frames: [BoardFrameAnalysis]
+    public let summary: BoardAnalysisSummary?
+
+    public static let empty = BoardAnalysis(frames: [], summary: nil)
+
+    public init(frames: [BoardFrameAnalysis], summary: BoardAnalysisSummary?) {
+        self.frames = frames
+        self.summary = summary
+    }
+}
+
 // MARK: - 单帧检测结果
 
 public struct DetectionResult: Codable {
@@ -207,6 +625,8 @@ public struct DetectionResult: Codable {
     public let bodyPose: BodyPoseData
     public let poseScore: PoseScore?
     public var skiMetrics: SkiDerivedMetrics?
+    /// 帧分析错误信息（抽帧或 Vision 请求失败时填充，成功时为 nil）
+    public var error: String?
 
     public init(
         time: Double,
@@ -216,7 +636,8 @@ public struct DetectionResult: Codable {
         sceneClassifications: [SceneItem],
         bodyPose: BodyPoseData,
         poseScore: PoseScore?,
-        skiMetrics: SkiDerivedMetrics? = nil
+        skiMetrics: SkiDerivedMetrics? = nil,
+        error: String? = nil
     ) {
         self.time = time
         self.objects = objects
@@ -226,6 +647,7 @@ public struct DetectionResult: Codable {
         self.bodyPose = bodyPose
         self.poseScore = poseScore
         self.skiMetrics = skiMetrics
+        self.error = error
     }
 }
 
@@ -281,6 +703,10 @@ public struct AnalysisOutput: Codable {
     public let summary: VideoSummary
     public let skiMetrics: SkiDerivedMetrics  // 全视频平均滑雪派生指标
     public let keyMoments: [KeyMoment]        // 关键时刻列表
+    public let highlightMoments: [HighlightMoment] // 滑得最好的连续片段
+    public let centerOfMassAnalysis: CenterOfMassAnalysis // 重心阶段适配分析
+    public let boardAnalysis: BoardAnalysis    // 板身方向与横滑分析
+    public let turnAnalysis: TurnAnalysis      // 单板转弯阶段分析
 
     public init(
         videoPath: String,
@@ -289,7 +715,11 @@ public struct AnalysisOutput: Codable {
         frames: [DetectionResult],
         summary: VideoSummary,
         skiMetrics: SkiDerivedMetrics,
-        keyMoments: [KeyMoment]
+        keyMoments: [KeyMoment],
+        highlightMoments: [HighlightMoment] = [],
+        centerOfMassAnalysis: CenterOfMassAnalysis = .empty,
+        boardAnalysis: BoardAnalysis = .empty,
+        turnAnalysis: TurnAnalysis = .empty
     ) {
         self.videoPath = videoPath
         self.duration = duration
@@ -298,5 +728,38 @@ public struct AnalysisOutput: Codable {
         self.summary = summary
         self.skiMetrics = skiMetrics
         self.keyMoments = keyMoments
+        self.highlightMoments = highlightMoments
+        self.centerOfMassAnalysis = centerOfMassAnalysis
+        self.boardAnalysis = boardAnalysis
+        self.turnAnalysis = turnAnalysis
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case videoPath
+        case duration
+        case totalFrames
+        case frames
+        case summary
+        case skiMetrics
+        case keyMoments
+        case highlightMoments
+        case centerOfMassAnalysis
+        case boardAnalysis
+        case turnAnalysis
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        videoPath = try container.decode(String.self, forKey: .videoPath)
+        duration = try container.decode(Double.self, forKey: .duration)
+        totalFrames = try container.decode(Int.self, forKey: .totalFrames)
+        frames = try container.decode([DetectionResult].self, forKey: .frames)
+        summary = try container.decode(VideoSummary.self, forKey: .summary)
+        skiMetrics = try container.decode(SkiDerivedMetrics.self, forKey: .skiMetrics)
+        keyMoments = try container.decode([KeyMoment].self, forKey: .keyMoments)
+        highlightMoments = try container.decodeIfPresent([HighlightMoment].self, forKey: .highlightMoments) ?? []
+        centerOfMassAnalysis = try container.decodeIfPresent(CenterOfMassAnalysis.self, forKey: .centerOfMassAnalysis) ?? .empty
+        boardAnalysis = try container.decodeIfPresent(BoardAnalysis.self, forKey: .boardAnalysis) ?? .empty
+        turnAnalysis = try container.decodeIfPresent(TurnAnalysis.self, forKey: .turnAnalysis) ?? .empty
     }
 }

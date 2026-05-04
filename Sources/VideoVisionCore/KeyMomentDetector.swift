@@ -11,14 +11,24 @@ public struct KeyMomentDetector {
     ///   - frames: 所有帧结果
     ///   - duration: 视频总时长（秒）
     /// - Returns: 最多 5 个关键时刻，按时间排序
-    public static func detect(from frames: [DetectionResult], duration: Double) -> [KeyMoment] {
-        let valid = frames.filter { $0.poseScore != nil && $0.bodyPose.detected }
+    public static func detect(
+        from frames: [DetectionResult],
+        duration: Double,
+        summary: VideoSummary? = nil
+    ) -> [KeyMoment] {
+        let valid = reliablePoseFrames(from: frames)
         guard valid.count >= 2 else { return [] }
+        let stableCarvingConflict = summary
+            .map { stableCarvingBaseline(from: frames, motionStability: $0.stabilityScore) != nil }
+            ?? false
+        let weakEdgeEvidence = !stableCarvingConflict && (averageEdgeEvidenceScore(from: frames) ?? 0) < 42
 
         var candidates: [KeyMoment] = []
 
-        // 1) 走刃质量最低帧（只有真的偏弱才输出）
-        if let worst = valid.min(by: { edgeQuality($0) < edgeQuality($1) }) {
+        // 1) 走刃质量最低帧（只有真的偏弱才输出）。
+        // 稳定刻滑基线触发时，低分帧通常来自大倒伏/遮挡下的关键点误识别，避免作为负面片段输出。
+        let edgeFrames = valid.filter { edgeQualityConfidence($0) >= AnalysisReliability.minimumSkiMetricConfidence }
+        if !stableCarvingConflict, let worst = edgeFrames.min(by: { edgeQuality($0) < edgeQuality($1) }) {
             let score = edgeQuality(worst)
             if score < 55 {
                 candidates.append(KeyMoment(
@@ -33,7 +43,8 @@ public struct KeyMomentDetector {
         }
 
         // 2) 板压支撑最低帧
-        if let worst = valid.min(by: { pressureSupport($0) < pressureSupport($1) }) {
+        let pressureFrames = valid.filter { pressureSupportConfidence($0) >= AnalysisReliability.minimumSkiMetricConfidence }
+        if !stableCarvingConflict, let worst = pressureFrames.min(by: { pressureSupport($0) < pressureSupport($1) }) {
             let score = pressureSupport(worst)
             if score < 55, !isNearExisting(candidates, time: worst.time, threshold: 1.5) {
                 candidates.append(KeyMoment(
@@ -48,8 +59,10 @@ public struct KeyMomentDetector {
         }
 
         // 3) 膝盖最直帧（腿部弹性最差）
-        if let worst = valid.min(by: { $0.poseScore!.kneeBendScore < $1.poseScore!.kneeBendScore }) {
-            let score = worst.poseScore!.kneeBendScore
+        let kneeFrames = valid.filter { ($0.poseScore?.kneeBendConfidence ?? 0) >= AnalysisReliability.minimumPoseScoreConfidence }
+        if !stableCarvingConflict, let worst = kneeFrames.min(by: { a, b in
+            (a.poseScore?.kneeBendScore ?? 100) < (b.poseScore?.kneeBendScore ?? 100)
+        }), let score = worst.poseScore?.kneeBendScore {
             if score < 55, !isNearExisting(candidates, time: worst.time, threshold: 1.5) {
                 candidates.append(KeyMoment(
                     time: formatTime(worst.time),
@@ -63,8 +76,10 @@ public struct KeyMomentDetector {
         }
 
         // 4) 对称性最差帧
-        if let worst = valid.min(by: { $0.poseScore!.symmetryScore < $1.poseScore!.symmetryScore }) {
-            let score = worst.poseScore!.symmetryScore
+        let symmetryFrames = valid.filter { ($0.poseScore?.symmetryConfidence ?? 0) >= AnalysisReliability.minimumPoseScoreConfidence }
+        if let worst = symmetryFrames.min(by: { a, b in
+            (a.poseScore?.symmetryScore ?? 100) < (b.poseScore?.symmetryScore ?? 100)
+        }), let score = worst.poseScore?.symmetryScore {
             if score < 55, !isNearExisting(candidates, time: worst.time, threshold: 1.5) {
                 candidates.append(KeyMoment(
                     time: formatTime(worst.time),
@@ -78,7 +93,7 @@ public struct KeyMomentDetector {
         }
 
         // 5) 最佳走刃帧（作为参考）—— 也参与时间去重，且必须明显够好
-        if let best = valid.max(by: { edgeQuality($0) < edgeQuality($1) }) {
+        if !weakEdgeEvidence, let best = edgeFrames.max(by: { edgeQuality($0) < edgeQuality($1) }) {
             let score = edgeQuality(best)
             if score >= 55, !isNearExisting(candidates, time: best.time, threshold: 1.5) {
                 candidates.append(KeyMoment(
@@ -107,10 +122,20 @@ public struct KeyMomentDetector {
         return m.edgeQualityScore
     }
 
+    private static func edgeQualityConfidence(_ r: DetectionResult) -> Double {
+        guard let m = r.skiMetrics else { return 0 }
+        return m.edgeQualityConfidence
+    }
+
     /// 板压支撑（原始分）
     private static func pressureSupport(_ r: DetectionResult) -> Double {
         guard let m = r.skiMetrics else { return 0 }
         return m.pressureSupportScore
+    }
+
+    private static func pressureSupportConfidence(_ r: DetectionResult) -> Double {
+        guard let m = r.skiMetrics else { return 0 }
+        return m.pressureSupportConfidence
     }
 
     /// 前后支撑（原始分）

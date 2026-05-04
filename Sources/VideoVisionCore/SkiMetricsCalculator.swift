@@ -31,10 +31,32 @@ public struct SkiMetricsCalculator {
 
     // MARK: - 单帧计算
 
-    public static func compute(from poseScore: PoseScore, stability: Double = 50) -> SkiDerivedMetrics {
+    public static func compute(
+        from poseScore: PoseScore,
+        stability: Double = 50,
+        stabilityConfidence: Double = 0.7
+    ) -> SkiDerivedMetrics {
         let edge = weightedScore(poseScore, weights: edgeWeights) + stability * 0.05
         let pressure = weightedScore(poseScore, weights: pressureWeights) + stability * 0.10
         let foreAft = weightedScore(poseScore, weights: foreAftWeights) + stability * 0.15
+        let edgeConfidence = weightedConfidence([
+            (poseScore.calfLeanConfidence, 0.50),
+            (poseScore.gravityConfidence, 0.20),
+            (poseScore.kneeBendConfidence, 0.15),
+            (poseScore.symmetryConfidence, 0.10),
+            (stabilityConfidence, 0.05)
+        ])
+        let pressureConfidence = weightedConfidence([
+            (poseScore.gravityConfidence, 0.45),
+            (poseScore.kneeBendConfidence, 0.30),
+            (poseScore.forwardLeanConfidence, 0.15),
+            (stabilityConfidence, 0.10)
+        ])
+        let foreAftConfidence = weightedConfidence([
+            (poseScore.forwardLeanConfidence, 0.60),
+            (poseScore.gravityConfidence, 0.25),
+            (stabilityConfidence, 0.15)
+        ])
 
         return SkiDerivedMetrics(
             edgeQualityScore:        clamp(edge),
@@ -42,7 +64,10 @@ public struct SkiMetricsCalculator {
             pressureSupportScore:    clamp(pressure),
             pressureSupportLabel:    pressureLabel(pressure),
             foreAftSupportScore:     clamp(foreAft),
-            foreAftSupportLabel:     foreAftLabel(foreAft)
+            foreAftSupportLabel:     foreAftLabel(foreAft),
+            edgeQualityConfidence:   edgeConfidence,
+            pressureSupportConfidence: pressureConfidence,
+            foreAftSupportConfidence: foreAftConfidence
         )
     }
 
@@ -55,7 +80,7 @@ public struct SkiMetricsCalculator {
 
     /// 计算全视频平均滑雪指标
     public static func average(from frames: [DetectionResult], stability: Double) -> SkiDerivedMetrics {
-        let valid = frames.compactMap { $0.poseScore }
+        let valid = reliablePoseScores(from: frames)
         guard !valid.isEmpty else {
             return SkiDerivedMetrics(
                 edgeQualityScore: 0,
@@ -63,13 +88,20 @@ public struct SkiMetricsCalculator {
                 pressureSupportScore: 0,
                 pressureSupportLabel: "无检测数据",
                 foreAftSupportScore: 0,
-                foreAftSupportLabel: "无检测数据"
+                foreAftSupportLabel: "无检测数据",
+                edgeQualityConfidence: 0,
+                pressureSupportConfidence: 0,
+                foreAftSupportConfidence: 0
             )
         }
 
-        let avgEdge = valid.map { edgeRaw($0, stability: stability) }.reduce(0, +) / Double(valid.count)
-        let avgPressure = valid.map { pressureRaw($0, stability: stability) }.reduce(0, +) / Double(valid.count)
-        let avgForeAft = valid.map { foreAftRaw($0, stability: stability) }.reduce(0, +) / Double(valid.count)
+        let stabilityConfidence = min(1, Double(valid.count) / 5.0)
+        let frameMetrics = valid.map {
+            compute(from: $0, stability: stability, stabilityConfidence: stabilityConfidence)
+        }
+        let avgEdge = weightedAverage(frameMetrics.map { ($0.edgeQualityScore, max(0.01, $0.edgeQualityConfidence)) })
+        let avgPressure = weightedAverage(frameMetrics.map { ($0.pressureSupportScore, max(0.01, $0.pressureSupportConfidence)) })
+        let avgForeAft = weightedAverage(frameMetrics.map { ($0.foreAftSupportScore, max(0.01, $0.foreAftSupportConfidence)) })
 
         return SkiDerivedMetrics(
             edgeQualityScore:        clamp(avgEdge),
@@ -77,7 +109,10 @@ public struct SkiMetricsCalculator {
             pressureSupportScore:    clamp(avgPressure),
             pressureSupportLabel:    pressureLabel(avgPressure),
             foreAftSupportScore:     clamp(avgForeAft),
-            foreAftSupportLabel:     foreAftLabel(avgForeAft)
+            foreAftSupportLabel:     foreAftLabel(avgForeAft),
+            edgeQualityConfidence:   average(frameMetrics.map(\.edgeQualityConfidence)),
+            pressureSupportConfidence: average(frameMetrics.map(\.pressureSupportConfidence)),
+            foreAftSupportConfidence: average(frameMetrics.map(\.foreAftSupportConfidence))
         )
     }
 
@@ -97,9 +132,23 @@ public struct SkiMetricsCalculator {
         weightedScore(s, weights: foreAftWeights) + stability * 0.15
     }
 
-    private static func clamp(_ v: Double) -> Double {
-        max(0, min(100, v))
+    private static func weightedConfidence(_ values: [(confidence: Double, weight: Double)]) -> Double {
+        let totalWeight = values.map { $0.weight }.reduce(0, +)
+        guard totalWeight > 0 else { return 0 }
+        return values.map { $0.confidence * $0.weight }.reduce(0, +) / totalWeight
     }
+
+    private static func average(_ values: [Double]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
+    private static func weightedAverage(_ values: [(value: Double, weight: Double)]) -> Double {
+        let totalWeight = values.map(\.weight).reduce(0, +)
+        guard totalWeight > 0 else { return 0 }
+        return values.map { $0.value * $0.weight }.reduce(0, +) / totalWeight
+    }
+
 
     // MARK: - 标签映射
 
