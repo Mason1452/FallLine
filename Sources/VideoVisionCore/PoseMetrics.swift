@@ -38,16 +38,26 @@ public struct PoseMetricsCalculator {
             (try? observation.recognizedPoint(joint))?.confidence ?? 0 > pointConfidenceThreshold
         }
         let visibleCount = visibleJoints.count
+
+        // 可见性判断：不仅看数量，也看左右分布
+        // 仅单侧有点 → 无法做对称性评估，但角度计算仍可用
+        let leftJoints: Set<VNHumanBodyPoseObservation.JointName> = [
+            .leftShoulder, .leftHip, .leftKnee, .leftAnkle
+        ]
+        let rightJoints: Set<VNHumanBodyPoseObservation.JointName> = [
+            .rightShoulder, .rightHip, .rightKnee, .rightAnkle
+        ]
+        _ = visibleJoints.filter { leftJoints.contains($0) }.count
+        _ = visibleJoints.filter { rightJoints.contains($0) }.count
+
         let visibility: VisibilityLevel = {
-            switch visibleCount {
-            case 8:     return .full
-            case 4...7: return .partial
-            case 1...3: return .minimal
-            default:    return .none
-            }
+            if visibleCount == 8 { return .full }
+            if visibleCount >= 4 { return .partial }
+            if visibleCount >= 1 { return .minimal }
+            return .none
         }()
 
-        guard let result = extractPoints(from: observation), visibleCount >= 2 else {
+        guard let pts = extractPoints(from: observation), visibleCount >= 2 else {
             return BodyPoseData(
                 detected: false,
                 visibility: .none,
@@ -62,18 +72,12 @@ public struct PoseMetricsCalculator {
             )
         }
 
-        let pts = result
-
-        // 计算各项指标
+        // 计算各项指标 —— 使用实际关键点置信度
         let leftLean = computeSideLeanAngle(
-            shoulder: pts.leftShoulder, hip: pts.leftHip,
-            label: "左侧",
-            confidenceBase: Double(visibleCount) / 8.0
+            shoulder: pts.leftShoulder, hip: pts.leftHip
         )
         let rightLean = computeSideLeanAngle(
-            shoulder: pts.rightShoulder, hip: pts.rightHip,
-            label: "右侧",
-            confidenceBase: Double(visibleCount) / 8.0
+            shoulder: pts.rightShoulder, hip: pts.rightHip
         )
 
         let overallLean = computeOverallLeanAngle(
@@ -84,32 +88,41 @@ public struct PoseMetricsCalculator {
         )
 
         let leftKnee = computeKneeBend(
-            hip: pts.leftHip, knee: pts.leftKnee, ankle: pts.leftAnkle,
-            label: "左膝",
-            confidenceBase: Double(visibleCount) / 8.0
+            hip: pts.leftHip, knee: pts.leftKnee, ankle: pts.leftAnkle
         )
         let rightKnee = computeKneeBend(
-            hip: pts.rightHip, knee: pts.rightKnee, ankle: pts.rightAnkle,
-            label: "右膝",
-            confidenceBase: Double(visibleCount) / 8.0
+            hip: pts.rightHip, knee: pts.rightKnee, ankle: pts.rightAnkle
         )
 
         let leftCalf = computeCalfLean(
-            knee: pts.leftKnee, ankle: pts.leftAnkle,
-            label: "左小腿",
-            confidenceBase: Double(visibleCount) / 8.0
+            knee: pts.leftKnee, ankle: pts.leftAnkle
         )
         let rightCalf = computeCalfLean(
-            knee: pts.rightKnee, ankle: pts.rightAnkle,
-            label: "右小腿",
-            confidenceBase: Double(visibleCount) / 8.0
+            knee: pts.rightKnee, ankle: pts.rightAnkle
         )
 
         let gravity = computeRelativeCenterOfGravity(
             leftShoulder: pts.leftShoulder, rightShoulder: pts.rightShoulder,
             leftHip: pts.leftHip, rightHip: pts.rightHip,
-            leftAnkle: pts.leftAnkle, rightAnkle: pts.rightAnkle,
-            confidenceBase: Double(visibleCount) / 8.0
+            leftAnkle: pts.leftAnkle, rightAnkle: pts.rightAnkle
+        )
+        let signedBodyLean = computeSignedBodyLean(
+            leftShoulder: pts.leftShoulder, rightShoulder: pts.rightShoulder,
+            leftHip: pts.leftHip, rightHip: pts.rightHip
+        )
+        let signedCalfLean = computeSignedCalfLean(
+            leftKnee: pts.leftKnee, rightKnee: pts.rightKnee,
+            leftAnkle: pts.leftAnkle, rightAnkle: pts.rightAnkle
+        )
+        let hipCenterX = computeCenterX(pts.leftHip, pts.rightHip)
+        let ankleCenterX = computeCenterX(pts.leftAnkle, pts.rightAnkle)
+        let bodyCenterX = computeBodyCenterX(points: pts)
+        let hipCenterY = computeCenterY(pts.leftHip, pts.rightHip)
+        let ankleCenterY = computeCenterY(pts.leftAnkle, pts.rightAnkle)
+        let bodyCenterY = computeBodyCenterY(points: pts)
+        let ankleProxyBoardAngle = computeAnkleProxyBoardAngle(
+            leftAnkle: pts.leftAnkle,
+            rightAnkle: pts.rightAnkle
         )
 
         return BodyPoseData(
@@ -122,26 +135,50 @@ public struct PoseMetricsCalculator {
             rightKneeBendAngle: rightKnee,
             leftCalfLeanAngle: leftCalf,
             rightCalfLeanAngle: rightCalf,
-            centerOfGravity: gravity
+            centerOfGravity: gravity,
+            signedBodyLeanAngle: signedBodyLean,
+            signedCalfLeanAngle: signedCalfLean,
+            hipCenterX: hipCenterX,
+            ankleCenterX: ankleCenterX,
+            bodyCenterX: bodyCenterX,
+            hipCenterY: hipCenterY,
+            ankleCenterY: ankleCenterY,
+            bodyCenterY: bodyCenterY,
+            ankleProxyBoardAngle: ankleProxyBoardAngle
         )
+    }
+}
+
+// MARK: - 带置信度的关键点
+
+extension PoseMetricsCalculator {
+    /// 单个关键点，包含坐标和 Vision 返回的原始置信度
+    public struct JointPoint {
+        public let location: CGPoint
+        public let confidence: VNConfidence
+
+        public init(location: CGPoint, confidence: VNConfidence) {
+            self.location = location
+            self.confidence = confidence
+        }
     }
 }
 
 // MARK: - 关键点提取
 
 extension PoseMetricsCalculator {
-    /// 提取所有需要的关键点坐标，置信度不足的返回 nil
+    /// 提取所有需要的关键点，含坐标和置信度。置信度不足的返回 nil
     public struct ExtractedPoints {
-        public let leftShoulder: CGPoint?
-        public let rightShoulder: CGPoint?
-        public let leftHip: CGPoint?
-        public let rightHip: CGPoint?
-        public let leftKnee: CGPoint?
-        public let rightKnee: CGPoint?
-        public let leftAnkle: CGPoint?
-        public let rightAnkle: CGPoint?
+        public let leftShoulder: JointPoint?
+        public let rightShoulder: JointPoint?
+        public let leftHip: JointPoint?
+        public let rightHip: JointPoint?
+        public let leftKnee: JointPoint?
+        public let rightKnee: JointPoint?
+        public let leftAnkle: JointPoint?
+        public let rightAnkle: JointPoint?
 
-        public init(leftShoulder: CGPoint?, rightShoulder: CGPoint?, leftHip: CGPoint?, rightHip: CGPoint?, leftKnee: CGPoint?, rightKnee: CGPoint?, leftAnkle: CGPoint?, rightAnkle: CGPoint?) {
+        public init(leftShoulder: JointPoint?, rightShoulder: JointPoint?, leftHip: JointPoint?, rightHip: JointPoint?, leftKnee: JointPoint?, rightKnee: JointPoint?, leftAnkle: JointPoint?, rightAnkle: JointPoint?) {
             self.leftShoulder = leftShoulder
             self.rightShoulder = rightShoulder
             self.leftHip = leftHip
@@ -154,23 +191,23 @@ extension PoseMetricsCalculator {
     }
 
     public func extractPoints(from observation: VNHumanBodyPoseObservation) -> ExtractedPoints? {
-        func point(_ joint: VNHumanBodyPoseObservation.JointName) -> CGPoint? {
+        func jointPoint(_ joint: VNHumanBodyPoseObservation.JointName) -> JointPoint? {
             guard let recognizedPoint = try? observation.recognizedPoint(joint),
                   recognizedPoint.confidence > pointConfidenceThreshold else {
                 return nil
             }
-            return recognizedPoint.location
+            return JointPoint(location: recognizedPoint.location, confidence: recognizedPoint.confidence)
         }
 
         return ExtractedPoints(
-            leftShoulder: point(.leftShoulder),
-            rightShoulder: point(.rightShoulder),
-            leftHip: point(.leftHip),
-            rightHip: point(.rightHip),
-            leftKnee: point(.leftKnee),
-            rightKnee: point(.rightKnee),
-            leftAnkle: point(.leftAnkle),
-            rightAnkle: point(.rightAnkle)
+            leftShoulder: jointPoint(.leftShoulder),
+            rightShoulder: jointPoint(.rightShoulder),
+            leftHip: jointPoint(.leftHip),
+            rightHip: jointPoint(.rightHip),
+            leftKnee: jointPoint(.leftKnee),
+            rightKnee: jointPoint(.rightKnee),
+            leftAnkle: jointPoint(.leftAnkle),
+            rightAnkle: jointPoint(.rightAnkle)
         )
     }
 }
@@ -208,6 +245,15 @@ extension PoseMetricsCalculator {
         let angleRad = atan(abs(dx) / abs(dy))
         return angleRad * 180 / Double.pi
     }
+
+    /// 计算连线相对垂直方向的有符号夹角。正值表示 bottom 在 top 的画面右侧。
+    public func signedLeanAngleFromVertical(from top: CGPoint, to bottom: CGPoint) -> Double {
+        let dx = bottom.x - top.x
+        let dy = bottom.y - top.y
+        guard dy != 0 else { return dx >= 0 ? 90 : -90 }
+        let angleRad = atan(Double(dx) / abs(Double(dy)))
+        return angleRad * 180 / Double.pi
+    }
 }
 
 // MARK: - 指标计算
@@ -216,42 +262,41 @@ extension PoseMetricsCalculator {
 
     // MARK: 前倾角
 
-    /// 计算单侧前倾角
+    /// 计算单侧前倾角（肩→髋连线与垂直方向夹角）
+    /// 置信度取肩、髋两点置信度的均值
     private func computeSideLeanAngle(
-        shoulder: CGPoint?, hip: CGPoint?,
-        label: String, confidenceBase: Double
+        shoulder: JointPoint?, hip: JointPoint?
     ) -> MetricWithConfidence<Double>? {
         guard let s = shoulder, let h = hip else { return nil }
-        let dx = s.x - h.x
-        let dy = s.y - h.y
+        let dx = s.location.x - h.location.x
+        let dy = s.location.y - h.location.y
         guard dy != 0 else { return nil }
         let angleRad = atan(abs(dx) / abs(dy))
         let angle = angleRad * 180 / Double.pi
-        // 单侧只需要2个点，置信度略高
-        let conf = min(confidenceBase + 0.15, 1.0)
-        return MetricWithConfidence(value: angle, confidence: conf)
+        let conf = (s.confidence + h.confidence) / 2
+        return MetricWithConfidence(value: angle, confidence: Double(conf))
     }
 
     /// 计算整体前倾角（双侧均可见时取中点连线）
     private func computeOverallLeanAngle(
-        leftShoulder: CGPoint?, rightShoulder: CGPoint?,
-        leftHip: CGPoint?, rightHip: CGPoint?,
+        leftShoulder: JointPoint?, rightShoulder: JointPoint?,
+        leftHip: JointPoint?, rightHip: JointPoint?,
         leftLean: MetricWithConfidence<Double>?,
         rightLean: MetricWithConfidence<Double>?,
         totalVisible: Int
     ) -> MetricWithConfidence<Double>? {
-        // 双侧均可见 → 使用中点连线
+        // 双侧均可见 → 使用中点连线，置信度取四点均值
         if let lS = leftShoulder, let rS = rightShoulder,
            let lH = leftHip, let rH = rightHip {
-            let shoulderMid = CGPoint(x: (lS.x + rS.x) / 2, y: (lS.y + rS.y) / 2)
-            let hipMid = CGPoint(x: (lH.x + rH.x) / 2, y: (lH.y + rH.y) / 2)
+            let shoulderMid = CGPoint(x: (lS.location.x + rS.location.x) / 2, y: (lS.location.y + rS.location.y) / 2)
+            let hipMid = CGPoint(x: (lH.location.x + rH.location.x) / 2, y: (lH.location.y + rH.location.y) / 2)
             let dx = shoulderMid.x - hipMid.x
             let dy = shoulderMid.y - hipMid.y
             if dy != 0 {
                 let angleRad = atan(abs(dx) / abs(dy))
                 let angle = angleRad * 180 / Double.pi
-                let conf = Double(totalVisible) / 8.0
-                return MetricWithConfidence(value: angle, confidence: conf)
+                let conf = (lS.confidence + rS.confidence + lH.confidence + rH.confidence) / 4
+                return MetricWithConfidence(value: angle, confidence: Double(conf))
             }
         }
         // 单侧可见 → 用已有单侧数据
@@ -266,25 +311,23 @@ extension PoseMetricsCalculator {
     // MARK: 膝盖弯曲
 
     private func computeKneeBend(
-        hip: CGPoint?, knee: CGPoint?, ankle: CGPoint?,
-        label: String, confidenceBase: Double
+        hip: JointPoint?, knee: JointPoint?, ankle: JointPoint?
     ) -> MetricWithConfidence<Double>? {
         guard let h = hip, let k = knee, let a = ankle else { return nil }
-        let angle = angleBetween(h, k, a)
-        let conf = confidenceBase
-        return MetricWithConfidence(value: angle, confidence: conf)
+        let angle = angleBetween(h.location, k.location, a.location)
+        let conf = min(h.confidence, k.confidence, a.confidence)
+        return MetricWithConfidence(value: angle, confidence: Double(conf))
     }
 
     // MARK: 小腿倾斜（立刃）
 
     private func computeCalfLean(
-        knee: CGPoint?, ankle: CGPoint?,
-        label: String, confidenceBase: Double
+        knee: JointPoint?, ankle: JointPoint?
     ) -> MetricWithConfidence<Double>? {
         guard let k = knee, let a = ankle else { return nil }
-        let angle = leanAngleFromVertical(from: k, to: a)
-        let conf = confidenceBase
-        return MetricWithConfidence(value: angle, confidence: conf)
+        let angle = leanAngleFromVertical(from: k.location, to: a.location)
+        let conf = (k.confidence + a.confidence) / 2
+        return MetricWithConfidence(value: angle, confidence: Double(conf))
     }
 
     // MARK: 相对重心高度
@@ -296,54 +339,163 @@ extension PoseMetricsCalculator {
     /// Vision 坐标系：原点左下角，Y 向上递增。
     /// 所以肩膀 Y > 髋部 Y > 脚踝 Y。
     ///
-    /// 结果解释：
+    /// 返回 hipRatio（0~1 连续值）：
     /// - 值越小 → 髋部越靠近脚踝 → **重心越低**（理想滑雪姿态）
     /// - 值越大 → 髋部越靠近肩膀 → **重心越高**
+    ///
+    /// 置信度取所用关键点的均值。
     private func computeRelativeCenterOfGravity(
-        leftShoulder: CGPoint?, rightShoulder: CGPoint?,
-        leftHip: CGPoint?, rightHip: CGPoint?,
-        leftAnkle: CGPoint?, rightAnkle: CGPoint?,
-        confidenceBase: Double
-    ) -> MetricWithConfidence<String>? {
+        leftShoulder: JointPoint?, rightShoulder: JointPoint?,
+        leftHip: JointPoint?, rightHip: JointPoint?,
+        leftAnkle: JointPoint?, rightAnkle: JointPoint?
+    ) -> MetricWithConfidence<Double>? {
         let shoulderY: Double? = {
-            if let l = leftShoulder, let r = rightShoulder { return Double((l.y + r.y) / 2) }
-            if let s = leftShoulder { return Double(s.y) }
-            if let s = rightShoulder { return Double(s.y) }
+            if let l = leftShoulder, let r = rightShoulder { return Double((l.location.y + r.location.y) / 2) }
+            if let s = leftShoulder { return Double(s.location.y) }
+            if let s = rightShoulder { return Double(s.location.y) }
             return nil
         }()
         let hipY: Double? = {
-            if let l = leftHip, let r = rightHip { return Double((l.y + r.y) / 2) }
-            if let h = leftHip { return Double(h.y) }
-            if let h = rightHip { return Double(h.y) }
+            if let l = leftHip, let r = rightHip { return Double((l.location.y + r.location.y) / 2) }
+            if let h = leftHip { return Double(h.location.y) }
+            if let h = rightHip { return Double(h.location.y) }
             return nil
         }()
         let ankleY: Double? = {
-            if let l = leftAnkle, let r = rightAnkle { return Double((l.y + r.y) / 2) }
-            if let a = leftAnkle { return Double(a.y) }
-            if let a = rightAnkle { return Double(a.y) }
+            if let l = leftAnkle, let r = rightAnkle { return Double((l.location.y + r.location.y) / 2) }
+            if let a = leftAnkle { return Double(a.location.y) }
+            if let a = rightAnkle { return Double(a.location.y) }
             return nil
         }()
 
-        guard let sY = shoulderY, let hY = hipY, let aY = ankleY else {
-            return nil
-        }
+        guard let sY = shoulderY, let hY = hipY, let aY = ankleY else { return nil }
 
         let bodyHeight = sY - aY
         guard bodyHeight > 0 else { return nil }
 
         let hipRatio = (hY - aY) / bodyHeight  // 0~1，越小重心越低
 
-        // 相对重心等级划分
-        let level: String
-        if hipRatio < 0.35 {
-            level = "低"
-        } else if hipRatio < 0.55 {
-            level = "中"
-        } else {
-            level = "高"
+        // 置信度：取所有成功获取的关键点的平均置信度
+        var confSum = 0.0
+        var confCount = 0
+        for jp in [leftShoulder, rightShoulder, leftHip, rightHip, leftAnkle, rightAnkle] {
+            if let c = jp?.confidence { confSum += Double(c); confCount += 1 }
+        }
+        let conf = confCount > 0 ? confSum / Double(confCount) : 0.0
+
+        return MetricWithConfidence(value: hipRatio, confidence: conf)
+    }
+
+    // MARK: 转弯阶段方向特征
+
+    private func computeSignedBodyLean(
+        leftShoulder: JointPoint?, rightShoulder: JointPoint?,
+        leftHip: JointPoint?, rightHip: JointPoint?
+    ) -> MetricWithConfidence<Double>? {
+        guard let shoulder = midpoint(leftShoulder, rightShoulder),
+              let hip = midpoint(leftHip, rightHip) else {
+            return nil
+        }
+        let angle = signedLeanAngleFromVertical(from: shoulder.location, to: hip.location)
+        let conf = min(shoulder.confidence, hip.confidence)
+        return MetricWithConfidence(value: angle, confidence: Double(conf))
+    }
+
+    private func computeSignedCalfLean(
+        leftKnee: JointPoint?, rightKnee: JointPoint?,
+        leftAnkle: JointPoint?, rightAnkle: JointPoint?
+    ) -> MetricWithConfidence<Double>? {
+        var weightedSum = 0.0
+        var totalConfidence = 0.0
+
+        func add(knee: JointPoint?, ankle: JointPoint?) {
+            guard let knee, let ankle else { return }
+            let confidence = Double((knee.confidence + ankle.confidence) / 2)
+            let angle = signedLeanAngleFromVertical(from: knee.location, to: ankle.location)
+            weightedSum += angle * confidence
+            totalConfidence += confidence
         }
 
-        let conf = confidenceBase
-        return MetricWithConfidence(value: level, confidence: conf)
+        add(knee: leftKnee, ankle: leftAnkle)
+        add(knee: rightKnee, ankle: rightAnkle)
+
+        guard totalConfidence > 0 else { return nil }
+        return MetricWithConfidence(value: weightedSum / totalConfidence, confidence: totalConfidence / (leftKnee != nil && rightKnee != nil ? 2.0 : 1.0))
+    }
+
+    private func computeCenterX(_ first: JointPoint?, _ second: JointPoint?) -> MetricWithConfidence<Double>? {
+        guard let center = midpoint(first, second) else { return nil }
+        return MetricWithConfidence(value: Double(center.location.x), confidence: Double(center.confidence))
+    }
+
+    private func computeCenterY(_ first: JointPoint?, _ second: JointPoint?) -> MetricWithConfidence<Double>? {
+        guard let center = midpoint(first, second) else { return nil }
+        return MetricWithConfidence(value: Double(center.location.y), confidence: Double(center.confidence))
+    }
+
+    private func computeBodyCenterX(points: ExtractedPoints) -> MetricWithConfidence<Double>? {
+        let centers = [
+            midpoint(points.leftShoulder, points.rightShoulder),
+            midpoint(points.leftHip, points.rightHip),
+            midpoint(points.leftAnkle, points.rightAnkle)
+        ].compactMap { $0 }
+
+        guard !centers.isEmpty else { return nil }
+        let value = centers.map { Double($0.location.x) }.reduce(0, +) / Double(centers.count)
+        let confidence = centers.map { Double($0.confidence) }.reduce(0, +) / Double(centers.count)
+        return MetricWithConfidence(value: value, confidence: confidence)
+    }
+
+    private func computeBodyCenterY(points: ExtractedPoints) -> MetricWithConfidence<Double>? {
+        let centers = [
+            midpoint(points.leftShoulder, points.rightShoulder),
+            midpoint(points.leftHip, points.rightHip),
+            midpoint(points.leftAnkle, points.rightAnkle)
+        ].compactMap { $0 }
+
+        guard !centers.isEmpty else { return nil }
+        let value = centers.map { Double($0.location.y) }.reduce(0, +) / Double(centers.count)
+        let confidence = centers.map { Double($0.confidence) }.reduce(0, +) / Double(centers.count)
+        return MetricWithConfidence(value: value, confidence: confidence)
+    }
+
+    private func computeAnkleProxyBoardAngle(
+        leftAnkle: JointPoint?,
+        rightAnkle: JointPoint?
+    ) -> MetricWithConfidence<Double>? {
+        guard let leftAnkle, let rightAnkle else { return nil }
+
+        let dx = Double(rightAnkle.location.x - leftAnkle.location.x)
+        let dy = Double(rightAnkle.location.y - leftAnkle.location.y)
+        let distance = sqrt(dx * dx + dy * dy)
+        guard distance > 0.001 else { return nil }
+
+        let angle = normalizeAngle(atan2(dy, dx) * 180 / Double.pi)
+        let pointConfidence = Double((leftAnkle.confidence + rightAnkle.confidence) / 2)
+        let geometryConfidence = clamp(distance * 12.0, lower: 0, upper: 1)
+        return MetricWithConfidence(value: angle, confidence: pointConfidence * geometryConfidence)
+    }
+
+    private func normalizeAngle(_ angle: Double) -> Double {
+        var normalized = angle.truncatingRemainder(dividingBy: 360)
+        if normalized >= 180 {
+            normalized -= 360
+        } else if normalized < -180 {
+            normalized += 360
+        }
+        return normalized
+    }
+
+    private func midpoint(_ first: JointPoint?, _ second: JointPoint?) -> JointPoint? {
+        if let first, let second {
+            return JointPoint(
+                location: CGPoint(
+                    x: (first.location.x + second.location.x) / 2,
+                    y: (first.location.y + second.location.y) / 2
+                ),
+                confidence: (first.confidence + second.confidence) / 2
+            )
+        }
+        return first ?? second
     }
 }

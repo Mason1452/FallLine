@@ -7,27 +7,47 @@ public struct ReportContext {
     public let avgScore: Double
     public let stage: StageLabel
     public let fLean: Double
+    public let fLeanConfidence: Double
     public let knee: Double
+    public let kneeConfidence: Double
     public let calf: Double
+    public let calfConfidence: Double
     public let grav: Double
+    public let gravConfidence: Double
+    public let cogFit: Double
+    public let cogFitConfidence: Double
+    public let cogFitLabel: String
+    public let cogFitMainIssue: String?
     public let sym: Double
+    public let symConfidence: Double
     public let stability: Double
     public let stdDev: Double
     public let visibility: VisibilityLevel
     public let hasPoseData: Bool
+    public let stableCarvingBaseline: StableCarvingBaseline?
 
-    public init(avgScore: Double, stage: StageLabel, fLean: Double, knee: Double, calf: Double, grav: Double, sym: Double, stability: Double, stdDev: Double, visibility: VisibilityLevel, hasPoseData: Bool) {
+    public init(avgScore: Double, stage: StageLabel, fLean: Double, fLeanConfidence: Double, knee: Double, kneeConfidence: Double, calf: Double, calfConfidence: Double, grav: Double, gravConfidence: Double, cogFit: Double, cogFitConfidence: Double, cogFitLabel: String, cogFitMainIssue: String?, sym: Double, symConfidence: Double, stability: Double, stdDev: Double, visibility: VisibilityLevel, hasPoseData: Bool, stableCarvingBaseline: StableCarvingBaseline?) {
         self.avgScore = avgScore
         self.stage = stage
         self.fLean = fLean
+        self.fLeanConfidence = fLeanConfidence
         self.knee = knee
+        self.kneeConfidence = kneeConfidence
         self.calf = calf
+        self.calfConfidence = calfConfidence
         self.grav = grav
+        self.gravConfidence = gravConfidence
+        self.cogFit = cogFit
+        self.cogFitConfidence = cogFitConfidence
+        self.cogFitLabel = cogFitLabel
+        self.cogFitMainIssue = cogFitMainIssue
         self.sym = sym
+        self.symConfidence = symConfidence
         self.stability = stability
         self.stdDev = stdDev
         self.visibility = visibility
         self.hasPoseData = hasPoseData
+        self.stableCarvingBaseline = stableCarvingBaseline
     }
 }
 
@@ -150,6 +170,22 @@ public struct NarrativeLibrary {
         "重心控制到位，滑行姿态扎实。"
     ]
 
+    static let cogFitLowCorpus = [
+        "以当前阶段看，重心高度和转弯阶段不太匹配，弯中承压不够稳定。",
+        "重心适配度偏低，不是单纯要更低，而是需要在入弯、弯中和出弯之间更贴合动作节奏。",
+        "当前重心位置对这个阶段的动作支持不够，容易让板压建立变慢或弯中支撑散掉。"
+    ]
+
+    static let cogFitMidCorpus = [
+        "重心阶段适配度一般，基础可控，但弯中承压阶段还可以更稳定。",
+        "重心高度大体能用，但和转弯阶段的配合还不够精细。"
+    ]
+
+    static let cogFitHighCorpus = [
+        "重心高度和当前滑行阶段比较匹配，动作支撑感较好。",
+        "重心适配度不错，没有为了压低而压低，整体更符合当前阶段。"
+    ]
+
     // MARK: - 膝盖评价语料
 
     static let kneeLowCorpus = [
@@ -223,9 +259,13 @@ public struct NarrativeLibrary {
             if score < 50 { return pick(from: gravLowCorpus, seed: seed) }
             if score < 70 { return pick(from: gravMidCorpus, seed: seed) }
             return pick(from: gravHighCorpus, seed: seed)
+        case "cogFit":
+            if score < 50 { return pick(from: cogFitLowCorpus, seed: seed) }
+            if score < 70 { return pick(from: cogFitMidCorpus, seed: seed) }
+            return pick(from: cogFitHighCorpus, seed: seed)
         case "knee":
-            if score < 55 { return pick(from: kneeLowCorpus, seed: seed) }
-            if score < 70 { return pick(from: kneeMidCorpus, seed: seed) }
+            if score < 65 { return pick(from: kneeLowCorpus, seed: seed) }
+            if score < 80 { return pick(from: kneeMidCorpus, seed: seed) }
             return pick(from: kneeHighCorpus, seed: seed)
         case "fLean":
             if score < 55 { return pick(from: fLeanLowCorpus, seed: seed) }
@@ -244,10 +284,22 @@ public struct NarrativeLibrary {
 // MARK: - 报告生成器
 
 public struct ReportGenerator {
+    private static let lowConfidenceThreshold = 0.35
+    private static let cautiousConfidenceThreshold = 0.65
+
     public init() {}
 
     public static func generate(output: AnalysisOutput) -> String {
         let ctx = buildContext(output: output)
+        let supportsBoardQuality = output.boardAnalysis.summary?.averageSideslipAngle != nil
+        let ski = output.skiMetrics
+        let edgeQualityName = supportsBoardQuality ? "走刃质量" : "走刃倾向"
+        let edgeConfidence = supportsBoardQuality
+            ? min(ski.edgeQualityConfidence, output.boardAnalysis.summary?.confidence ?? ski.edgeQualityConfidence)
+            : ski.edgeQualityConfidence
+        let edgeJudgmentIsReliable = edgeConfidence >= lowConfidenceThreshold
+        let weakEdgeEvidence = hasWeakEdgeEvidence(ctx)
+        let reliableFrameCount = reliablePoseFrames(from: output.frames).count
         let separator = String(repeating: "=", count: 54)
         var lines: [String] = []
 
@@ -272,18 +324,45 @@ public struct ReportGenerator {
         }
         lines.append("  \(emoji) 综合评分：\(String(format: "%.0f", ctx.avgScore))/100")
         lines.append("  🏷 阶段判断：\(ctx.stage.rawValue)")
+        lines.append("  📐 评分口径：取可靠片段中表现最好的前 1/3 加权平均")
+        if weakEdgeEvidence {
+            lines.append("  ⚠️ 持续立刃证据不足：前倾和屈膝不能单独推高综合分，已按初中级表现封顶")
+        }
+        if reliableFrameCount < AnalysisReliability.minimumHighlightFrameCount {
+            lines.append("  ⚠️ 可靠评分片段不足：仅 \(reliableFrameCount) 帧，综合分已保守封顶")
+        } else if reliableFrameCount < 12 {
+            lines.append("  ⚠️ 可靠评分片段偏少：\(reliableFrameCount) 帧，综合分仅作谨慎参考")
+        }
         lines.append("")
 
         // 阶段描述
-        lines.append("  📋 \(ctx.stage.description)")
+        if let baseline = ctx.stableCarvingBaseline {
+            lines.append("  📋 检测到连续稳定的高质量刻滑平台，低分帧可能受大倒伏、低姿态或遮挡影响；综合评分采用该稳定平台作为基线。")
+            lines.append("     基线片段：\(formatTime(seconds: baseline.plateauStartTime))-\(formatTime(seconds: baseline.plateauEndTime))")
+        } else if weakEdgeEvidence {
+            lines.append("  📋 持续立刃证据不足，转弯更接近扫雪/搓雪控制；姿态项看起来有支撑，但还不能评价为高质量滑行。")
+        } else if edgeJudgmentIsReliable {
+            lines.append("  📋 \(ctx.stage.description)")
+        } else {
+            lines.append("  📋 走刃/横滑判断置信度不足，本报告只参考可靠可见帧；低姿态或遮挡片段不做负面判断。")
+        }
         lines.append("")
 
         // 教练观察（主评价）
         let seed = videoSeed(output.videoPath)
-        let mainObservation = NarrativeLibrary.pick(
-            from: NarrativeLibrary.coachObservation[ctx.stage] ?? [],
-            seed: seed
-        )
+        let mainObservation: String
+        if ctx.stableCarvingBaseline != nil {
+            mainObservation = "这段动作稳定性很高，系统不应把部分低分帧直接理解成滑得差；更合理的解释是姿态识别在大倒伏或低姿态刻滑时产生了冲突。"
+        } else if weakEdgeEvidence {
+            mainObservation = "这段不能因为身体前倾或膝盖弯曲看起来还可以就给高分；核心问题是缺少持续刃角和干净刃线，整体仍属于基础滑行质量。"
+        } else if edgeJudgmentIsReliable {
+            mainObservation = NarrativeLibrary.pick(
+                from: NarrativeLibrary.coachObservation[ctx.stage] ?? [],
+                seed: seed
+            )
+        } else {
+            mainObservation = "这段视频里可能存在低姿态、大立刃或遮挡导致的关键点缺失，系统不应据此判断为搓雪或走刃不足。建议结合视频原片复核。"
+        }
         if !mainObservation.isEmpty {
             lines.append("  🗣 教练观察")
             lines.append("  \(mainObservation)")
@@ -291,34 +370,78 @@ public struct ReportGenerator {
         }
 
         // 滑雪维度评分
-        let ski = output.skiMetrics
         lines.append("  🎿 滑雪维度评分")
-        lines.append(makeSkiScoreLine("走刃质量", ski.edgeQualityScore, ski.edgeQualityLabel))
-        lines.append(makeSkiScoreLine("板压支撑", ski.pressureSupportScore, ski.pressureSupportLabel))
-        lines.append(makeSkiScoreLine("前后支撑", ski.foreAftSupportScore, ski.foreAftSupportLabel))
-        lines.append(makeSkiScoreLine("腿部弹性", ctx.knee, kneeLabel(ctx.knee)))
-        lines.append(makeSkiScoreLine("左右一致性", ctx.sym, symLabel(ctx.sym)))
+        lines.append(makeSkiScoreLine(edgeQualityName, ski.edgeQualityScore, ski.edgeQualityLabel, confidence: edgeConfidence))
+        lines.append(makeSkiScoreLine("板压支撑", ski.pressureSupportScore, ski.pressureSupportLabel, confidence: ski.pressureSupportConfidence))
+        lines.append(makeSkiScoreLine("前后支撑", ski.foreAftSupportScore, ski.foreAftSupportLabel, confidence: ski.foreAftSupportConfidence))
+        if ctx.stableCarvingBaseline != nil, output.centerOfMassAnalysis.confidence < cautiousConfidenceThreshold {
+            lines.append("    ⬜⬜⬜⬜⬜ 重心阶段适配 暂不评分 · 稳定刻滑基线与重心关键点识别冲突 · 置信度 \(formatConfidence(output.centerOfMassAnalysis.confidence))")
+        } else {
+            lines.append(makeCenterOfMassScoreLine(output.centerOfMassAnalysis))
+        }
+        if ctx.stableCarvingBaseline != nil, ctx.kneeConfidence < cautiousConfidenceThreshold {
+            lines.append("    ⬜⬜⬜⬜⬜ 腿部弹性 暂不评分 · 稳定刻滑基线与膝部关键点识别冲突 · 置信度 \(formatConfidence(ctx.kneeConfidence))")
+        } else {
+            lines.append(makeSkiScoreLine("腿部弹性", ctx.knee, kneeLabel(ctx.knee), confidence: ctx.kneeConfidence))
+        }
+        lines.append(makeSkiScoreLine("左右一致性", ctx.sym, symLabel(ctx.sym), confidence: ctx.symConfidence))
         lines.append("")
+
+        // 板身方向与横滑分析
+        if let boardSummary = output.boardAnalysis.summary {
+            lines.append("  🏂 板身方向与横滑")
+            lines.append(boardSummaryLine(boardSummary))
+            lines.append("    说明：当前用左右脚踝连线代理板身，侧面画面更可靠；正面、背面或遮挡时置信度会下降。")
+            lines.append("")
+        }
+
+        // 转弯阶段分析
+        if ctx.stableCarvingBaseline != nil {
+            lines.append("  🧭 转弯阶段分析")
+            lines.append("  • 检测到连续稳定高质量片段；低分阶段暂不输出“刃角不足/搓雪”类负面结论。")
+            lines.append("")
+        } else if !output.turnAnalysis.segments.isEmpty {
+            lines.append("  🧭 转弯阶段分析")
+            for segment in output.turnAnalysis.segments.prefix(3) {
+                lines.append(turnSegmentLine(segment))
+                if segment.mainIssue != "阶段衔接基本正常" {
+                    lines.append("    建议：\(stageAdvice(for: segment.mainIssue))")
+                }
+            }
+            lines.append("")
+        }
+
+        // 高光片段
+        if !output.highlightMoments.isEmpty {
+            lines.append("  ✨ 高光时刻")
+            for moment in output.highlightMoments.prefix(3) {
+                lines.append(highlightMomentLine(moment))
+                lines.append("    \(moment.description)")
+            }
+            lines.append("")
+        }
 
         // 分项评分（保留，用于调试）
         lines.append("  🔎 原始姿态指标（调试参考）")
-        lines.append(makeScoreLine("身体前倾", ctx.fLean, "fLean", seed: seed + 1))
-        lines.append(makeScoreLine("膝盖弯曲", ctx.knee, "knee", seed: seed + 2))
-        lines.append(makeScoreLine("小腿倾斜", ctx.calf, "calf", seed: seed + 3))
-        lines.append(makeScoreLine("重心控制", ctx.grav, "grav", seed: seed + 4))
-        lines.append(makeScoreLine("动作对称", ctx.sym, "sym", seed: seed + 5))
+        lines.append(makeScoreLine("身体前倾", ctx.fLean, "fLean", seed: seed + 1, confidence: ctx.fLeanConfidence))
+        lines.append(makeScoreLine("膝盖弯曲", ctx.knee, "knee", seed: seed + 2, confidence: ctx.kneeConfidence))
+        lines.append(makeScoreLine("小腿倾斜", ctx.calf, "calf", seed: seed + 3, confidence: ctx.calfConfidence))
+        lines.append(makeScoreLine("重心高度旧分", ctx.grav, "grav", seed: seed + 4, confidence: ctx.gravConfidence))
+        lines.append(makeScoreLine("动作对称", ctx.sym, "sym", seed: seed + 5, confidence: ctx.symConfidence))
         lines.append("")
 
         // 关键时刻
         if !output.keyMoments.isEmpty {
             lines.append("  🔍 关键时刻")
             for km in output.keyMoments {
+                let title = edgeQualityLanguage(km.title, supportsBoardQuality: supportsBoardQuality)
+                let description = edgeQualityLanguage(km.description, supportsBoardQuality: supportsBoardQuality)
                 if km.type == "best_edge" {
-                    lines.append("  ⭐ \(km.time) · \(km.title)")
+                    lines.append("  ⭐ \(km.time) · \(title)")
                 } else {
-                    lines.append("  ⚠️ \(km.time) · \(km.title)")
+                    lines.append("  ⚠️ \(km.time) · \(title)")
                 }
-                lines.append("    \(km.description)")
+                lines.append("    \(description)")
             }
             lines.append("")
         }
@@ -328,7 +451,7 @@ public struct ReportGenerator {
         if !strengths.isEmpty {
             lines.append("  ✅ 优势")
             for s in strengths {
-                lines.append("    • \(s)")
+                lines.append("    • \(edgeQualityLanguage(s, supportsBoardQuality: supportsBoardQuality))")
             }
             lines.append("")
         }
@@ -338,14 +461,14 @@ public struct ReportGenerator {
         if !problems.isEmpty {
             lines.append("  ⚠️ 主要问题")
             for p in problems {
-                lines.append("    • \(p)")
+                lines.append("    • \(edgeQualityLanguage(p, supportsBoardQuality: supportsBoardQuality))")
             }
             lines.append("")
         }
 
         // 训练建议
         lines.append("  🎯 训练建议")
-        lines.append(trainingAdvice(ctx: ctx, seed: seed))
+        lines.append(edgeQualityLanguage(trainingAdvice(ctx: ctx, seed: seed), supportsBoardQuality: supportsBoardQuality))
         lines.append("")
 
         // 波动提示
@@ -364,30 +487,53 @@ public struct ReportGenerator {
 
     private static func buildContext(output: AnalysisOutput) -> ReportContext {
         let s = output.summary
-        let frames = output.frames.filter { $0.bodyPose.detected }
+        let frames = reliablePoseFrames(from: output.frames)
         let scores = frames.compactMap { $0.poseScore }
 
         let hasPoseData = !scores.isEmpty
         let (fLean, knee, calf, grav, sym) = hasPoseData
-            ? averageSubScores(from: output.frames)
+            ? StageClassifier.averageSubScores(from: output.frames)
             : (50, 50, 50, 50, 50)
+        let (fLeanConfidence, kneeConfidence, calfConfidence, gravConfidence, symConfidence) = hasPoseData
+            ? averageSubScoreConfidences(from: scores)
+            : (0, 0, 0, 0, 0)
 
         let visibility = frames.last?.bodyPose.visibility ?? .none
 
-        let stage = determineStage(avg: s.averageScore, calf: calf, knee: knee, stability: s.stabilityScore)
+        let stableBaseline = stableCarvingBaseline(from: output.frames, motionStability: s.stabilityScore)
+        let stage = StageClassifier.determineStage(
+            averageScore: s.averageScore,
+            calfScore: calf,
+            kneeScore: knee,
+            stabilityScore: s.stabilityScore
+        )
+        let cog = output.centerOfMassAnalysis
+        let cogFit = cog.frameCount > 0 ? cog.cogStageFitScore : grav
+        let cogFitConfidence = cog.frameCount > 0 ? cog.confidence : 0
+        let cogFitLabel = cog.frameCount > 0 ? cog.label : "无检测数据"
 
         return ReportContext(
             avgScore: s.averageScore,
             stage: stage,
             fLean: fLean,
+            fLeanConfidence: fLeanConfidence,
             knee: knee,
+            kneeConfidence: kneeConfidence,
             calf: calf,
+            calfConfidence: calfConfidence,
             grav: grav,
+            gravConfidence: gravConfidence,
+            cogFit: cogFit,
+            cogFitConfidence: cogFitConfidence,
+            cogFitLabel: cogFitLabel,
+            cogFitMainIssue: cog.mainIssue,
             sym: sym,
+            symConfidence: symConfidence,
             stability: s.stabilityScore,
             stdDev: s.scoreStdDev,
             visibility: visibility,
-            hasPoseData: hasPoseData
+            hasPoseData: hasPoseData,
+            stableCarvingBaseline: stableBaseline
         )
     }
 
@@ -410,11 +556,13 @@ public struct ReportGenerator {
 
         // 只选评分 >= 75 且确实突出的维度
         var candidates: [(score: Double, corpus: [String], seedOffset: Int)] = []
-        if ctx.knee >= 80 { candidates.append((ctx.knee, NarrativeLibrary.kneeHighCorpus, 10)) }
-        if ctx.fLean >= 80 { candidates.append((ctx.fLean, NarrativeLibrary.fLeanHighCorpus, 11)) }
-        if ctx.calf >= 70 { candidates.append((ctx.calf, NarrativeLibrary.calfHighCorpus, 12)) }
-        if ctx.grav >= 80 { candidates.append((ctx.grav, NarrativeLibrary.gravHighCorpus, 13)) }
-        if ctx.sym >= 80 { candidates.append((ctx.sym, NarrativeLibrary.symHighCorpus, 14)) }
+        if ctx.knee >= 80, isHighConfidence(ctx.kneeConfidence) { candidates.append((ctx.knee, NarrativeLibrary.kneeHighCorpus, 10)) }
+        if ctx.fLean >= 80, isHighConfidence(ctx.fLeanConfidence) { candidates.append((ctx.fLean, NarrativeLibrary.fLeanHighCorpus, 11)) }
+        if ctx.calf >= 70, isHighConfidence(ctx.calfConfidence) { candidates.append((ctx.calf, NarrativeLibrary.calfHighCorpus, 12)) }
+        if ctx.cogFit >= 80, isHighConfidence(ctx.cogFitConfidence) {
+            candidates.append((ctx.cogFit, NarrativeLibrary.cogFitHighCorpus, 13))
+        }
+        if ctx.sym >= 80, isHighConfidence(ctx.symConfidence) { candidates.append((ctx.sym, NarrativeLibrary.symHighCorpus, 14)) }
         if ctx.stability >= 70 { candidates.append((ctx.stability, ["动作连贯性好，姿态保持稳定"], 15)) }
 
         // 按分数从高到低排序，最多取 3 条
@@ -434,20 +582,30 @@ public struct ReportGenerator {
         // 按问题严重程度排序（分越低越优先）
         var issues: [(score: Double, label: String, seedOffset: Int)] = []
 
-        if ctx.calf < 50 { issues.append((ctx.calf, "calf", 20)) }
-        else if ctx.calf < 65 { issues.append((ctx.calf, "calf", 20)) }
+        if isUsableConfidence(ctx.calfConfidence), !shouldSuppressCarvingConflictIssue(ctx) {
+            if ctx.calf < 50 { issues.append((ctx.calf, "calf", 20)) }
+            else if ctx.calf < 65 { issues.append((ctx.calf, "calf", 20)) }
+        }
 
-        if ctx.grav < 50 { issues.append((ctx.grav, "grav", 21)) }
-        else if ctx.grav < 65 { issues.append((ctx.grav, "grav", 21)) }
+        if isUsableConfidence(ctx.cogFitConfidence), !shouldSuppressCarvingConflictIssue(ctx) {
+            if ctx.cogFit < 50 { issues.append((ctx.cogFit, "cogFit", 21)) }
+            else if ctx.cogFit < 65 { issues.append((ctx.cogFit, "cogFit", 21)) }
+        }
 
-        if ctx.knee < 55 { issues.append((ctx.knee, "knee", 22)) }
-        else if ctx.knee < 65 { issues.append((ctx.knee, "knee", 22)) }
+        if isUsableConfidence(ctx.kneeConfidence), !shouldSuppressCarvingConflictIssue(ctx) {
+            if ctx.knee < 55 { issues.append((ctx.knee, "knee", 22)) }
+            else if ctx.knee < 80 { issues.append((ctx.knee, "knee", 22)) }
+        }
 
-        if ctx.fLean < 55 { issues.append((ctx.fLean, "fLean", 23)) }
-        else if ctx.fLean < 65 { issues.append((ctx.fLean, "fLean", 23)) }
+        if isUsableConfidence(ctx.fLeanConfidence) {
+            if ctx.fLean < 55 { issues.append((ctx.fLean, "fLean", 23)) }
+            else if ctx.fLean < 65 { issues.append((ctx.fLean, "fLean", 23)) }
+        }
 
-        if ctx.sym < 55 { issues.append((ctx.sym, "sym", 24)) }
-        else if ctx.sym < 65 { issues.append((ctx.sym, "sym", 24)) }
+        if isUsableConfidence(ctx.symConfidence) {
+            if ctx.sym < 55 { issues.append((ctx.sym, "sym", 24)) }
+            else if ctx.sym < 65 { issues.append((ctx.sym, "sym", 24)) }
+        }
 
         if ctx.stability < 45 { issues.append((ctx.stability, "stability", 25)) }
 
@@ -469,14 +627,30 @@ public struct ReportGenerator {
     private static func trainingAdvice(ctx: ReportContext, seed: Int) -> String {
         guard ctx.hasPoseData else { return "未检测到人体姿态，无法给出训练建议。" }
 
+        if ctx.stableCarvingBaseline != nil {
+            return "这段更适合作为稳定刻滑来评价。训练重点不是从搓雪转走刃，而是继续保持弯中承压、弯形节奏和身体倒伏的稳定；如果要细化建议，建议用侧后方全身入镜角度复拍，减少膝踝关键点误识别。"
+        }
+
         // 找到最弱维度
-        let allScores: [(label: String, score: Double)] = [
-            ("calf", ctx.calf),
-            ("grav", ctx.grav),
-            ("knee", ctx.knee),
-            ("fLean", ctx.fLean),
-            ("sym", ctx.sym)
-        ]
+        var allScores: [(label: String, score: Double)] = []
+        if isUsableConfidence(ctx.calfConfidence) {
+            allScores.append(("calf", ctx.calf))
+        }
+        if isUsableConfidence(ctx.kneeConfidence) {
+            allScores.append(("knee", ctx.knee))
+        }
+        if isUsableConfidence(ctx.fLeanConfidence) {
+            allScores.append(("fLean", ctx.fLean))
+        }
+        if isUsableConfidence(ctx.symConfidence) {
+            allScores.append(("sym", ctx.sym))
+        }
+        if isUsableConfidence(ctx.cogFitConfidence) {
+            allScores.append(("cogFit", ctx.cogFit))
+        }
+        guard allScores.count >= 3 else {
+            return "当前可用姿态数据置信度偏低，建议先用侧后方、全身入镜的视频重新拍摄，再做具体训练判断。"
+        }
         let sorted = allScores.sorted { $0.score < $1.score }
 
         guard let primary = sorted.first, primary.score < 70 else {
@@ -507,11 +681,11 @@ public struct ReportGenerator {
                 advice = NarrativeLibrary.pick(from: texts, seed: seed2)
             }
 
-        case "grav":
+        case "cogFit":
             let texts: [String] = [
-                "降低重心是这个阶段最直接的突破点。滑行时保持屈膝屈髋，上半身稳定面朝山下，不要因为速度加快而起身。",
-                "尝试在转弯过程中刻意保持髋部高度不变，不要随着弯形起伏。重心稳住了，刃角和板压才能建立。",
-                "想象自己坐在一个看不见的椅子上滑完整个弯——起身的瞬间就是重心失控的开始。"
+                "先不要把目标理解成一味压低重心。更有效的是让重心跟转弯阶段匹配：入弯逐步进入新弯，弯中稳定承压，出弯平顺释放。",
+                "练习时关注髋部高度是否随阶段变化合理：弯中不要突然起身，换刃时也不要为了低而僵住。",
+                "可以用慢速大弯练重心节奏：入弯建立方向，弯中稳定压住，出弯逐步释放，而不是全程同一个高度硬撑。"
             ]
             advice = NarrativeLibrary.pick(from: texts, seed: seed2)
 
@@ -567,14 +741,19 @@ public struct ReportGenerator {
 
     // MARK: - 辅助
 
+    /// 计算文件名的稳定哈希（DJB2 算法），确保同一视频跨运行输出一致
+    /// Swift 的 hashValue 使用随机种子，跨进程不稳定。
     private static func videoSeed(_ path: String) -> Int {
-        // 用文件名的 hash 作为种子，让同一个视频每次输出一致
         let name = URL(fileURLWithPath: path).lastPathComponent
-        return abs(name.hashValue)
+        var hash = 5381
+        for byte in name.utf8 {
+            hash = ((hash << 5) &+ hash) &+ Int(byte)
+        }
+        return abs(hash)
     }
 
     private static func averageSubScores(from frames: [DetectionResult]) -> (forwardLean: Double, kneeBend: Double, calfLean: Double, gravity: Double, symmetry: Double) {
-        let scores = frames.compactMap { $0.poseScore }
+        let scores = reliablePoseScores(from: frames)
         guard !scores.isEmpty else { return (50, 50, 50, 50, 50) }
         let count = Double(scores.count)
         return (
@@ -586,21 +765,18 @@ public struct ReportGenerator {
         )
     }
 
-    private static func makeScoreLine(_ label: String, _ score: Double, _ dim: String, seed: Int) -> String {
-        let bar: String
-        if score >= 80 {
-            bar = "🟢🟢🟢🟢🟢"
-        } else if score >= 65 {
-            bar = "🟢🟢🟢🟡⬜"
-        } else if score >= 50 {
-            bar = "🟢🟢🟡⬜⬜"
-        } else {
-            bar = "🟡⬜⬜⬜⬜"
-        }
-        return "    \(bar) \(label) \(String(format: "%.0f", score))/100"
+    private static func averageSubScoreConfidences(from scores: [PoseScore]) -> (forwardLean: Double, kneeBend: Double, calfLean: Double, gravity: Double, symmetry: Double) {
+        guard !scores.isEmpty else { return (0, 0, 0, 0, 0) }
+        return (
+            forwardLean: average(scores.map(\.forwardLeanConfidence)),
+            kneeBend: average(scores.map(\.kneeBendConfidence)),
+            calfLean: average(scores.map(\.calfLeanConfidence)),
+            gravity: average(scores.map(\.gravityConfidence)),
+            symmetry: average(scores.map(\.symmetryConfidence))
+        )
     }
 
-    private static func makeSkiScoreLine(_ label: String, _ score: Double, _ tag: String) -> String {
+    private static func makeScoreLine(_ label: String, _ score: Double, _ dim: String, seed: Int, confidence: Double? = nil) -> String {
         let bar: String
         if score >= 80 {
             bar = "🟢🟢🟢🟢🟢"
@@ -611,7 +787,58 @@ public struct ReportGenerator {
         } else {
             bar = "🟡⬜⬜⬜⬜"
         }
-        return "    \(bar) \(label) \(String(format: "%.0f", score))/100 · \(tag)"
+        guard let confidence else {
+            return "    \(bar) \(label) \(String(format: "%.0f", score))/100"
+        }
+        return "    \(bar) \(label) \(String(format: "%.0f", score))/100 · 置信度 \(formatConfidence(confidence))"
+    }
+
+    private static func makeSkiScoreLine(_ label: String, _ score: Double, _ tag: String, confidence: Double? = nil) -> String {
+        if let confidence, confidence < lowConfidenceThreshold {
+            return "    ⬜⬜⬜⬜⬜ \(label) 暂不评分 · 数据置信度不足 · 置信度 \(formatConfidence(confidence))"
+        }
+
+        let bar: String
+        if score >= 80 {
+            bar = "🟢🟢🟢🟢🟢"
+        } else if score >= 65 {
+            bar = "🟢🟢🟢🟡⬜"
+        } else if score >= 50 {
+            bar = "🟢🟢🟡⬜⬜"
+        } else {
+            bar = "🟡⬜⬜⬜⬜"
+        }
+        guard let confidence else {
+            return "    \(bar) \(label) \(String(format: "%.0f", score))/100 · \(tag)"
+        }
+        let suffix = confidence < cautiousConfidenceThreshold ? " · 谨慎参考" : ""
+        return "    \(bar) \(label) \(String(format: "%.0f", score))/100 · \(tag) · 置信度 \(formatConfidence(confidence))\(suffix)"
+    }
+
+    private static func centerOfMassTag(_ analysis: CenterOfMassAnalysis) -> String {
+        guard analysis.frameCount > 0 else { return "无检测数据" }
+        if let issue = analysis.mainIssue, analysis.cogStageFitScore < 70 {
+            return "\(analysis.label) · \(issue)"
+        }
+        return analysis.label
+    }
+
+    private static func makeCenterOfMassScoreLine(_ analysis: CenterOfMassAnalysis) -> String {
+        guard analysis.frameCount > 0 else {
+            return "    ⬜⬜⬜⬜⬜ 重心阶段适配 暂不评分 · 无检测数据"
+        }
+
+        if analysis.confidence < lowConfidenceThreshold {
+            let confidence = String(format: "%.0f", analysis.confidence * 100)
+            return "    ⬜⬜⬜⬜⬜ 重心阶段适配 暂不评分 · \(analysis.label) · 置信度 \(confidence)/100"
+        }
+
+        return makeSkiScoreLine(
+            "重心阶段适配",
+            analysis.cogStageFitScore,
+            centerOfMassTag(analysis),
+            confidence: analysis.confidence
+        )
     }
 
     private static func kneeLabel(_ score: Double) -> String {
@@ -628,10 +855,125 @@ public struct ReportGenerator {
         return "严重不对称"
     }
 
+    private static func turnSegmentLine(_ segment: TurnSegment) -> String {
+        let direction: String
+        switch segment.edgeDirection {
+        case .imageLeft: direction = "画面左侧压刃"
+        case .imageRight: direction = "画面右侧压刃"
+        case .neutral: direction = "平板过渡"
+        case .unknown: direction = "方向不明"
+        }
+
+        let dominantPhase = segment.phaseDistribution
+            .max { $0.value < $1.value }
+            .map { phaseLabel($0.key) } ?? "阶段不明"
+
+        return "  • \(segment.startTimeString)-\(segment.endTimeString) · \(direction) · 主要阶段：\(dominantPhase) · \(segment.mainIssue)"
+    }
+
+    private static func highlightMomentLine(_ moment: HighlightMoment) -> String {
+        let confidenceSuffix = moment.confidence < cautiousConfidenceThreshold
+            ? " · 置信度 \(formatConfidence(moment.confidence)) · 谨慎参考"
+            : ""
+        return "  ⭐ \(moment.startTime)-\(moment.endTime) · \(moment.title) · \(String(format: "%.0f", moment.score))/100\(confidenceSuffix)"
+    }
+
+    private static func boardSummaryLine(_ summary: BoardAnalysisSummary) -> String {
+        let source = boardSourceLabel(summary.source)
+        let confidence = String(format: "%.0f", summary.confidence * 100)
+        guard let sideslip = summary.averageSideslipAngle,
+              let carving = summary.carvingConfidence else {
+            return "    识别到 \(summary.frameCount) 帧板身线条代理 · 数据来源：\(source) · 置信度 \(confidence)/100；画面位移不足，暂不估计横滑角。"
+        }
+
+        if summary.confidence < lowConfidenceThreshold {
+            return "    横滑角暂不评分 · 数据来源：\(source) · 置信度 \(confidence)/100；当前画面角度不足以稳定判断走刃/横滑。"
+        }
+
+        return "    平均横滑角 \(String(format: "%.0f", sideslip))° · 走刃置信 \(String(format: "%.0f", carving))/100 · \(boardKinematicsLabel(sideslip)) · 数据来源：\(source) · 置信度 \(confidence)/100"
+    }
+
+    private static func boardSourceLabel(_ source: BoardObservationSource) -> String {
+        switch source {
+        case .ankleProxy:
+            return "脚踝代理"
+        }
+    }
+
+    private static func boardKinematicsLabel(_ sideslip: Double) -> String {
+        if sideslip <= 15 { return "沿板身移动明显" }
+        if sideslip <= 30 { return "有走刃倾向" }
+        if sideslip <= 45 { return "横滑偏多" }
+        return "以横滑为主"
+    }
+
+    private static func edgeQualityLanguage(_ text: String, supportsBoardQuality: Bool) -> String {
+        guard !supportsBoardQuality else { return text }
+        return text.replacingOccurrences(of: "走刃质量", with: "走刃倾向")
+    }
+
+    private static func isUsableConfidence(_ confidence: Double) -> Bool {
+        confidence >= lowConfidenceThreshold
+    }
+
+    private static func isHighConfidence(_ confidence: Double) -> Bool {
+        confidence >= cautiousConfidenceThreshold
+    }
+
+    private static func shouldSuppressCarvingConflictIssue(_ ctx: ReportContext) -> Bool {
+        guard ctx.stableCarvingBaseline != nil else { return false }
+        return ctx.kneeConfidence < cautiousConfidenceThreshold || ctx.calfConfidence < cautiousConfidenceThreshold
+    }
+
+    private static func hasWeakEdgeEvidence(_ ctx: ReportContext) -> Bool {
+        ctx.stableCarvingBaseline == nil
+            && ctx.calfConfidence >= lowConfidenceThreshold
+            && ctx.calf < 42
+    }
+
+    private static func formatConfidence(_ confidence: Double) -> String {
+        "\(String(format: "%.0f", confidence * 100))/100"
+    }
+
+    private static func average(_ values: [Double]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
+    private static func phaseLabel(_ rawValue: String) -> String {
+        switch rawValue {
+        case TurnPhase.transition.rawValue: return "换刃/过渡"
+        case TurnPhase.initiation.rawValue: return "入弯"
+        case TurnPhase.shaping.rawValue: return "弯中承压"
+        case TurnPhase.release.rawValue: return "出弯释放"
+        default: return rawValue
+        }
+    }
+
+    private static func stageAdvice(for issue: String) -> String {
+        switch issue {
+        case "弯中刃角保持不足":
+            return "把注意力放在弯中持续压刃，不要刚立起来就提前释放。"
+        case "入弯建立刃角偏晚":
+            return "换刃后更早让身体进入新弯，先建立方向再加压。"
+        case "出弯释放不够平顺":
+            return "出弯时逐步释放板压，避免突然起身或横向甩尾。"
+        default:
+            return "保持阶段衔接稳定，再逐步增加速度和弯形幅度。"
+        }
+    }
+
     private static func formatDuration(_ seconds: Double) -> String {
         let total = Int(seconds)
         let mins = total / 60
         let secs = total % 60
         return "\(mins)分\(secs)秒"
+    }
+
+    private static func formatTime(seconds: Double) -> String {
+        let total = Int(seconds)
+        let mins = total / 60
+        let secs = total % 60
+        return String(format: "%02d:%02d", mins, secs)
     }
 }

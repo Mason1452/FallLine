@@ -18,14 +18,30 @@ public class VideoAnalyzer {
     private let metricsCalculator: PoseMetricsCalculator
     private let poseScorer: PoseScorer
 
+    /// 采样间隔（秒）。默认 1.0 = 每秒分析一帧
+    public let sampleInterval: Double
+    /// 最大帧尺寸。nil 表示使用视频原始分辨率
+    private let maxFrameSize: CGSize?
+
     /// 初始化分析器
     /// - Parameters:
     ///   - videoURL: 视频文件的 URL
-    ///   - pointConfidenceThreshold: 关键点检测置信度阈值
-    public init(videoURL: URL, pointConfidenceThreshold: VNConfidence = 0.3) {
+    ///   - pointConfidenceThreshold: 关键点检测置信度阈值（默认 0.3）
+    ///   - sampleInterval: 采样间隔秒数（默认 1.0）
+    ///   - maxFrameSize: 最大帧分辨率，nil 使用视频原始尺寸（默认 1920x1080）
+    ///   - visionOptions: Vision 请求选项（默认仅姿态检测）
+    public init(
+        videoURL: URL,
+        pointConfidenceThreshold: VNConfidence = 0.3,
+        sampleInterval: Double = 1.0,
+        maxFrameSize: CGSize? = CGSize(width: 1920, height: 1080),
+        visionOptions: VisionAnalysisOptions = .skiAnalysis
+    ) {
         self.videoURL = videoURL
         self.asset = AVAsset(url: videoURL)
-        self.frameAnalyzer = VisionFrameAnalyzer()
+        self.sampleInterval = max(0.1, sampleInterval)
+        self.maxFrameSize = maxFrameSize
+        self.frameAnalyzer = VisionFrameAnalyzer(options: visionOptions)
         self.metricsCalculator = PoseMetricsCalculator(pointConfidenceThreshold: pointConfidenceThreshold)
         self.poseScorer = PoseScorer()
     }
@@ -45,12 +61,13 @@ public class VideoAnalyzer {
         let duration = try await asset.load(.duration)
         let totalSeconds = CMTimeGetSeconds(duration)
 
-        let sampleInterval: Double = 1.0
         var results: [DetectionResult] = []
 
         let imageGenerator = AVAssetImageGenerator(asset: asset)
         imageGenerator.appliesPreferredTrackTransform = true
-        imageGenerator.maximumSize = CGSize(width: 1920, height: 1080)
+        if let maxSize = maxFrameSize {
+            imageGenerator.maximumSize = maxSize
+        }
 
         var currentTime: Double = 0.0
         while currentTime < totalSeconds {
@@ -61,7 +78,23 @@ public class VideoAnalyzer {
                 let result = try await analyzeFrame(cgImage: cgImage, at: time)
                 results.append(result)
             } catch {
-                // 单帧失败跳过，不中断整体流程
+                // 单帧失败不中断整体流程，但记录错误信息
+                results.append(DetectionResult(
+                    time: currentTime,
+                    objects: [],
+                    faces: [],
+                    textObservations: [],
+                    sceneClassifications: [],
+                    bodyPose: BodyPoseData(
+                        detected: false, visibility: .none,
+                        bodyLeanAngle: nil, leftBodyLeanAngle: nil, rightBodyLeanAngle: nil,
+                        leftKneeBendAngle: nil, rightKneeBendAngle: nil,
+                        leftCalfLeanAngle: nil, rightCalfLeanAngle: nil,
+                        centerOfGravity: nil
+                    ),
+                    poseScore: nil,
+                    error: "帧提取或分析失败: \(error.localizedDescription)"
+                ))
             }
 
             currentTime += sampleInterval
@@ -146,25 +179,38 @@ public class VideoAnalyzer {
 
     /// 根据所有帧的分析结果生成全视频总结
     public func generateSummary(from results: [DetectionResult]) -> VideoSummary? {
-        let scores = results.compactMap { $0.poseScore?.totalScore }
-        guard !scores.isEmpty else { return nil }
+        let reliableFrames = reliablePoseFrames(from: results)
+        let scoreEntries = reliableFrames.compactMap { result -> (time: Double, score: Double, confidence: Double)? in
+            guard let poseScore = result.poseScore else { return nil }
+            return (result.time, poseScore.totalScore, max(0.01, poseScore.totalConfidence))
+        }
+        guard !scoreEntries.isEmpty else { return nil }
 
-        let avg = scores.reduce(0, +) / Double(scores.count)
-        let sumSq = scores.map { pow($0 - avg, 2) }.reduce(0, +)
-        let std = sqrt(sumSq / Double(scores.count))
+        let rawAvg = weightedAverage(scoreEntries.map { ($0.score, $0.confidence) })
+        let bestThirdAvg = bestThirdAverage(scoreEntries.map { ($0.score, $0.confidence) })
+        let std = weightedStandardDeviation(scoreEntries.map { ($0.score, $0.confidence) }, mean: rawAvg)
         // 总分一致性只解释评分波动，不代表真实动作稳定性。
         let scoreConsistencyScore = clamp(100 - std * 10, lower: 0, upper: 100)
         let stabilityScore = calculateMotionStability(from: results)
+        let stableBaseline = stableCarvingBaseline(from: results, motionStability: stabilityScore)
+        let uncappedAverage = max(bestThirdAvg, stableBaseline?.adjustedAverageScore ?? 0)
+        let techniqueCappedAverage = applyEdgeEvidenceCaps(
+            score: uncappedAverage,
+            reliableFrames: reliableFrames,
+            stableBaseline: stableBaseline
+        )
+        let avg = applyEvidenceCaps(
+            score: techniqueCappedAverage,
+            reliableFrameCount: scoreEntries.count
+        )
 
         // 找最佳/最差帧
         var best = (time: 0.0, score: -1.0)
         var worst = (time: 0.0, score: 101.0)
 
-        for result in results {
-            if let s = result.poseScore?.totalScore {
-                if s > best.score { best = (result.time, s) }
-                if s < worst.score { worst = (result.time, s) }
-            }
+        for entry in scoreEntries {
+            if entry.score > best.score { best = (entry.time, entry.score) }
+            if entry.score < worst.score { worst = (entry.time, entry.score) }
         }
 
         let overallLevel: String = {
@@ -195,6 +241,65 @@ public class VideoAnalyzer {
         )
     }
 
+    private func weightedAverage(_ values: [(value: Double, weight: Double)]) -> Double {
+        let totalWeight = values.map(\.weight).reduce(0, +)
+        guard totalWeight > 0 else { return 0 }
+        return values.map { $0.value * $0.weight }.reduce(0, +) / totalWeight
+    }
+
+    private func bestThirdAverage(_ values: [(value: Double, weight: Double)]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let selectedCount = max(1, Int(ceil(Double(values.count) / 3.0)))
+        let selected = values.sorted { $0.value > $1.value }.prefix(selectedCount)
+        return weightedAverage(Array(selected))
+    }
+
+    private func applyEvidenceCaps(score: Double, reliableFrameCount: Int) -> Double {
+        if reliableFrameCount < 5 {
+            return min(score, 55)
+        }
+        if reliableFrameCount < 8 {
+            return min(score, 65)
+        }
+        if reliableFrameCount < 12 {
+            return min(score, 78)
+        }
+        return score
+    }
+
+    private func applyEdgeEvidenceCaps(
+        score: Double,
+        reliableFrames: [DetectionResult],
+        stableBaseline: StableCarvingBaseline?
+    ) -> Double {
+        // 稳定刻滑基线是低姿态/大倒伏误识别的保护通道，不再用小腿代理二次封顶。
+        guard stableBaseline == nil else { return score }
+
+        guard let averageEdgeEvidence = averageEdgeEvidenceScore(from: reliableFrames) else {
+            return min(score, 65)
+        }
+
+        if averageEdgeEvidence < 38 {
+            return min(score, 58)
+        }
+        if averageEdgeEvidence < 42 {
+            return min(score, 65)
+        }
+        if averageEdgeEvidence < 50 {
+            return min(score, 70)
+        }
+        return score
+    }
+
+    private func weightedStandardDeviation(_ values: [(value: Double, weight: Double)], mean: Double) -> Double {
+        let totalWeight = values.map(\.weight).reduce(0, +)
+        guard totalWeight > 0 else { return 0 }
+        let variance = values
+            .map { pow($0.value - mean, 2) * $0.weight }
+            .reduce(0, +) / totalWeight
+        return sqrt(variance)
+    }
+
     // MARK: - 动作稳定性
 
     /// 基于姿态指标的时间平滑度计算动作稳定性。
@@ -212,7 +317,7 @@ public class VideoAnalyzer {
             let gravityLevel: MetricWithConfidence<Double>?
         }
 
-        let samples: [MotionSample] = results.compactMap { result in
+        let samples: [MotionSample] = reliablePoseFrames(from: results).compactMap { result in
             guard result.bodyPose.detected, result.bodyPose.visibility != .minimal else {
                 return nil
             }
@@ -248,7 +353,7 @@ public class VideoAnalyzer {
                              weightedPenalty: &weightedPenalty, totalWeight: &totalWeight)
             addMotionPenalty(previous.rightCalf, current.rightCalf, dt: dt, tolerancePerSecond: 32, weight: 0.8,
                              weightedPenalty: &weightedPenalty, totalWeight: &totalWeight)
-            addMotionPenalty(previous.gravityLevel, current.gravityLevel, dt: dt, tolerancePerSecond: 1.0, weight: 1.1,
+            addMotionPenalty(previous.gravityLevel, current.gravityLevel, dt: dt, tolerancePerSecond: 0.15, weight: 1.1,
                              weightedPenalty: &weightedPenalty, totalWeight: &totalWeight)
         }
 
@@ -277,20 +382,10 @@ public class VideoAnalyzer {
         totalWeight += effectiveWeight
     }
 
-    private func gravityLevelMetric(_ metric: MetricWithConfidence<String>?) -> MetricWithConfidence<Double>? {
-        guard let metric else { return nil }
-        let value: Double
-        switch metric.value {
-        case "低": value = 0
-        case "中": value = 1
-        case "高": value = 2
-        default: return nil
-        }
-        return MetricWithConfidence(value: value, confidence: metric.confidence)
-    }
-
-    private func clamp(_ value: Double, lower: Double, upper: Double) -> Double {
-        return min(max(value, lower), upper)
+    /// hipRatio 已是 0~1 连续值，直接用于动作稳定性计算
+    /// 注：容忍度在 addMotionPenalty 中针对连续值做了调整
+    private func gravityLevelMetric(_ metric: MetricWithConfidence<Double>?) -> MetricWithConfidence<Double>? {
+        return metric
     }
 
     // MARK: - 工具

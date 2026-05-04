@@ -28,13 +28,27 @@ do {
 
     // 生成基础姿态评分
     let summary = analyzer.generateSummary(from: results)
+    let outputSummary = summary ?? VideoSummary(
+        averageScore: 0,
+        bestFrame: FrameScore(time: 0, timeString: "00:00", score: 0),
+        worstFrame: FrameScore(time: 0, timeString: "00:00", score: 0),
+        stabilityScore: 0,
+        scoreConsistencyScore: 0,
+        scoreStdDev: 0,
+        overallLevel: "未检测到人体"
+    )
 
     // 补充 skiMetrics 到每一帧
-    let stability = summary?.stabilityScore ?? 50
+    let stability = outputSummary.stabilityScore
+    let stabilityConfidence = min(1.0, Double(reliablePoseScores(from: results).count) / 5.0)
     let framesWithMetrics = results.map { frame -> DetectionResult in
         var f = frame
         if let score = frame.poseScore {
-            let sm = SkiMetricsCalculator.compute(from: score, stability: stability)
+            let sm = SkiMetricsCalculator.compute(
+                from: score,
+                stability: stability,
+                stabilityConfidence: stabilityConfidence
+            )
             f.skiMetrics = sm
         }
         return f
@@ -44,7 +58,30 @@ do {
     let avgSkiMetrics = SkiMetricsCalculator.average(from: framesWithMetrics, stability: stability)
 
     // 关键时刻
-    let keyMoments = KeyMomentDetector.detect(from: framesWithMetrics, duration: totalSeconds)
+    let keyMoments = KeyMomentDetector.detect(
+        from: framesWithMetrics,
+        duration: totalSeconds,
+        summary: outputSummary
+    )
+
+    // 高光片段
+    let highlightMoments = HighlightMomentDetector.detect(
+        from: framesWithMetrics,
+        summary: outputSummary
+    )
+
+    // 板身方向与横滑分析
+    let boardAnalysis = BoardDirectionAnalyzer.analyze(frames: framesWithMetrics)
+
+    // 转弯阶段分析
+    let turnAnalysis = TurnPhaseDetector.analyze(frames: framesWithMetrics)
+
+    // 重心阶段适配分析
+    let centerOfMassAnalysis = CenterOfMassFitCalculator.analyze(
+        frames: framesWithMetrics,
+        summary: outputSummary,
+        turnAnalysis: turnAnalysis
+    )
 
     // 构建完整输出
     let output = AnalysisOutput(
@@ -52,17 +89,13 @@ do {
         duration: totalSeconds,
         totalFrames: results.count,
         frames: framesWithMetrics,
-        summary: summary ?? VideoSummary(
-            averageScore: 0,
-            bestFrame: FrameScore(time: 0, timeString: "00:00", score: 0),
-            worstFrame: FrameScore(time: 0, timeString: "00:00", score: 0),
-            stabilityScore: 0,
-            scoreConsistencyScore: 0,
-            scoreStdDev: 0,
-            overallLevel: "未检测到人体"
-        ),
+        summary: outputSummary,
         skiMetrics: avgSkiMetrics,
-        keyMoments: keyMoments
+        keyMoments: keyMoments,
+        highlightMoments: highlightMoments,
+        centerOfMassAnalysis: centerOfMassAnalysis,
+        boardAnalysis: boardAnalysis,
+        turnAnalysis: turnAnalysis
     )
 
     // 输出到同名 JSON 文件（视频同目录）
