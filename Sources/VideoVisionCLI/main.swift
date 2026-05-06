@@ -2,15 +2,58 @@ import Foundation
 import AVFoundation
 import VideoVisionCore
 
-let arguments = CommandLine.arguments
+struct CLIOptions {
+    let videoPath: String
+    let debugOverlay: Bool
+    let debugOverlayDirectory: String?
+}
 
-guard arguments.count >= 2 else {
+func printUsage() {
     print("用法: swift run VideoVision <视频路径>")
     print("  例: swift run VideoVision 1.MP4")
+    print("  调试覆盖图: swift run VideoVisionCLI --debug-overlay 1.MP4")
+    print("  指定输出目录: swift run VideoVisionCLI --debug-overlay --debug-overlay-dir /tmp/debug_frames 1.MP4")
+}
+
+func parseOptions(arguments: [String]) -> CLIOptions? {
+    var videoPath: String?
+    var debugOverlay = false
+    var debugOverlayDirectory: String?
+
+    var index = 1
+    while index < arguments.count {
+        let argument = arguments[index]
+        switch argument {
+        case "-h", "--help":
+            return nil
+        case "--debug-overlay":
+            debugOverlay = true
+        case "--debug-overlay-dir":
+            let nextIndex = index + 1
+            guard nextIndex < arguments.count else { return nil }
+            debugOverlayDirectory = arguments[nextIndex]
+            index = nextIndex
+        default:
+            guard !argument.hasPrefix("--"), videoPath == nil else { return nil }
+            videoPath = argument
+        }
+        index += 1
+    }
+
+    guard let videoPath else { return nil }
+    return CLIOptions(
+        videoPath: videoPath,
+        debugOverlay: debugOverlay,
+        debugOverlayDirectory: debugOverlayDirectory
+    )
+}
+
+guard let options = parseOptions(arguments: CommandLine.arguments) else {
+    printUsage()
     exit(1)
 }
 
-let videoPath = arguments[1]
+let videoPath = options.videoPath
 
 let separator = String(repeating: "=", count: 50)
 print(separator)
@@ -122,6 +165,17 @@ do {
         .path
     try report.write(to: URL(fileURLWithPath: mdPath), atomically: true, encoding: String.Encoding.utf8)
     print("✅ 报告已保存至: \(mdPath)")
+
+    if options.debugOverlay {
+        let overlayDirectory = options.debugOverlayDirectory.map { URL(fileURLWithPath: $0) }
+        let overlayResult = try await DebugOverlayRenderer.renderFrameOverlays(
+            videoURL: videoURL,
+            analysis: output,
+            outputDirectory: overlayDirectory
+        )
+        print("✅ 调试覆盖图已保存至: \(overlayResult.outputDirectory.path)")
+        print("   帧数: \(overlayResult.frameCount) · manifest: \(overlayResult.manifestURL.path)")
+    }
     print()
 
     // 打印到控制台
@@ -130,6 +184,6 @@ do {
 } catch {
     print("❌ 错误: \(error.localizedDescription)")
     print()
-    print("用法: swift run VideoVision <视频路径>")
+    printUsage()
     exit(1)
 }

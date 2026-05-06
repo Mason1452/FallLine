@@ -299,6 +299,10 @@ public struct ReportGenerator {
             : ski.edgeQualityConfidence
         let edgeJudgmentIsReliable = edgeConfidence >= lowConfidenceThreshold
         let weakEdgeEvidence = hasWeakEdgeEvidence(ctx)
+        let highSideslipEvidence = ctx.stableCarvingBaseline == nil
+            && hasHighSideslipEvidenceForHighScore(from: output.frames)
+        let insufficientBoardEvidence = ctx.stableCarvingBaseline == nil
+            && hasInsufficientBoardKinematicEvidenceForHighScore(from: output.frames)
         let reliableFrameCount = reliablePoseFrames(from: output.frames).count
         let separator = String(repeating: "=", count: 54)
         var lines: [String] = []
@@ -328,6 +332,12 @@ public struct ReportGenerator {
         if weakEdgeEvidence {
             lines.append("  ⚠️ 持续立刃证据不足：前倾和屈膝不能单独推高综合分，已按初中级表现封顶")
         }
+        if highSideslipEvidence {
+            lines.append("  ⚠️ 板身/滑行方向夹角偏大：更像横滑或推坡，不能按刻滑高分处理")
+        }
+        if insufficientBoardEvidence {
+            lines.append("  ⚠️ 板身/运动方向证据不足：单帧姿态不能证明走刃，已保守封顶")
+        }
         if reliableFrameCount < AnalysisReliability.minimumHighlightFrameCount {
             lines.append("  ⚠️ 可靠评分片段不足：仅 \(reliableFrameCount) 帧，综合分已保守封顶")
         } else if reliableFrameCount < 12 {
@@ -339,6 +349,10 @@ public struct ReportGenerator {
         if let baseline = ctx.stableCarvingBaseline {
             lines.append("  📋 检测到连续稳定的高质量刻滑平台，低分帧可能受大倒伏、低姿态或遮挡影响；综合评分采用该稳定平台作为基线。")
             lines.append("     基线片段：\(formatTime(seconds: baseline.plateauStartTime))-\(formatTime(seconds: baseline.plateauEndTime))")
+        } else if highSideslipEvidence {
+            lines.append("  📋 板身方向和滑行方向没有对齐，说明转弯主要不是沿板身切雪完成；姿态项看起来有支撑，也不能直接解释为刻滑。")
+        } else if insufficientBoardEvidence {
+            lines.append("  📋 板身线和运动方向的连续证据不足，不能把一两帧像样的姿态直接解释成稳定走刃。")
         } else if weakEdgeEvidence {
             lines.append("  📋 持续立刃证据不足，转弯更接近扫雪/搓雪控制；姿态项看起来有支撑，但还不能评价为高质量滑行。")
         } else if edgeJudgmentIsReliable {
@@ -353,6 +367,10 @@ public struct ReportGenerator {
         let mainObservation: String
         if ctx.stableCarvingBaseline != nil {
             mainObservation = "这段动作稳定性很高，系统不应把部分低分帧直接理解成滑得差；更合理的解释是姿态识别在大倒伏或低姿态刻滑时产生了冲突。"
+        } else if highSideslipEvidence {
+            mainObservation = "这段板身方向和滑行方向夹角偏大，更接近横滑或推坡控制；即使身体姿态有些像样，也不能评价为稳定刻滑。"
+        } else if insufficientBoardEvidence {
+            mainObservation = "这段目前缺少持续板刃/刃线证据；即使个别帧的身体姿态看起来还可以，也不足以评价为高质量走刃。"
         } else if weakEdgeEvidence {
             mainObservation = "这段不能因为身体前倾或膝盖弯曲看起来还可以就给高分；核心问题是缺少持续刃角和干净刃线，整体仍属于基础滑行质量。"
         } else if edgeJudgmentIsReliable {
@@ -897,13 +915,17 @@ public struct ReportGenerator {
         switch source {
         case .ankleProxy:
             return "脚踝代理"
+        case .visualCandidate:
+            return "图像候选线"
+        case .mixed:
+            return "混合候选"
         }
     }
 
     private static func boardKinematicsLabel(_ sideslip: Double) -> String {
-        if sideslip <= 15 { return "沿板身移动明显" }
-        if sideslip <= 30 { return "有走刃倾向" }
-        if sideslip <= 45 { return "横滑偏多" }
+        if sideslip <= AnalysisReliability.alignedBoardTravelAngle { return "沿板身移动明显" }
+        if sideslip <= AnalysisReliability.highSideslipAngle { return "有走刃倾向" }
+        if sideslip <= AnalysisReliability.dominantSideslipAngle { return "横滑偏多" }
         return "以横滑为主"
     }
 

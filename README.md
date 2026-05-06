@@ -34,6 +34,13 @@ swift run VideoVisionCLI /path/to/ski_video.mp4
 swift run VideoVisionCLI 1.MP4
 ```
 
+生成板身方向/运动方向调试覆盖图：
+
+```bash
+swift run VideoVisionCLI --debug-overlay 1.MP4
+swift run VideoVisionCLI --debug-overlay --debug-overlay-dir /tmp/ski_debug 1.MP4
+```
+
 ### iOS App
 
 `SkiAnaylze/` 目录下有一个 SwiftUI App，提供视频选取、分析进度展示和报告查看的图形界面。在 Xcode 中打开 `SkiAnaylze/SkiAnaylze.xcodeproj`，添加本地 Swift Package 依赖（路径为 VideoVision 仓库根目录）后即可构建。
@@ -49,6 +56,15 @@ swift test
 - **控制台**：打印完整的 Markdown 格式分析报告
 - **JSON 文件**：与视频同目录生成同名 `.json` 文件，包含完整结构化数据
 - **Markdown 报告**：与视频同目录生成同名 `.md` 文件，包含自然语言分析报告
+- **调试覆盖图（可选）**：`--debug-overlay` 生成逐帧 PNG 和 `manifest.tsv`，用于核对板身线、图像候选线、运动方向、横滑角和立刃代理分
+
+调试覆盖图颜色约定：
+
+- 绿色：人体核心骨架/重心代理点
+- 白色：双踝代理线
+- 紫色：图像级板身候选线
+- 黄色：当前板身分析实际采用的板身线
+- 青色：运动方向
 
 ## JSON 输出字段
 
@@ -75,6 +91,7 @@ swift test
 | `sceneClassifications` | array | 场景分类 |
 | `bodyPose` | object | 人体姿态数据 |
 | `poseScore` | object 或 null | 姿态评分 |
+| `visualBoardObservation` | object 或 null | 图像级板身候选线 |
 | `skiMetrics` | object 或 null | 滑雪派生指标 |
 | `error` | string 或 null | 帧分析错误信息 |
 
@@ -160,6 +177,19 @@ swift test
 重心评分已从旧版的三档离散值（低/中/高→90/60/30）改为连续映射，保留更多姿态细节。
 
 低姿态、大立刃和遮挡会让 Vision 缺失膝/踝关键点。系统会保留这些低置信度帧的原始数据，但在全视频评分、走刃关键时刻和转弯阶段结论中优先使用可靠姿态帧，避免把“无法可靠识别”误判为“动作差”。
+
+### 板身方向与横滑判断
+
+当前主判断使用左右脚踝连线代理板身方向，再用连续帧身体中心/脚踝中心位移估计滑行方向。两者夹角越小，越像沿板身走刃；夹角越大，越像横滑、推坡或搓雪。
+
+| 板身/滑行方向夹角 | 解释 | 高分处理 |
+|------------------|------|----------|
+| `0°~15°` | 沿板身移动明显 | 可作为走刃证据 |
+| `15°~30°` | 有走刃倾向 | 谨慎参考 |
+| `30°~45°` | 横滑偏多 | 不保留高刻滑分 |
+| `45°+` | 以横滑/推坡为主 | 基本不按刻滑处理 |
+
+紫色图像候选线目前只作为调试覆盖图证据，不参与评分或横滑计算。人工复核显示，高置信紫色线也可能只是脚/板附近的雪面纹理或阴影。
 
 ## 稳定性算法
 

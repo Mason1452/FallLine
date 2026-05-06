@@ -163,6 +163,7 @@ public class VideoAnalyzer {
 
         // Step 4: 评分
         let poseScore = poseScorer.score(pose: bodyPose)
+        let visualBoardObservation = BoardVisualLineDetector.detect(cgImage: cgImage, pose: bodyPose)
 
         return DetectionResult(
             time: CMTimeGetSeconds(time),
@@ -171,7 +172,8 @@ public class VideoAnalyzer {
             textObservations: textObservations,
             sceneClassifications: sceneClassifications,
             bodyPose: bodyPose,
-            poseScore: poseScore
+            poseScore: poseScore,
+            visualBoardObservation: visualBoardObservation
         )
     }
 
@@ -199,8 +201,13 @@ public class VideoAnalyzer {
             reliableFrames: reliableFrames,
             stableBaseline: stableBaseline
         )
-        let avg = applyEvidenceCaps(
+        let boardCappedAverage = applyBoardEvidenceCaps(
             score: techniqueCappedAverage,
+            reliableFrames: reliableFrames,
+            stableBaseline: stableBaseline
+        )
+        let avg = applyEvidenceCaps(
+            score: boardCappedAverage,
             reliableFrameCount: scoreEntries.count
         )
 
@@ -289,6 +296,16 @@ public class VideoAnalyzer {
             return min(score, 70)
         }
         return score
+    }
+
+    private func applyBoardEvidenceCaps(
+        score: Double,
+        reliableFrames: [DetectionResult],
+        stableBaseline: StableCarvingBaseline?
+    ) -> Double {
+        guard stableBaseline == nil else { return score }
+        guard let cap = boardKinematicHighScoreCap(from: reliableFrames) else { return score }
+        return min(score, cap)
     }
 
     private func weightedStandardDeviation(_ values: [(value: Double, weight: Double)], mean: Double) -> Double {
