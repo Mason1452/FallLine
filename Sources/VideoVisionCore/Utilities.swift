@@ -27,6 +27,75 @@ public enum AnalysisReliability {
 
     /// 少于该数量的可靠帧时，不输出高光片段，避免把几帧偶然高分包装成最佳片段。
     public static let minimumHighlightFrameCount = 8
+
+    /// 板身/运动方向证据低于该置信度时，不能用姿态单帧把综合分或高光推高。
+    public static let minimumBoardKinematicConfidenceForHighScore = 0.15
+
+    /// 板身方向与滑行方向夹角小于等于该值时，才认为有明确沿板身移动证据。
+    public static let alignedBoardTravelAngle = 15.0
+
+    /// 超过该夹角后，即使姿态好看，也只能认为是横滑/推坡倾向，不能给高刻滑结论。
+    public static let highSideslipAngle = 30.0
+
+    /// 超过该夹角后，基本按横滑/推坡处理，不认为是刻滑。
+    public static let dominantSideslipAngle = 45.0
+
+    /// 缺少持续板刃/刃线证据时的保守综合分上限。
+    public static let lowBoardEvidenceScoreCap = 62.0
+
+    /// 板身/滑行方向夹角偏大时的保守综合分上限。
+    public static let highSideslipScoreCap = 70.0
+
+    /// 板身/滑行方向夹角很大时的保守综合分上限。
+    public static let dominantSideslipScoreCap = 58.0
+}
+
+/// 当前板身分析仍是脚踝代理；如果它连低置信的“板身-运动方向”关系都无法稳定给出，
+/// 就只能说明“不足以支持高分/高光”，而不应把一两帧姿态当作真实刻滑证据。
+public func hasInsufficientBoardKinematicEvidenceForHighScore(from frames: [DetectionResult]) -> Bool {
+    // 先只约束短片段：长片段里的低姿态刻滑可能让脚踝代理失效，但不能因此误伤好样本。
+    guard reliablePoseFrames(from: frames).count < 10 else { return false }
+
+    guard let summary = BoardDirectionAnalyzer.analyze(frames: frames).summary,
+          summary.averageSideslipAngle != nil else {
+        return false
+    }
+
+    return summary.confidence < AnalysisReliability.minimumBoardKinematicConfidenceForHighScore
+}
+
+/// 如果板身方向与滑行方向夹角已经明确偏大，则返回高分封顶值。
+///
+/// 核心逻辑：板身方向由左右脚踝连线代理，滑行方向由连续帧身体/脚踝中心位移估计。
+/// 两者夹角越大，越接近横滑、推坡或搓雪，不能把单帧姿态解释为高质量刻滑。
+public func boardKinematicHighScoreCap(from frames: [DetectionResult]) -> Double? {
+    guard let summary = BoardDirectionAnalyzer.analyze(frames: frames).summary,
+          let sideslip = summary.averageSideslipAngle else {
+        return nil
+    }
+
+    if summary.confidence < AnalysisReliability.minimumBoardKinematicConfidenceForHighScore {
+        return reliablePoseFrames(from: frames).count < 10
+            ? AnalysisReliability.lowBoardEvidenceScoreCap
+            : nil
+    }
+
+    if sideslip >= AnalysisReliability.dominantSideslipAngle {
+        return AnalysisReliability.dominantSideslipScoreCap
+    }
+    if sideslip >= AnalysisReliability.highSideslipAngle {
+        return AnalysisReliability.highSideslipScoreCap
+    }
+    return nil
+}
+
+public func hasHighSideslipEvidenceForHighScore(from frames: [DetectionResult]) -> Bool {
+    guard let summary = BoardDirectionAnalyzer.analyze(frames: frames).summary,
+          let sideslip = summary.averageSideslipAngle else {
+        return false
+    }
+    return summary.confidence >= AnalysisReliability.minimumBoardKinematicConfidenceForHighScore
+        && sideslip >= AnalysisReliability.highSideslipAngle
 }
 
 // MARK: - 稳定刻滑基线

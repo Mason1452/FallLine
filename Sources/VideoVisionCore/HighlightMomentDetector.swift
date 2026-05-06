@@ -20,6 +20,9 @@ public struct HighlightMomentDetector {
         let groups = contiguousGroups(samples, sampleInterval: sampleInterval)
         let minimumScore = minimumHighlightScore(samples: samples, summary: summary)
         let stableBaseline = summary.flatMap { stableCarvingBaseline(from: frames, motionStability: $0.stabilityScore) }
+        if stableBaseline == nil, boardKinematicHighScoreCap(from: frames) != nil {
+            return []
+        }
         if stableBaseline == nil, (averageEdgeEvidenceScore(from: frames) ?? 0) < 42 {
             return []
         }

@@ -29,6 +29,7 @@ let package = Package(
             name: "VideoVisionCLI",
             dependencies: ["VideoVisionCore"],
             linkerSettings: [
+                .linkedFramework("AppKit"),
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("Vision"),
                 .linkedFramework("CoreMedia"),

@@ -1,0 +1,10 @@
+group	sample	score	frames	visualFrames	avgVisualConf	avgVisualLength	bestVisualConf	bestVisualLength	bestVisualTime	bestVisualImage
+bad	bad_0b7522e9db823b910ac67727aea726da	65.0	49	23	0.58	0.15	1.00	0.22	41.00	/Users/mingsen/Project/VideoVision/outputs/edge_debug_review/bad_0b7522e9db823b910ac67727aea726da/frame_0042_00-41.png
+bad	bad_v1e00fgi0000cv786ffog65rtmm48gmg	62.0	11	9	0.11	0.06	0.11	0.07	0.00	/Users/mingsen/Project/VideoVision/outputs/edge_debug_review/bad_v1e00fgi0000cv786ffog65rtmm48gmg/frame_0001_00-00.png
+bad	bad_v2800fgi0000d4v24r7og65oi0fmka5g	62.0	13	7	0.51	0.18	0.67	0.23	3.00	/Users/mingsen/Project/VideoVision/outputs/edge_debug_review/bad_v2800fgi0000d4v24r7og65oi0fmka5g/frame_0004_00-03.png
+good	good_0946ed384e732c357a3d55fac77426c0	70.2	43	25	0.73	0.19	1.00	0.26	4.00	/Users/mingsen/Project/VideoVision/outputs/edge_debug_review/good_0946ed384e732c357a3d55fac77426c0/frame_0005_00-04.png
+good	good_v0200fg10000d7r0017og65qoh1vgeg0	94.1	30	12	0.40	0.13	0.56	0.14	17.00	/Users/mingsen/Project/VideoVision/outputs/edge_debug_review/good_v0200fg10000d7r0017og65qoh1vgeg0/frame_0018_00-17.png
+good	good_v1e00fgi0000d2bufenog65temc6sh70	71.5	18	14	0.72	0.18	1.00	0.26	11.00	/Users/mingsen/Project/VideoVision/outputs/edge_debug_review/good_v1e00fgi0000d2bufenog65temc6sh70/frame_0012_00-11.png
+middle	middle_992f063b79d27b96b471e44a48d8465e	58.0	36	36	0.72	0.18	1.00	0.26	0.00	/Users/mingsen/Project/VideoVision/outputs/edge_debug_review/middle_992f063b79d27b96b471e44a48d8465e/frame_0001_00-00.png
+middle	middle_v0200fg10000coc7bcrc77u875h9q7sg	58.0	99	94	0.45	0.14	1.00	0.23	0.00	/Users/mingsen/Project/VideoVision/outputs/edge_debug_review/middle_v0200fg10000coc7bcrc77u875h9q7sg/frame_0001_00-00.png
+middle	middle_v0300fg10000d4oq6avog65ihr8qf550	58.0	107	92	0.20	0.08	1.00	0.26	96.00	/Users/mingsen/Project/VideoVision/outputs/edge_debug_review/middle_v0300fg10000d4oq6avog65ihr8qf550/frame_0097_01-36.png

@@ -26,6 +26,28 @@ final class BoardDirectionAnalyzerTests: XCTestCase {
         XCTAssertLessThan(analysis.summary?.carvingConfidence ?? 100, 1)
     }
 
+    func test_thirtyDegreeSideslipIsNoLongerHighCarvingEvidence() {
+        let analysis = BoardDirectionAnalyzer.analyze(frames: [
+            makeFrame(time: 0, boardAngle: 30, centerX: 0.1, centerY: 0.5),
+            makeFrame(time: 1, boardAngle: 30, centerX: 0.2, centerY: 0.5),
+            makeFrame(time: 2, boardAngle: 30, centerX: 0.3, centerY: 0.5)
+        ])
+
+        XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 30, accuracy: 0.1)
+        XCTAssertEqual(analysis.summary?.carvingConfidence ?? -1, 33.3, accuracy: 0.2)
+    }
+
+    func test_fortyFiveDegreeSideslipRemovesCarvingConfidence() {
+        let analysis = BoardDirectionAnalyzer.analyze(frames: [
+            makeFrame(time: 0, boardAngle: 45, centerX: 0.1, centerY: 0.5),
+            makeFrame(time: 1, boardAngle: 45, centerX: 0.2, centerY: 0.5),
+            makeFrame(time: 2, boardAngle: 45, centerX: 0.3, centerY: 0.5)
+        ])
+
+        XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 45, accuracy: 0.1)
+        XCTAssertEqual(analysis.summary?.carvingConfidence ?? -1, 0, accuracy: 0.1)
+    }
+
     func test_stationaryCentersKeepObservationButNoKinematics() {
         let analysis = BoardDirectionAnalyzer.analyze(frames: [
             makeFrame(time: 0, boardAngle: 0, centerX: 0.2, centerY: 0.5),
@@ -47,11 +69,48 @@ final class BoardDirectionAnalyzerTests: XCTestCase {
         XCTAssertNil(analysis.summary)
     }
 
+    func test_keepsVisualObservationOutOfScoringWhileItIsDebugOnly() {
+        let visual = BoardObservation(
+            source: .visualCandidate,
+            axisAngle: 0,
+            centerX: 0.2,
+            centerY: 0.5,
+            confidence: 0.6
+        )
+        let analysis = BoardDirectionAnalyzer.analyze(frames: [
+            makeFrame(time: 0, boardAngle: 90, centerX: 0.1, centerY: 0.5, visual: visual),
+            makeFrame(time: 1, boardAngle: 90, centerX: 0.2, centerY: 0.5, visual: visual),
+            makeFrame(time: 2, boardAngle: 90, centerX: 0.3, centerY: 0.5, visual: visual)
+        ])
+
+        XCTAssertEqual(analysis.summary?.source, .ankleProxy)
+        XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 90, accuracy: 0.1)
+    }
+
+    func test_fallsBackToAnkleProxyWhenVisualObservationIsWeak() {
+        let weakVisual = BoardObservation(
+            source: .visualCandidate,
+            axisAngle: 0,
+            centerX: 0.2,
+            centerY: 0.5,
+            confidence: 0.1
+        )
+        let analysis = BoardDirectionAnalyzer.analyze(frames: [
+            makeFrame(time: 0, boardAngle: 90, centerX: 0.1, centerY: 0.5, visual: weakVisual),
+            makeFrame(time: 1, boardAngle: 90, centerX: 0.2, centerY: 0.5, visual: weakVisual),
+            makeFrame(time: 2, boardAngle: 90, centerX: 0.3, centerY: 0.5, visual: weakVisual)
+        ])
+
+        XCTAssertEqual(analysis.summary?.source, .ankleProxy)
+        XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 90, accuracy: 0.1)
+    }
+
     private func makeFrame(
         time: Double,
         boardAngle: Double?,
         centerX: Double,
-        centerY: Double
+        centerY: Double,
+        visual: BoardObservation? = nil
     ) -> DetectionResult {
         DetectionResult(
             time: time,
@@ -78,7 +137,8 @@ final class BoardDirectionAnalyzerTests: XCTestCase {
                 bodyCenterY: MetricWithConfidence(value: centerY, confidence: 1),
                 ankleProxyBoardAngle: boardAngle.map { MetricWithConfidence(value: $0, confidence: 1) }
             ),
-            poseScore: nil
+            poseScore: nil,
+            visualBoardObservation: visual
         )
     }
 }

@@ -144,7 +144,15 @@ public struct PoseMetricsCalculator {
             hipCenterY: hipCenterY,
             ankleCenterY: ankleCenterY,
             bodyCenterY: bodyCenterY,
-            ankleProxyBoardAngle: ankleProxyBoardAngle
+            ankleProxyBoardAngle: ankleProxyBoardAngle,
+            leftShoulderPoint: poseJointPoint(pts.leftShoulder),
+            rightShoulderPoint: poseJointPoint(pts.rightShoulder),
+            leftHipPoint: poseJointPoint(pts.leftHip),
+            rightHipPoint: poseJointPoint(pts.rightHip),
+            leftKneePoint: poseJointPoint(pts.leftKnee),
+            rightKneePoint: poseJointPoint(pts.rightKnee),
+            leftAnklePoint: poseJointPoint(pts.leftAnkle),
+            rightAnklePoint: poseJointPoint(pts.rightAnkle)
         )
     }
 }
@@ -208,6 +216,15 @@ extension PoseMetricsCalculator {
             rightKnee: jointPoint(.rightKnee),
             leftAnkle: jointPoint(.leftAnkle),
             rightAnkle: jointPoint(.rightAnkle)
+        )
+    }
+
+    private func poseJointPoint(_ point: JointPoint?) -> PoseJointPoint? {
+        guard let point else { return nil }
+        return PoseJointPoint(
+            x: point.location.x,
+            y: point.location.y,
+            confidence: Double(point.confidence)
         )
     }
 }

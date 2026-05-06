@@ -29,22 +29,13 @@ public struct BoardDirectionAnalyzer {
 private extension BoardDirectionAnalyzer {
     struct PreparedFrame {
         let time: Double
-        let boardAngle: Double
-        let boardCenterX: Double
-        let boardCenterY: Double
+        let selectedObservation: BoardObservation
         let motionCenterX: Double
         let motionCenterY: Double
-        let observationConfidence: Double
         let motionCenterConfidence: Double
 
         var observation: BoardObservation {
-            BoardObservation(
-                source: .ankleProxy,
-                axisAngle: boardAngle,
-                centerX: boardCenterX,
-                centerY: boardCenterY,
-                confidence: observationConfidence
-            )
+            selectedObservation
         }
 
         init?(frame: DetectionResult) {
@@ -55,23 +46,43 @@ private extension BoardDirectionAnalyzer {
 
             let pose = frame.bodyPose
             guard pose.detected,
-                  let boardAngle = pose.ankleProxyBoardAngle,
                   let ankleX = pose.ankleCenterX,
                   let ankleY = pose.ankleCenterY else {
                 return nil
             }
 
+            let ankleObservation = pose.ankleProxyBoardAngle.map {
+                BoardObservation(
+                    source: .ankleProxy,
+                    axisAngle: normalizeAngle($0.value),
+                    centerX: ankleX.value,
+                    centerY: ankleY.value,
+                    confidence: min($0.confidence, min(ankleX.confidence, ankleY.confidence))
+                )
+            }
+            let selectedObservation = Self.selectObservation(
+                visual: frame.visualBoardObservation,
+                ankle: ankleObservation
+            )
+            guard let selectedObservation else { return nil }
+
             let motionX = pose.bodyCenterX ?? ankleX
             let motionY = pose.bodyCenterY ?? ankleY
 
             self.time = frame.time
-            self.boardAngle = normalizeAngle(boardAngle.value)
-            self.boardCenterX = ankleX.value
-            self.boardCenterY = ankleY.value
+            self.selectedObservation = selectedObservation
             self.motionCenterX = motionX.value
             self.motionCenterY = motionY.value
-            self.observationConfidence = min(boardAngle.confidence, min(ankleX.confidence, ankleY.confidence))
             self.motionCenterConfidence = min(motionX.confidence, motionY.confidence)
+        }
+
+        static func selectObservation(
+            visual: BoardObservation?,
+            ankle: BoardObservation?
+        ) -> BoardObservation? {
+            // 图像候选线当前只作为调试层输出。真实样本显示它可能抓到雪面纹理、
+            // 因此暂不参与评分/横滑计算；等人工标定稳定后再提升为主证据。
+            return ankle
         }
     }
 
@@ -102,7 +113,11 @@ private extension BoardDirectionAnalyzer {
 
         let travelAngle = normalizeAngle(atan2(dy, dx) * 180 / Double.pi)
         let sideslipAngle = axisAngleDifference(observation.axisAngle, travelAngle)
-        let carvingConfidence = clamp(100 - sideslipAngle / 45 * 100, lower: 0, upper: 100)
+        let carvingConfidence = clamp(
+            100 - sideslipAngle / AnalysisReliability.dominantSideslipAngle * 100,
+            lower: 0,
+            upper: 100
+        )
         let travelConfidence = clamp(distance / fullTravelConfidenceDistance, lower: 0, upper: 1)
         let centerConfidence = min(start.motionCenterConfidence, end.motionCenterConfidence)
         let confidence = observation.confidence * travelConfidence * centerConfidence
@@ -121,13 +136,14 @@ private extension BoardDirectionAnalyzer {
 
         let kinematics = analyses.compactMap(\.kinematics)
         let observationConfidence = average(analyses.map(\.observation.confidence))
+        let summarySource = sourceSummary(from: analyses.map(\.observation.source))
         guard !kinematics.isEmpty else {
             return BoardAnalysisSummary(
                 frameCount: analyses.count,
                 averageSideslipAngle: nil,
                 carvingConfidence: nil,
                 confidence: observationConfidence,
-                source: .ankleProxy
+                source: summarySource
             )
         }
 
@@ -142,8 +158,16 @@ private extension BoardDirectionAnalyzer {
             averageSideslipAngle: sideslip,
             carvingConfidence: carving,
             confidence: confidence,
-            source: .ankleProxy
+            source: summarySource
         )
+    }
+
+    static func sourceSummary(from sources: [BoardObservationSource]) -> BoardObservationSource {
+        let uniqueSources = Set(sources)
+        guard uniqueSources.count != 1 else {
+            return sources.first ?? .ankleProxy
+        }
+        return .mixed
     }
 
     static func axisAngleDifference(_ first: Double, _ second: Double) -> Double {

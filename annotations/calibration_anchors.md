@@ -29,3 +29,13 @@ The following middle videos were broadly accepted as correctly described:
 - `video/middle/v2800fgi0000d5ehg1vog65tinkepgl0.MP4`
 - `video/middle/a7791a475a244c938dd0815e89b1dec5.MP4`
 - `video/middle/96001e37e76be9ef6cf7a65e73efcac4.MP4`
+
+## Accepted Current Scores
+
+Human feedback from 2026-05-05 after the full 49-video rerun. These scores were initially flagged for manual review, then accepted as reasonable and should not be tuned down just because they look high relative to their group.
+
+| Video | Current score | Current level | Calibration note |
+|---|---:|---|---|
+| `video/bad/0b7522e9db823b910ac67727aea726da.MP4` | 65.0 | 中级 | Accepted by human review; this is the top bad-group sample but not considered over-scored. |
+| `video/middle/96001e37e76be9ef6cf7a65e73efcac4.MP4` | 85.3 | 专业 | Accepted by human review; high middle-group score is reasonable for this sample. |
+| `video/good/v0200fg10000d7r0017og65qoh1vgeg0.MP4` | 94.1 | 专业 | Accepted by human review; low board kinematic confidence should not override the stable low-carve baseline here. |

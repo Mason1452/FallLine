@@ -52,6 +52,24 @@ final class HighlightMomentDetectorTests: XCTestCase {
         XCTAssertTrue(highlights.isEmpty)
     }
 
+    func test_suppressesHighlightWhenBoardKinematicEvidenceIsVeryLow() {
+        let frames = makeFrames(score: 82, count: 9, calfScore: 82, boardConfidence: 0.10)
+        let summary = makeSummary(averageScore: 62, stabilityScore: 90)
+
+        let highlights = HighlightMomentDetector.detect(from: frames, summary: summary, maxCount: 1)
+
+        XCTAssertTrue(highlights.isEmpty)
+    }
+
+    func test_suppressesHighlightWhenBoardTravelAngleShowsSideslip() {
+        let frames = makeFrames(score: 82, count: 12, calfScore: 82, boardConfidence: 0.9, boardAngle: 90)
+        let summary = makeSummary(averageScore: 58, stabilityScore: 90)
+
+        let highlights = HighlightMomentDetector.detect(from: frames, summary: summary, maxCount: 1)
+
+        XCTAssertTrue(highlights.isEmpty)
+    }
+
     private func makeFrames(groups: [(score: Double, count: Int)]) -> [DetectionResult] {
         var frames: [DetectionResult] = []
         var time = 0.0
@@ -64,14 +82,33 @@ final class HighlightMomentDetectorTests: XCTestCase {
         return frames
     }
 
-    private func makeFrames(score: Double, count: Int, calfScore: Double) -> [DetectionResult] {
+    private func makeFrames(
+        score: Double,
+        count: Int,
+        calfScore: Double,
+        boardConfidence: Double? = nil,
+        boardAngle: Double = 0
+    ) -> [DetectionResult] {
         (0..<count).map { index in
-            makeFrame(time: Double(index), score: score, calfScore: calfScore)
+            makeFrame(
+                time: Double(index),
+                score: score,
+                calfScore: calfScore,
+                boardConfidence: boardConfidence,
+                boardAngle: boardAngle
+            )
         }
     }
 
-    private func makeFrame(time: Double, score: Double, calfScore: Double? = nil) -> DetectionResult {
+    private func makeFrame(
+        time: Double,
+        score: Double,
+        calfScore: Double? = nil,
+        boardConfidence: Double? = nil,
+        boardAngle: Double = 0
+    ) -> DetectionResult {
         let confidence = 0.8
+        let centerX = 0.1 + time * 0.05
         return DetectionResult(
             time: time,
             objects: [],
@@ -88,7 +125,12 @@ final class HighlightMomentDetectorTests: XCTestCase {
                 rightKneeBendAngle: MetricWithConfidence(value: 120, confidence: confidence),
                 leftCalfLeanAngle: MetricWithConfidence(value: 45, confidence: confidence),
                 rightCalfLeanAngle: MetricWithConfidence(value: 45, confidence: confidence),
-                centerOfGravity: MetricWithConfidence(value: 0.35, confidence: confidence)
+                centerOfGravity: MetricWithConfidence(value: 0.35, confidence: confidence),
+                ankleCenterX: boardConfidence.map { _ in MetricWithConfidence(value: centerX, confidence: 1) },
+                bodyCenterX: boardConfidence.map { _ in MetricWithConfidence(value: centerX, confidence: 1) },
+                ankleCenterY: boardConfidence.map { _ in MetricWithConfidence(value: 0.5, confidence: 1) },
+                bodyCenterY: boardConfidence.map { _ in MetricWithConfidence(value: 0.5, confidence: 1) },
+                ankleProxyBoardAngle: boardConfidence.map { MetricWithConfidence(value: boardAngle, confidence: $0) }
             ),
             poseScore: PoseScore(
                 totalScore: score,

@@ -27,6 +27,19 @@ public struct MetricWithConfidence<T: Codable>: Codable {
     }
 }
 
+/// 归一化 2D 关键点坐标（Vision 坐标，0...1）及其置信度。
+public struct PoseJointPoint: Codable {
+    public let x: Double
+    public let y: Double
+    public let confidence: Double
+
+    public init(x: Double, y: Double, confidence: Double) {
+        self.x = max(0, min(1, x))
+        self.y = max(0, min(1, y))
+        self.confidence = max(0, min(1, confidence))
+    }
+}
+
 // MARK: - 常规检测数据模型
 
 public struct ObjectItem: Codable {
@@ -103,6 +116,15 @@ public struct BodyPoseData: Codable {
     public let bodyCenterY: MetricWithConfidence<Double>?
     /// 用左右脚踝连线代理的板身角度。0 度指向画面右侧，逆时针为正，范围 [-180, 180)。
     public let ankleProxyBoardAngle: MetricWithConfidence<Double>?
+    /// 调试可视化用原始关键点。业务评分仍使用上方派生指标。
+    public let leftShoulderPoint: PoseJointPoint?
+    public let rightShoulderPoint: PoseJointPoint?
+    public let leftHipPoint: PoseJointPoint?
+    public let rightHipPoint: PoseJointPoint?
+    public let leftKneePoint: PoseJointPoint?
+    public let rightKneePoint: PoseJointPoint?
+    public let leftAnklePoint: PoseJointPoint?
+    public let rightAnklePoint: PoseJointPoint?
 
     public init(
         detected: Bool,
@@ -123,7 +145,15 @@ public struct BodyPoseData: Codable {
         hipCenterY: MetricWithConfidence<Double>? = nil,
         ankleCenterY: MetricWithConfidence<Double>? = nil,
         bodyCenterY: MetricWithConfidence<Double>? = nil,
-        ankleProxyBoardAngle: MetricWithConfidence<Double>? = nil
+        ankleProxyBoardAngle: MetricWithConfidence<Double>? = nil,
+        leftShoulderPoint: PoseJointPoint? = nil,
+        rightShoulderPoint: PoseJointPoint? = nil,
+        leftHipPoint: PoseJointPoint? = nil,
+        rightHipPoint: PoseJointPoint? = nil,
+        leftKneePoint: PoseJointPoint? = nil,
+        rightKneePoint: PoseJointPoint? = nil,
+        leftAnklePoint: PoseJointPoint? = nil,
+        rightAnklePoint: PoseJointPoint? = nil
     ) {
         self.detected = detected
         self.visibility = visibility
@@ -144,6 +174,14 @@ public struct BodyPoseData: Codable {
         self.ankleCenterY = ankleCenterY
         self.bodyCenterY = bodyCenterY
         self.ankleProxyBoardAngle = ankleProxyBoardAngle
+        self.leftShoulderPoint = leftShoulderPoint
+        self.rightShoulderPoint = rightShoulderPoint
+        self.leftHipPoint = leftHipPoint
+        self.rightHipPoint = rightHipPoint
+        self.leftKneePoint = leftKneePoint
+        self.rightKneePoint = rightKneePoint
+        self.leftAnklePoint = leftAnklePoint
+        self.rightAnklePoint = rightAnklePoint
     }
 }
 
@@ -513,9 +551,11 @@ public struct CenterOfMassAnalysis: Codable {
 
 // MARK: - 板身方向与横滑分析
 
-/// 板身线条识别来源。v1 使用脚踝连线作为低成本代理。
+/// 板身线条识别来源。v1 使用脚踝连线作为低成本代理，并逐步引入图像候选线。
 public enum BoardObservationSource: String, Codable, CaseIterable {
     case ankleProxy
+    case visualCandidate
+    case mixed
 }
 
 /// 单帧板身线条观测。
@@ -525,19 +565,23 @@ public struct BoardObservation: Codable {
     public let centerX: Double
     public let centerY: Double
     public let confidence: Double
+    /// 可视化线段长度，相对于短边归一化。nil 表示使用默认调试长度。
+    public let lengthRatio: Double?
 
     public init(
         source: BoardObservationSource,
         axisAngle: Double,
         centerX: Double,
         centerY: Double,
-        confidence: Double
+        confidence: Double,
+        lengthRatio: Double? = nil
     ) {
         self.source = source
         self.axisAngle = axisAngle
         self.centerX = centerX
         self.centerY = centerY
         self.confidence = max(0, min(1, confidence))
+        self.lengthRatio = lengthRatio.map { max(0.02, min(1, $0)) }
     }
 }
 
@@ -624,6 +668,7 @@ public struct DetectionResult: Codable {
     public let sceneClassifications: [SceneItem]
     public let bodyPose: BodyPoseData
     public let poseScore: PoseScore?
+    public let visualBoardObservation: BoardObservation?
     public var skiMetrics: SkiDerivedMetrics?
     /// 帧分析错误信息（抽帧或 Vision 请求失败时填充，成功时为 nil）
     public var error: String?
@@ -636,6 +681,7 @@ public struct DetectionResult: Codable {
         sceneClassifications: [SceneItem],
         bodyPose: BodyPoseData,
         poseScore: PoseScore?,
+        visualBoardObservation: BoardObservation? = nil,
         skiMetrics: SkiDerivedMetrics? = nil,
         error: String? = nil
     ) {
@@ -646,6 +692,7 @@ public struct DetectionResult: Codable {
         self.sceneClassifications = sceneClassifications
         self.bodyPose = bodyPose
         self.poseScore = poseScore
+        self.visualBoardObservation = visualBoardObservation
         self.skiMetrics = skiMetrics
         self.error = error
     }
