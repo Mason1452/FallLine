@@ -526,22 +526,8 @@ private extension DebugOverlayRenderer {
         }
     }
 
-    static func formatTime(_ seconds: Double) -> String {
-        let total = Int(seconds)
-        return String(format: "%02d:%02d", total / 60, total % 60)
-    }
-
     static func fileSafeTime(_ seconds: Double) -> String {
         formatTime(seconds).replacingOccurrences(of: ":", with: "-")
-    }
-
-    static func medianSampleInterval(_ times: [Double]) -> Double {
-        let deltas = zip(times.dropFirst(), times)
-            .map { max($0 - $1, 0) }
-            .filter { $0 > 0 }
-        guard !deltas.isEmpty else { return 1 }
-        let sorted = deltas.sorted()
-        return sorted[sorted.count / 2]
     }
 }
 

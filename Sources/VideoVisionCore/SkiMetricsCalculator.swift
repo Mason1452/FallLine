@@ -110,9 +110,9 @@ public struct SkiMetricsCalculator {
             pressureSupportLabel:    pressureLabel(avgPressure),
             foreAftSupportScore:     clamp(avgForeAft),
             foreAftSupportLabel:     foreAftLabel(avgForeAft),
-            edgeQualityConfidence:   average(frameMetrics.map(\.edgeQualityConfidence)),
-            pressureSupportConfidence: average(frameMetrics.map(\.pressureSupportConfidence)),
-            foreAftSupportConfidence: average(frameMetrics.map(\.foreAftSupportConfidence))
+            edgeQualityConfidence:   frameMetrics.map(\.edgeQualityConfidence).reduce(0, +) / Double(frameMetrics.count),
+            pressureSupportConfidence: frameMetrics.map(\.pressureSupportConfidence).reduce(0, +) / Double(frameMetrics.count),
+            foreAftSupportConfidence: frameMetrics.map(\.foreAftSupportConfidence).reduce(0, +) / Double(frameMetrics.count)
         )
     }
 
@@ -131,24 +131,6 @@ public struct SkiMetricsCalculator {
     private static func foreAftRaw(_ s: PoseScore, stability: Double) -> Double {
         weightedScore(s, weights: foreAftWeights) + stability * 0.15
     }
-
-    private static func weightedConfidence(_ values: [(confidence: Double, weight: Double)]) -> Double {
-        let totalWeight = values.map { $0.weight }.reduce(0, +)
-        guard totalWeight > 0 else { return 0 }
-        return values.map { $0.confidence * $0.weight }.reduce(0, +) / totalWeight
-    }
-
-    private static func average(_ values: [Double]) -> Double {
-        guard !values.isEmpty else { return 0 }
-        return values.reduce(0, +) / Double(values.count)
-    }
-
-    private static func weightedAverage(_ values: [(value: Double, weight: Double)]) -> Double {
-        let totalWeight = values.map(\.weight).reduce(0, +)
-        guard totalWeight > 0 else { return 0 }
-        return values.map { $0.value * $0.weight }.reduce(0, +) / totalWeight
-    }
-
 
     // MARK: - 标签映射
 

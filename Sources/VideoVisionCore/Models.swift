@@ -708,6 +708,22 @@ public struct VideoSummary: Codable {
     public let scoreConsistencyScore: Double // 姿态总分一致性 0-100，越高表示总分波动越小
     public let scoreStdDev: Double          // 姿态总分标准差，仅用于解释评分波动
     public let overallLevel: String
+    /// 可靠帧的加权原始均分（未取最佳片段、未证据封顶、未光流调制）
+    public let rawPoseAverageScore: Double?
+    /// 可靠帧中表现最好的前 1/3 加权均分（未证据封顶、未光流调制）
+    public let bestThirdAverageScore: Double?
+    /// 姿态、走刃、板身和可靠时长证据封顶后的分数（光流调制前）
+    public let evidenceCappedScore: Double?
+    /// 光流调制系数，最终分 = evidenceCappedScore × flowModulationFactor
+    public let flowModulationFactor: Double?
+    /// 参与光流计算的帧对数量
+    public let flowFramePairsUsed: Int?
+    /// 光流运动一致性 0-100（Phase 1 实验指标）
+    public let flowMotionCoherence: Double?
+    /// 光流方向稳定性 0-100（Phase 1 实验指标）
+    public let flowDirectionalStability: Double?
+    /// 光流速度平滑度 0-100（Phase 1 实验指标）
+    public let flowVelocitySmoothness: Double?
 
     public init(
         averageScore: Double,
@@ -716,7 +732,15 @@ public struct VideoSummary: Codable {
         stabilityScore: Double,
         scoreConsistencyScore: Double,
         scoreStdDev: Double,
-        overallLevel: String
+        overallLevel: String,
+        rawPoseAverageScore: Double? = nil,
+        bestThirdAverageScore: Double? = nil,
+        evidenceCappedScore: Double? = nil,
+        flowModulationFactor: Double? = nil,
+        flowFramePairsUsed: Int? = nil,
+        flowMotionCoherence: Double? = nil,
+        flowDirectionalStability: Double? = nil,
+        flowVelocitySmoothness: Double? = nil
     ) {
         self.averageScore = averageScore
         self.bestFrame = bestFrame
@@ -725,6 +749,14 @@ public struct VideoSummary: Codable {
         self.scoreConsistencyScore = scoreConsistencyScore
         self.scoreStdDev = scoreStdDev
         self.overallLevel = overallLevel
+        self.rawPoseAverageScore = rawPoseAverageScore
+        self.bestThirdAverageScore = bestThirdAverageScore
+        self.evidenceCappedScore = evidenceCappedScore
+        self.flowModulationFactor = flowModulationFactor
+        self.flowFramePairsUsed = flowFramePairsUsed
+        self.flowMotionCoherence = flowMotionCoherence
+        self.flowDirectionalStability = flowDirectionalStability
+        self.flowVelocitySmoothness = flowVelocitySmoothness
     }
 }
 

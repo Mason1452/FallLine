@@ -70,7 +70,7 @@ do {
     let results = try await analyzer.analyze()
 
     // 生成基础姿态评分
-    let summary = analyzer.generateSummary(from: results)
+    let summary = await analyzer.generateSummary(from: results)
     let outputSummary = summary ?? VideoSummary(
         averageScore: 0,
         bestFrame: FrameScore(time: 0, timeString: "00:00", score: 0),

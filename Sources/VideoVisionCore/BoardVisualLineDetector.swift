@@ -340,13 +340,4 @@ private extension BoardVisualLineDetector {
         return raw > 90 ? 180 - raw : raw
     }
 
-    static func normalizeAngle(_ angle: Double) -> Double {
-        var normalized = angle.truncatingRemainder(dividingBy: 360)
-        if normalized >= 180 {
-            normalized -= 360
-        } else if normalized < -180 {
-            normalized += 360
-        }
-        return normalized
-    }
 }

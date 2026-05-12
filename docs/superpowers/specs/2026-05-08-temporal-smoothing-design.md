@@ -67,7 +67,8 @@ public struct TemporalSmoother {
 
 - `medianConfidence`：窗口内 confidence 的中值
 - `consistencyBoost`：窗口内三帧关节位置标准差越小，boost 越高
-  - `consistencyBoost = clamp(0.20 - stddev × factor, 0, 0.20)`
+  - `consistencyBoost = clamp(0.20 - stddev × 5, 0, 0.20)`
+  - 因子 5 将归一化坐标的标准差映射到 boost 值（如 stddev=0.02 → boost=0.10）
   - 最多 boost 20%，最少 boost 0%
 
 如果平滑后的置信度低于原始单帧置信度，取两者中较高者。
@@ -80,7 +81,7 @@ public struct TemporalSmoother {
 public init(
     videoURL: URL,
     pointConfidenceThreshold: VNConfidence = 0.3,
-    sampleInterval: Double = 1.0,
+    sampleInterval: Double = 0.2,
     maxFrameSize: CGSize? = CGSize(width: 1920, height: 1080),
     visionOptions: VisionAnalysisOptions = .skiAnalysis,
     enableSmoothing: Bool = true  // 默认开启

@@ -422,17 +422,6 @@ public struct PoseScorer {
         }
     }
 
-    private func weightedConfidence(_ values: [(confidence: Double, weight: Double)]) -> Double {
-        let totalWeight = values.map { $0.weight }.reduce(0, +)
-        guard totalWeight > 0 else { return 0 }
-        return values.map { $0.confidence * $0.weight }.reduce(0, +) / totalWeight
-    }
-
-    private func average(_ values: [Double]) -> Double {
-        guard !values.isEmpty else { return 0 }
-        return values.reduce(0, +) / Double(values.count)
-    }
-
     /// 等级评定
     private func determineLevel(_ score: Double) -> String {
         for (range, level) in Self.levelThresholds {
