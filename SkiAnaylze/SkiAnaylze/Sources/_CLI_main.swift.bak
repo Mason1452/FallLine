@@ -4,8 +4,8 @@ import AVFoundation
 let arguments = CommandLine.arguments
 
 guard arguments.count >= 2 else {
-    print("用法: swift run VideoVision <视频路径>")
-    print("  例: swift run VideoVision 1.MP4")
+    print("用法: swift run FallLine <视频路径>")
+    print("  例: swift run FallLine 1.MP4")
     exit(1)
 }
 
@@ -13,7 +13,7 @@ let videoPath = arguments[1]
 
 let separator = String(repeating: "=", count: 50)
 print(separator)
-print("  🎬 VideoVision - Apple Vision 视频分析工具")
+print("  🎬 FallLine - Apple Vision 视频分析工具")
 print("  📌 专注滑雪姿态分析")
 print(separator)
 print()
@@ -95,6 +95,6 @@ do {
 } catch {
     print("❌ 错误: \(error.localizedDescription)")
     print()
-    print("用法: swift run VideoVision <视频路径>")
+    print("用法: swift run FallLine <视频路径>")
     exit(1)
 }

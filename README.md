@@ -1,4 +1,4 @@
-# VideoVision 🎿
+# FallLine 🎿
 
 **基于 Apple Vision 框架的滑雪姿态视频分析工具**
 
@@ -16,7 +16,7 @@
 
 ```bash
 git clone <repo-url>
-cd VideoVision
+cd FallLine
 swift build -c release
 ```
 
@@ -25,25 +25,25 @@ swift build -c release
 ### CLI 工具
 
 ```bash
-swift run VideoVisionCLI /path/to/ski_video.mp4
+swift run FallLineCLI /path/to/ski_video.mp4
 ```
 
 示例：
 
 ```bash
-swift run VideoVisionCLI 1.MP4
+swift run FallLineCLI 1.MP4
 ```
 
 生成板身方向/运动方向调试覆盖图：
 
 ```bash
-swift run VideoVisionCLI --debug-overlay 1.MP4
-swift run VideoVisionCLI --debug-overlay --debug-overlay-dir /tmp/ski_debug 1.MP4
+swift run FallLineCLI --debug-overlay 1.MP4
+swift run FallLineCLI --debug-overlay --debug-overlay-dir /tmp/ski_debug 1.MP4
 ```
 
 ### iOS App
 
-`SkiAnaylze/` 目录下有一个 SwiftUI App，提供视频选取、分析进度展示和报告查看的图形界面。在 Xcode 中打开 `SkiAnaylze/SkiAnaylze.xcodeproj`，添加本地 Swift Package 依赖（路径为 VideoVision 仓库根目录）后即可构建。
+`SkiAnaylze/` 目录下有一个 SwiftUI App，提供视频选取、分析进度展示和报告查看的图形界面。在 Xcode 中打开 `SkiAnaylze/SkiAnaylze.xcodeproj`，添加本地 Swift Package 依赖（路径为 FallLine 仓库根目录）后即可构建。
 
 ### 运行测试
 
@@ -209,10 +209,10 @@ swift test
 ## 项目结构
 
 ```
-VideoVision/
-├── Package.swift                    # SwiftPM 清单（VideoVisionCore + VideoVisionCLI）
+FallLine/
+├── Package.swift                    # SwiftPM 清单（FallLineCore + FallLineCLI）
 ├── Sources/
-│   ├── VideoVisionCore/             # 核心分析库
+│   ├── FallLineCore/             # 核心分析库
 │   │   ├── Models.swift             # Codable 数据模型
 │   │   ├── VideoAnalyzer.swift      # 视频抽帧 & 分析编排
 │   │   ├── VisionFrameAnalyzer.swift # Vision 请求封装（可配置）
@@ -222,7 +222,7 @@ VideoVision/
 │   │   ├── KeyMomentDetector.swift  # 关键时刻检测
 │   │   ├── ReportGenerator.swift    # 自然语言报告生成
 │   │   └── Utilities.swift          # 公共工具函数
-│   └── VideoVisionCLI/
+│   └── FallLineCLI/
 │       └── main.swift               # CLI 入口
 ├── SkiAnaylze/                      # iOS SwiftUI App
 │   ├── Package.swift                # App 依赖声明
@@ -231,7 +231,7 @@ VideoVision/
 │       ├── VideoAnalysisManager.swift # 分析状态管理
 │       └── Views/                    # SwiftUI 视图
 ├── Tests/
-│   └── VideoVisionCoreTests/        # 单元测试
+│   └── FallLineCoreTests/        # 单元测试
 │       ├── AngleCalculationTests.swift
 │       ├── PoseScorerTests.swift
 │       └── EdgeCaseTests.swift

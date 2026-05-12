@@ -2,7 +2,7 @@
 
 ## 背景
 
-VideoVision 使用 Apple Vision 框架的 `VNDetectHumanBodyPoseRequest` 逐帧分析滑雪姿态。用户反馈从侧后方跟拍的视频中，Vision 返回的关键点置信度普遍偏低，导致以下问题：
+FallLine 使用 Apple Vision 框架的 `VNDetectHumanBodyPoseRequest` 逐帧分析滑雪姿态。用户反馈从侧后方跟拍的视频中，Vision 返回的关键点置信度普遍偏低，导致以下问题：
 
 - 单帧关键点位置噪声较大，角度计算不稳定
 - 置信度过低时帧被 `reliablePoseFrames` 过滤，损失有效数据
@@ -29,7 +29,7 @@ VideoVision 使用 Apple Vision 框架的 `VNDetectHumanBodyPoseRequest` 逐帧�
 
 ### TemporalSmoother 模块
 
-**新文件：** `Sources/VideoVisionCore/TemporalSmoother.swift`
+**新文件：** `Sources/FallLineCore/TemporalSmoother.swift`
 
 ```swift
 public struct TemporalSmoother {
@@ -105,7 +105,7 @@ public init(
 
 ### 测试
 
-**新文件：** `Tests/VideoVisionCoreTests/TemporalSmootherTests.swift`
+**新文件：** `Tests/FallLineCoreTests/TemporalSmootherTests.swift`
 
 测试策略：
 

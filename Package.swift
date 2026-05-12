@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "VideoVision",
+    name: "FallLine",
     platforms: [
         .macOS(.v14)
         // macOS 14 (Sonoma) 是必须的，因为：
@@ -14,7 +14,7 @@ let package = Package(
     targets: [
         // MARK: - 核心库（同时供给 CLI 和 iOS App 使用）
         .target(
-            name: "VideoVisionCore",
+            name: "FallLineCore",
             dependencies: [],
             linkerSettings: [
                 .linkedFramework("AVFoundation"),
@@ -26,8 +26,8 @@ let package = Package(
 
         // MARK: - CLI 可执行文件（macOS）
         .executableTarget(
-            name: "VideoVisionCLI",
-            dependencies: ["VideoVisionCore"],
+            name: "FallLineCLI",
+            dependencies: ["FallLineCore"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("AVFoundation"),
@@ -39,8 +39,8 @@ let package = Package(
 
         // MARK: - 测试
         .testTarget(
-            name: "VideoVisionCoreTests",
-            dependencies: ["VideoVisionCore"]
+            name: "FallLineCoreTests",
+            dependencies: ["FallLineCore"]
         ),
     ]
 )

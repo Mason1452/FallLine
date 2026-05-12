@@ -1,6 +1,6 @@
 import SwiftUI
 import AVKit
-//import VideoVisionCore
+//import FallLineCore
 
 struct ReportDetailView: View {
     let output: AnalysisOutput
@@ -542,7 +542,7 @@ struct ReportDetailView: View {
             }
 
             // 底部
-            "VideoVision 生成".draw(at: CGPoint(x: 24, y: 640), withAttributes: [
+            "FallLine 生成".draw(at: CGPoint(x: 24, y: 640), withAttributes: [
                 .font: UIFont.systemFont(ofSize: 12),
                 .foregroundColor: UIColor(Color.themeTextTertiary)
             ])

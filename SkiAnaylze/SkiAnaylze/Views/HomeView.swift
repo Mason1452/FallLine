@@ -2,7 +2,7 @@ import SwiftUI
 import AVFoundation
 import PhotosUI
 import UniformTypeIdentifiers
-//import VideoVisionCore
+//import FallLineCore
 struct HomeView: View {
     @EnvironmentObject var manager: VideoAnalysisManager
     @State private var showPicker = false
@@ -76,7 +76,7 @@ struct HomeView: View {
                 .font(.system(size: 40))
                 .foregroundColor(.themePrimary)
 
-            Text("VideoVision")
+            Text("FallLine")
                 .font(.system(size: 28, weight: .bold))
                 .foregroundColor(.themeTextPrimary)
 
