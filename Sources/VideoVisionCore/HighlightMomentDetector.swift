@@ -14,7 +14,8 @@ public struct HighlightMomentDetector {
         let samples = reliablePoseFrames(from: frames)
             .sorted { $0.time < $1.time }
             .compactMap { frameSample(from: $0, stability: summary?.stabilityScore ?? 50) }
-        guard samples.count >= AnalysisReliability.minimumHighlightFrameCount, maxCount > 0 else { return [] }
+        guard reliablePoseDuration(from: frames) >= AnalysisReliability.minimumHighlightDuration,
+              maxCount > 0 else { return [] }
 
         let sampleInterval = medianSampleInterval(samples.map(\.time))
         let groups = contiguousGroups(samples, sampleInterval: sampleInterval)
@@ -228,40 +229,4 @@ public struct HighlightMomentDetector {
         return "这是本视频中相对更好的连续片段，适合用来对比前后动作差异。"
     }
 
-    // MARK: - 数学工具
-
-    private static func weightedAverage(_ values: [(value: Double, weight: Double)]) -> Double {
-        let totalWeight = values.map(\.weight).reduce(0, +)
-        guard totalWeight > 0 else { return 0 }
-        return values.map { $0.value * $0.weight }.reduce(0, +) / totalWeight
-    }
-
-    private static func weightedStandardDeviation(
-        _ values: [(value: Double, weight: Double)],
-        mean: Double
-    ) -> Double {
-        let totalWeight = values.map(\.weight).reduce(0, +)
-        guard totalWeight > 0 else { return 0 }
-        let variance = values.map { pow($0.value - mean, 2) * $0.weight }.reduce(0, +) / totalWeight
-        return sqrt(variance)
-    }
-
-    private static func average(_ values: [Double]) -> Double {
-        guard !values.isEmpty else { return 0 }
-        return values.reduce(0, +) / Double(values.count)
-    }
-
-    private static func medianSampleInterval(_ times: [Double]) -> Double {
-        let deltas = zip(times.dropFirst(), times).map { max($0 - $1, 0) }.filter { $0 > 0 }
-        guard !deltas.isEmpty else { return 1 }
-        let sorted = deltas.sorted()
-        return sorted[sorted.count / 2]
-    }
-
-    private static func formatTime(_ seconds: Double) -> String {
-        let total = Int(seconds)
-        let mins = total / 60
-        let secs = total % 60
-        return String(format: "%02d:%02d", mins, secs)
-    }
 }

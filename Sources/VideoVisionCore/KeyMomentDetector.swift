@@ -148,13 +148,6 @@ public struct KeyMomentDetector {
         moments.contains { abs($0.seconds - time) <= threshold }
     }
 
-    private static func formatTime(_ seconds: Double) -> String {
-        let total = Int(seconds)
-        let mins = total / 60
-        let secs = total % 60
-        return String(format: "%02d:%02d", mins, secs)
-    }
-
     private static func edgeMomentDescription(_ score: Double) -> String {
         if score < 40 {
             return "这一帧走刃质量偏低，姿态条件更接近搓雪转弯。"

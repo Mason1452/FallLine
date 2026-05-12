@@ -32,10 +32,19 @@ final class HighlightMomentDetectorTests: XCTestCase {
         XCTAssertTrue(highlights.isEmpty)
     }
 
-    func test_requiresEnoughReliableFramesForHighlight() {
+    func test_requiresEnoughReliableDurationForHighlight() {
         let frames = makeFrames(groups: [
             (score: 90, count: 7)
         ])
+        let summary = makeSummary(averageScore: 65, stabilityScore: 90)
+
+        let highlights = HighlightMomentDetector.detect(from: frames, summary: summary, maxCount: 1)
+
+        XCTAssertTrue(highlights.isEmpty)
+    }
+
+    func test_requiresEnoughReliableDurationForDenseFrames() {
+        let frames = makeFrames(score: 90, count: 20, calfScore: 90, timeStep: 0.2)
         let summary = makeSummary(averageScore: 65, stabilityScore: 90)
 
         let highlights = HighlightMomentDetector.detect(from: frames, summary: summary, maxCount: 1)
@@ -70,13 +79,13 @@ final class HighlightMomentDetectorTests: XCTestCase {
         XCTAssertTrue(highlights.isEmpty)
     }
 
-    private func makeFrames(groups: [(score: Double, count: Int)]) -> [DetectionResult] {
+    private func makeFrames(groups: [(score: Double, count: Int)], timeStep: Double = 1.0) -> [DetectionResult] {
         var frames: [DetectionResult] = []
         var time = 0.0
         for group in groups {
             for _ in 0..<group.count {
                 frames.append(makeFrame(time: time, score: group.score))
-                time += 1.0
+                time += timeStep
             }
         }
         return frames
@@ -87,11 +96,12 @@ final class HighlightMomentDetectorTests: XCTestCase {
         count: Int,
         calfScore: Double,
         boardConfidence: Double? = nil,
-        boardAngle: Double = 0
+        boardAngle: Double = 0,
+        timeStep: Double = 1.0
     ) -> [DetectionResult] {
         (0..<count).map { index in
             makeFrame(
-                time: Double(index),
+                time: Double(index) * timeStep,
                 score: score,
                 calfScore: calfScore,
                 boardConfidence: boardConfidence,

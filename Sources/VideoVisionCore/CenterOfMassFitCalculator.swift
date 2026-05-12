@@ -54,7 +54,6 @@ public struct CenterOfMassFitCalculator {
         guard !frameAnalyses.isEmpty else { return .empty }
 
         let rawScore = weightedAverage(frameAnalyses.map { ($0.score, $0.confidence) })
-            ?? average(frameAnalyses.map(\.score))
         let availabilityConfidence = min(1, Double(frameAnalyses.count) / fullAvailabilityFrameCount)
         let rawConfidence = average(frameAnalyses.map(\.confidence)) * availabilityConfidence
         let mainIssue = dominantIssue(from: frameAnalyses)
@@ -171,14 +170,4 @@ private extension CenterOfMassFitCalculator {
         return "重心阶段适配不足"
     }
 
-    static func weightedAverage(_ values: [(value: Double, weight: Double)]) -> Double? {
-        let weightSum = values.map { $0.weight }.reduce(0, +)
-        guard weightSum > 0 else { return nil }
-        return values.map { $0.value * $0.weight }.reduce(0, +) / weightSum
-    }
-
-    static func average(_ values: [Double]) -> Double {
-        guard !values.isEmpty else { return 0 }
-        return values.reduce(0, +) / Double(values.count)
-    }
 }

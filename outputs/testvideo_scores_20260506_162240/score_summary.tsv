@@ -1,0 +1,7 @@
+group	video	score	level	edgeQuality	edgeLabel	avgSideslip	carvingConfidence	boardConfidence	boardFrames	boardSource
+testvideo	testvideo/1.MP4	58	初级	35.4	搓雪为主	21	58.6	0.12	24	ankleProxy
+testvideo	testvideo/2.MP4	58	初级	44.6	有立刃尝试	22.3	50.5	0.45	13	ankleProxy
+testvideo	testvideo/3.MP4	85.9	专业	63.1	刻滑雏形	20.6	55.4	0.21	12	ankleProxy
+testvideo	testvideo/4.MP4	65	中级	55.4	刻滑雏形					
+testvideo	testvideo/5.mp4	58	初级	44.6	有立刃尝试	34.6	51	0.43	11	ankleProxy
+testvideo	testvideo/6.MP4	70	中级	67.7	刻滑雏形	37	28.4	0.2	21	ankleProxy

@@ -3,7 +3,7 @@ import XCTest
 
 final class StableCarvingBaselineTests: XCTestCase {
 
-    func test_generateSummary_usesSustainedHighPlatformForStableCarvingConflict() {
+    func test_generateSummary_usesSustainedHighPlatformForStableCarvingConflict() async throws {
         let scores: [(score: Double, confidence: Double, count: Int)] = [
             (53.4, 0.81, 4),
             (48.0, 0.68, 7),
@@ -14,47 +14,66 @@ final class StableCarvingBaselineTests: XCTestCase {
         ]
         let frames = makeFrames(from: scores)
 
-        let summary = makeAnalyzer().generateSummary(from: frames)
+        let summary = await makeAnalyzer().generateSummary(from: frames)
 
         XCTAssertNotNil(summary)
         XCTAssertEqual(summary?.averageScore ?? 0, 79.1, accuracy: 0.1)
         XCTAssertGreaterThan(summary?.stabilityScore ?? 0, 95)
     }
 
-    func test_generateSummary_usesBestThirdInsteadOfFullAverage() {
+    func test_generateSummary_usesBestThirdInsteadOfFullAverage() async throws {
         let scores: [(score: Double, confidence: Double, count: Int)] = [
             (50, 0.8, 12),
             (90, 0.8, 4)
         ]
         let frames = makeFrames(from: scores)
 
-        let summary = makeAnalyzer().generateSummary(from: frames)
+        let summary = await makeAnalyzer().generateSummary(from: frames)
 
         XCTAssertNotNil(summary)
         XCTAssertEqual(summary?.averageScore ?? 0, 76.7, accuracy: 0.1)
     }
 
-    func test_generateSummary_capsScoreWhenReliableEvidenceIsTooSparse() {
+    func test_generateSummary_capsScoreWhenReliableEvidenceIsTooSparse() async throws {
         let frames = makeFrames(from: [
             (90, 0.8, 7)
         ])
 
-        let summary = makeAnalyzer().generateSummary(from: frames)
+        let summary = await makeAnalyzer().generateSummary(from: frames)
 
         XCTAssertNotNil(summary)
         XCTAssertEqual(summary?.averageScore ?? 0, 65, accuracy: 0.1)
     }
 
-    func test_generateSummary_capsHighPostureScoreWhenEdgeEvidenceIsWeak() {
+    func test_generateSummary_capsDenseFramesWhenReliableDurationIsTooShort() async throws {
+        let frames = makeFrames(
+            score: 90,
+            confidence: 0.8,
+            count: 20,
+            calfScore: 90,
+            timeStep: 0.2
+        )
+
+        let summary = await makeAnalyzer().generateSummary(from: frames)
+
+        XCTAssertNotNil(summary)
+        XCTAssertEqual(summary?.rawPoseAverageScore ?? 0, 90, accuracy: 0.1)
+        XCTAssertEqual(summary?.bestThirdAverageScore ?? 0, 90, accuracy: 0.1)
+        XCTAssertEqual(summary?.evidenceCappedScore ?? 0, 55, accuracy: 0.1)
+        XCTAssertEqual(summary?.averageScore ?? 0, 55, accuracy: 0.1)
+        XCTAssertEqual(summary?.flowModulationFactor ?? 0, 1, accuracy: 0.001)
+    }
+
+    func test_generateSummary_capsHighPostureScoreWhenEdgeEvidenceIsWeak() async throws {
         let frames = makeFrames(score: 82, confidence: 0.8, count: 18, calfScore: 36)
 
-        let summary = makeAnalyzer().generateSummary(from: frames)
+        let summary = await makeAnalyzer().generateSummary(from: frames)
 
         XCTAssertNotNil(summary)
         XCTAssertEqual(summary?.averageScore ?? 0, 58, accuracy: 0.1)
     }
 
-    func test_generateSummary_capsHighScoreWhenBoardKinematicEvidenceIsVeryLow() {
+    func test_generateSummary_capsHighScoreWhenBoardKinematicEvidenceIsVeryLow() async throws {
         let frames = makeFrames(
             score: 82,
             confidence: 0.8,
@@ -63,13 +82,13 @@ final class StableCarvingBaselineTests: XCTestCase {
             boardConfidence: 0.10
         )
 
-        let summary = makeAnalyzer().generateSummary(from: frames)
+        let summary = await makeAnalyzer().generateSummary(from: frames)
 
         XCTAssertNotNil(summary)
         XCTAssertEqual(summary?.averageScore ?? 0, 62, accuracy: 0.1)
     }
 
-    func test_generateSummary_capsHighScoreWhenBoardTravelAngleShowsSideslip() {
+    func test_generateSummary_capsHighScoreWhenBoardTravelAngleShowsSideslip() async throws {
         let frames = makeFrames(
             score: 82,
             confidence: 0.8,
@@ -79,7 +98,7 @@ final class StableCarvingBaselineTests: XCTestCase {
             boardAngle: 90
         )
 
-        let summary = makeAnalyzer().generateSummary(from: frames)
+        let summary = await makeAnalyzer().generateSummary(from: frames)
 
         XCTAssertNotNil(summary)
         XCTAssertEqual(summary?.averageScore ?? 0, 58, accuracy: 0.1)
@@ -89,13 +108,16 @@ final class StableCarvingBaselineTests: XCTestCase {
         VideoAnalyzer(videoURL: URL(fileURLWithPath: "/tmp/stable-carving-test.mp4"))
     }
 
-    private func makeFrames(from groups: [(score: Double, confidence: Double, count: Int)]) -> [DetectionResult] {
+    private func makeFrames(
+        from groups: [(score: Double, confidence: Double, count: Int)],
+        timeStep: Double = 1.0
+    ) -> [DetectionResult] {
         var frames: [DetectionResult] = []
         var time = 0.0
         for group in groups {
             for _ in 0..<group.count {
                 frames.append(makeFrame(time: time, score: group.score, confidence: group.confidence))
-                time += 1.0
+                time += timeStep
             }
         }
         return frames
@@ -107,11 +129,12 @@ final class StableCarvingBaselineTests: XCTestCase {
         count: Int,
         calfScore: Double,
         boardConfidence: Double? = nil,
-        boardAngle: Double = 0
+        boardAngle: Double = 0,
+        timeStep: Double = 1.0
     ) -> [DetectionResult] {
         (0..<count).map { index in
             makeFrame(
-                time: Double(index),
+                time: Double(index) * timeStep,
                 score: score,
                 confidence: confidence,
                 calfScore: calfScore,

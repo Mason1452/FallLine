@@ -18,22 +18,25 @@ public class VideoAnalyzer {
     private let metricsCalculator: PoseMetricsCalculator
     private let poseScorer: PoseScorer
 
-    /// 采样间隔（秒）。默认 1.0 = 每秒分析一帧
+    /// 采样间隔（秒）。默认 0.2 = 每秒分析五帧
     public let sampleInterval: Double
     /// 最大帧尺寸。nil 表示使用视频原始分辨率
     private let maxFrameSize: CGSize?
+
+    /// 光流分析用帧缓存（仅缓存姿态检测成功的帧）
+    private var frameCache: [(image: CGImage, pose: BodyPoseData)] = []
 
     /// 初始化分析器
     /// - Parameters:
     ///   - videoURL: 视频文件的 URL
     ///   - pointConfidenceThreshold: 关键点检测置信度阈值（默认 0.3）
-    ///   - sampleInterval: 采样间隔秒数（默认 1.0）
+    ///   - sampleInterval: 采样间隔秒数（默认 0.2）
     ///   - maxFrameSize: 最大帧分辨率，nil 使用视频原始尺寸（默认 1920x1080）
     ///   - visionOptions: Vision 请求选项（默认仅姿态检测）
     public init(
         videoURL: URL,
         pointConfidenceThreshold: VNConfidence = 0.3,
-        sampleInterval: Double = 1.0,
+        sampleInterval: Double = 0.2,
         maxFrameSize: CGSize? = CGSize(width: 1920, height: 1080),
         visionOptions: VisionAnalysisOptions = .skiAnalysis
     ) {
@@ -48,10 +51,12 @@ public class VideoAnalyzer {
 
     // MARK: - 主分析流程
 
-    /// 分析视频，每秒分析一帧
+    /// 分析视频，按 `sampleInterval` 抽帧
     /// - Parameter progressHandler: 进度回调（0.0~1.0），可选
     /// - Returns: 每帧的检测结果数组
     public func analyze(progressHandler: ((Double) -> Void)? = nil) async throws -> [DetectionResult] {
+        frameCache.removeAll(keepingCapacity: true)
+
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
         guard !videoTracks.isEmpty else {
             throw NSError(domain: "VideoAnalyzer", code: 2,
@@ -77,6 +82,10 @@ public class VideoAnalyzer {
                 let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
                 let result = try await analyzeFrame(cgImage: cgImage, at: time)
                 results.append(result)
+                // 缓存姿态成功的帧用于后续光流分析
+                if result.bodyPose.detected && result.bodyPose.visibility != .none {
+                    frameCache.append((cgImage, result.bodyPose))
+                }
             } catch {
                 // 单帧失败不中断整体流程，但记录错误信息
                 results.append(DetectionResult(
@@ -180,7 +189,7 @@ public class VideoAnalyzer {
     // MARK: - 全视频总结
 
     /// 根据所有帧的分析结果生成全视频总结
-    public func generateSummary(from results: [DetectionResult]) -> VideoSummary? {
+    public func generateSummary(from results: [DetectionResult]) async -> VideoSummary? {
         let reliableFrames = reliablePoseFrames(from: results)
         let scoreEntries = reliableFrames.compactMap { result -> (time: Double, score: Double, confidence: Double)? in
             guard let poseScore = result.poseScore else { return nil }
@@ -208,10 +217,23 @@ public class VideoAnalyzer {
         )
         let avg = applyEvidenceCaps(
             score: boardCappedAverage,
-            reliableFrameCount: scoreEntries.count
+            reliableFrames: reliableFrames
         )
 
-        // 找最佳/最差帧
+        // 光流调制
+        let flowMetrics = await computeFlowMetrics()
+        let flowCalculator = FlowMetricsCalculator()
+        let flowModulationFactor = flowMetrics.framePairsUsed >= 2
+            ? flowCalculator.computeModulation(
+                coherence: flowMetrics.motionCoherence,
+                stability: flowMetrics.directionalStability,
+                smoothness: flowMetrics.velocitySmoothness,
+                poseScore: avg
+            )
+            : 1.0
+        let modulatedScore = clamp(avg * flowModulationFactor, lower: 0, upper: 100)
+
+        // 找最佳/最差帧（仍基于原始姿态分，光流不改变帧级判断）
         var best = (time: 0.0, score: -1.0)
         var worst = (time: 0.0, score: 101.0)
 
@@ -221,7 +243,7 @@ public class VideoAnalyzer {
         }
 
         let overallLevel: String = {
-            switch avg {
+            switch modulatedScore {
             case 85...100: return "专业"
             case 75..<85:  return "高级"
             case 60..<75:  return "中级"
@@ -230,7 +252,7 @@ public class VideoAnalyzer {
         }()
 
         return VideoSummary(
-            averageScore: avg,
+            averageScore: modulatedScore,
             bestFrame: FrameScore(
                 time: best.time,
                 timeString: formatTime(seconds: best.time),
@@ -244,14 +266,16 @@ public class VideoAnalyzer {
             stabilityScore: stabilityScore,
             scoreConsistencyScore: scoreConsistencyScore,
             scoreStdDev: std,
-            overallLevel: overallLevel
+            overallLevel: overallLevel,
+            rawPoseAverageScore: rawAvg,
+            bestThirdAverageScore: bestThirdAvg,
+            evidenceCappedScore: avg,
+            flowModulationFactor: flowModulationFactor,
+            flowFramePairsUsed: flowMetrics.framePairsUsed,
+            flowMotionCoherence: flowMetrics.framePairsUsed >= 2 ? flowMetrics.motionCoherence : nil,
+            flowDirectionalStability: flowMetrics.framePairsUsed >= 2 ? flowMetrics.directionalStability : nil,
+            flowVelocitySmoothness: flowMetrics.framePairsUsed >= 2 ? flowMetrics.velocitySmoothness : nil
         )
-    }
-
-    private func weightedAverage(_ values: [(value: Double, weight: Double)]) -> Double {
-        let totalWeight = values.map(\.weight).reduce(0, +)
-        guard totalWeight > 0 else { return 0 }
-        return values.map { $0.value * $0.weight }.reduce(0, +) / totalWeight
     }
 
     private func bestThirdAverage(_ values: [(value: Double, weight: Double)]) -> Double {
@@ -261,14 +285,15 @@ public class VideoAnalyzer {
         return weightedAverage(Array(selected))
     }
 
-    private func applyEvidenceCaps(score: Double, reliableFrameCount: Int) -> Double {
-        if reliableFrameCount < 5 {
+    private func applyEvidenceCaps(score: Double, reliableFrames: [DetectionResult]) -> Double {
+        let reliableDuration = sampledDuration(fromTimes: reliableFrames.map(\.time))
+        if reliableDuration < AnalysisReliability.sparseReliableScoreDuration {
             return min(score, 55)
         }
-        if reliableFrameCount < 8 {
+        if reliableDuration < AnalysisReliability.limitedReliableScoreDuration {
             return min(score, 65)
         }
-        if reliableFrameCount < 12 {
+        if reliableDuration < AnalysisReliability.fullReliableScoreDuration {
             return min(score, 78)
         }
         return score
@@ -308,14 +333,6 @@ public class VideoAnalyzer {
         return min(score, cap)
     }
 
-    private func weightedStandardDeviation(_ values: [(value: Double, weight: Double)], mean: Double) -> Double {
-        let totalWeight = values.map(\.weight).reduce(0, +)
-        guard totalWeight > 0 else { return 0 }
-        let variance = values
-            .map { pow($0.value - mean, 2) * $0.weight }
-            .reduce(0, +) / totalWeight
-        return sqrt(variance)
-    }
 
     // MARK: - 动作稳定性
 
@@ -403,6 +420,28 @@ public class VideoAnalyzer {
     /// 注：容忍度在 addMotionPenalty 中针对连续值做了调整
     private func gravityLevelMetric(_ metric: MetricWithConfidence<Double>?) -> MetricWithConfidence<Double>? {
         return metric
+    }
+
+    // MARK: - 光流指标计算
+
+    /// 基于缓存的帧对计算光流指标
+    private func computeFlowMetrics() async -> FlowMetrics {
+        guard frameCache.count >= 2 else { return .empty }
+
+        let calculator = FlowMetricsCalculator()
+
+        // 构建连续帧对
+        var pairs: [(prevImage: CGImage, prevPose: BodyPoseData, nextImage: CGImage, nextPose: BodyPoseData)] = []
+        for i in 0..<(frameCache.count - 1) {
+            pairs.append((
+                prevImage: frameCache[i].image,
+                prevPose: frameCache[i].pose,
+                nextImage: frameCache[i + 1].image,
+                nextPose: frameCache[i + 1].pose
+            ))
+        }
+
+        return await calculator.compute(from: pairs)
     }
 
     // MARK: - 工具

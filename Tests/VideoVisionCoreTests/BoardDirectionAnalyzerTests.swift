@@ -48,6 +48,35 @@ final class BoardDirectionAnalyzerTests: XCTestCase {
         XCTAssertEqual(analysis.summary?.carvingConfidence ?? -1, 0, accuracy: 0.1)
     }
 
+    func test_sparseHighSideslipDoesNotTriggerHighScoreCap() {
+        let frames = [
+            makeFrame(time: 0, boardAngle: 45, centerX: 0.1, centerY: 0.5),
+            makeFrame(time: 1, boardAngle: 45, centerX: 0.2, centerY: 0.5)
+        ]
+        let analysis = BoardDirectionAnalyzer.analyze(frames: frames)
+
+        XCTAssertEqual(analysis.frames.compactMap(\.kinematics).count, 2)
+        XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 45, accuracy: 0.1)
+        XCTAssertNil(boardKinematicHighScoreCap(from: frames))
+        XCTAssertFalse(hasHighSideslipEvidenceForHighScore(from: frames))
+    }
+
+    func test_denseButShortHighSideslipDoesNotTriggerHighScoreCap() {
+        let frames = [
+            makeFrame(time: 0.0, boardAngle: 45, centerX: 0.1, centerY: 0.5),
+            makeFrame(time: 0.2, boardAngle: 45, centerX: 0.2, centerY: 0.5),
+            makeFrame(time: 0.4, boardAngle: 45, centerX: 0.3, centerY: 0.5),
+            makeFrame(time: 0.6, boardAngle: 45, centerX: 0.4, centerY: 0.5),
+            makeFrame(time: 0.8, boardAngle: 45, centerX: 0.5, centerY: 0.5)
+        ]
+        let analysis = BoardDirectionAnalyzer.analyze(frames: frames)
+
+        XCTAssertGreaterThanOrEqual(analysis.frames.compactMap(\.kinematics).count, 3)
+        XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 45, accuracy: 0.1)
+        XCTAssertNil(boardKinematicHighScoreCap(from: frames))
+        XCTAssertFalse(hasHighSideslipEvidenceForHighScore(from: frames))
+    }
+
     func test_stationaryCentersKeepObservationButNoKinematics() {
         let analysis = BoardDirectionAnalyzer.analyze(frames: [
             makeFrame(time: 0, boardAngle: 0, centerX: 0.2, centerY: 0.5),

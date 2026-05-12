@@ -148,9 +148,7 @@ private extension BoardDirectionAnalyzer {
         }
 
         let sideslip = weightedAverage(kinematics.map { ($0.sideslipAngle, $0.confidence) })
-            ?? average(kinematics.map(\.sideslipAngle))
         let carving = weightedAverage(kinematics.map { ($0.carvingConfidence, $0.confidence) })
-            ?? average(kinematics.map(\.carvingConfidence))
         let confidence = average(kinematics.map(\.confidence))
 
         return BoardAnalysisSummary(
@@ -179,24 +177,4 @@ private extension BoardDirectionAnalyzer {
         normalizeAngle(first - second)
     }
 
-    static func normalizeAngle(_ angle: Double) -> Double {
-        var normalized = angle.truncatingRemainder(dividingBy: 360)
-        if normalized >= 180 {
-            normalized -= 360
-        } else if normalized < -180 {
-            normalized += 360
-        }
-        return normalized
-    }
-
-    static func weightedAverage(_ values: [(value: Double, weight: Double)]) -> Double? {
-        let weightSum = values.map { $0.weight }.reduce(0, +)
-        guard weightSum > 0 else { return nil }
-        return values.map { $0.value * $0.weight }.reduce(0, +) / weightSum
-    }
-
-    static func average(_ values: [Double]) -> Double {
-        guard !values.isEmpty else { return 0 }
-        return values.reduce(0, +) / Double(values.count)
-    }
 }

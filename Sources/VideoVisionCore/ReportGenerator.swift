@@ -25,8 +25,11 @@ public struct ReportContext {
     public let visibility: VisibilityLevel
     public let hasPoseData: Bool
     public let stableCarvingBaseline: StableCarvingBaseline?
+    public let flowMotionCoherence: Double?
+    public let flowDirectionalStability: Double?
+    public let flowVelocitySmoothness: Double?
 
-    public init(avgScore: Double, stage: StageLabel, fLean: Double, fLeanConfidence: Double, knee: Double, kneeConfidence: Double, calf: Double, calfConfidence: Double, grav: Double, gravConfidence: Double, cogFit: Double, cogFitConfidence: Double, cogFitLabel: String, cogFitMainIssue: String?, sym: Double, symConfidence: Double, stability: Double, stdDev: Double, visibility: VisibilityLevel, hasPoseData: Bool, stableCarvingBaseline: StableCarvingBaseline?) {
+    public init(avgScore: Double, stage: StageLabel, fLean: Double, fLeanConfidence: Double, knee: Double, kneeConfidence: Double, calf: Double, calfConfidence: Double, grav: Double, gravConfidence: Double, cogFit: Double, cogFitConfidence: Double, cogFitLabel: String, cogFitMainIssue: String?, sym: Double, symConfidence: Double, stability: Double, stdDev: Double, visibility: VisibilityLevel, hasPoseData: Bool, stableCarvingBaseline: StableCarvingBaseline?, flowMotionCoherence: Double? = nil, flowDirectionalStability: Double? = nil, flowVelocitySmoothness: Double? = nil) {
         self.avgScore = avgScore
         self.stage = stage
         self.fLean = fLean
@@ -48,6 +51,9 @@ public struct ReportContext {
         self.visibility = visibility
         self.hasPoseData = hasPoseData
         self.stableCarvingBaseline = stableCarvingBaseline
+        self.flowMotionCoherence = flowMotionCoherence
+        self.flowDirectionalStability = flowDirectionalStability
+        self.flowVelocitySmoothness = flowVelocitySmoothness
     }
 }
 
@@ -303,7 +309,9 @@ public struct ReportGenerator {
             && hasHighSideslipEvidenceForHighScore(from: output.frames)
         let insufficientBoardEvidence = ctx.stableCarvingBaseline == nil
             && hasInsufficientBoardKinematicEvidenceForHighScore(from: output.frames)
-        let reliableFrameCount = reliablePoseFrames(from: output.frames).count
+        let reliableFrames = reliablePoseFrames(from: output.frames)
+        let reliableFrameCount = reliableFrames.count
+        let reliableDuration = sampledDuration(fromTimes: reliableFrames.map(\.time))
         let separator = String(repeating: "=", count: 54)
         var lines: [String] = []
 
@@ -329,6 +337,12 @@ public struct ReportGenerator {
         lines.append("  \(emoji) 综合评分：\(String(format: "%.0f", ctx.avgScore))/100")
         lines.append("  🏷 阶段判断：\(ctx.stage.rawValue)")
         lines.append("  📐 评分口径：取可靠片段中表现最好的前 1/3 加权平均")
+        if let raw = output.summary.rawPoseAverageScore,
+           let bestThird = output.summary.bestThirdAverageScore,
+           let capped = output.summary.evidenceCappedScore,
+           let flowFactor = output.summary.flowModulationFactor {
+            lines.append("  🧪 评分拆解：原始均分 \(String(format: "%.1f", raw)) · 最佳前1/3 \(String(format: "%.1f", bestThird)) · 证据封顶后 \(String(format: "%.1f", capped)) · 光流系数 ×\(String(format: "%.2f", flowFactor))")
+        }
         if weakEdgeEvidence {
             lines.append("  ⚠️ 持续立刃证据不足：前倾和屈膝不能单独推高综合分，已按初中级表现封顶")
         }
@@ -338,17 +352,17 @@ public struct ReportGenerator {
         if insufficientBoardEvidence {
             lines.append("  ⚠️ 板身/运动方向证据不足：单帧姿态不能证明走刃，已保守封顶")
         }
-        if reliableFrameCount < AnalysisReliability.minimumHighlightFrameCount {
-            lines.append("  ⚠️ 可靠评分片段不足：仅 \(reliableFrameCount) 帧，综合分已保守封顶")
-        } else if reliableFrameCount < 12 {
-            lines.append("  ⚠️ 可靠评分片段偏少：\(reliableFrameCount) 帧，综合分仅作谨慎参考")
+        if reliableDuration < AnalysisReliability.limitedReliableScoreDuration {
+            lines.append("  ⚠️ 可靠评分片段不足：约 \(String(format: "%.1f", reliableDuration)) 秒（\(reliableFrameCount) 帧），综合分已保守封顶")
+        } else if reliableDuration < AnalysisReliability.fullReliableScoreDuration {
+            lines.append("  ⚠️ 可靠评分片段偏少：约 \(String(format: "%.1f", reliableDuration)) 秒（\(reliableFrameCount) 帧），综合分仅作谨慎参考")
         }
         lines.append("")
 
         // 阶段描述
         if let baseline = ctx.stableCarvingBaseline {
             lines.append("  📋 检测到连续稳定的高质量刻滑平台，低分帧可能受大倒伏、低姿态或遮挡影响；综合评分采用该稳定平台作为基线。")
-            lines.append("     基线片段：\(formatTime(seconds: baseline.plateauStartTime))-\(formatTime(seconds: baseline.plateauEndTime))")
+            lines.append("     基线片段：\(formatTime(baseline.plateauStartTime))-\(formatTime(baseline.plateauEndTime))")
         } else if highSideslipEvidence {
             lines.append("  📋 板身方向和滑行方向没有对齐，说明转弯主要不是沿板身切雪完成；姿态项看起来有支撑，也不能直接解释为刻滑。")
         } else if insufficientBoardEvidence {
@@ -447,6 +461,17 @@ public struct ReportGenerator {
         lines.append(makeScoreLine("重心高度旧分", ctx.grav, "grav", seed: seed + 4, confidence: ctx.gravConfidence))
         lines.append(makeScoreLine("动作对称", ctx.sym, "sym", seed: seed + 5, confidence: ctx.symConfidence))
         lines.append("")
+
+        // 光流运动指标（Phase 1 实验，有数据时展示）
+        if let coherence = ctx.flowMotionCoherence,
+           let dirStability = ctx.flowDirectionalStability,
+           let smoothness = ctx.flowVelocitySmoothness {
+            lines.append("  🌊 光流运动指标（实验性）")
+            let framePairs = output.summary.flowFramePairsUsed.map { " · 帧对 \($0)" } ?? ""
+            lines.append("  | 运动一致性: \(String(format: "%.0f", coherence)) | 方向稳定性: \(String(format: "%.0f", dirStability)) | 速度平滑度: \(String(format: "%.0f", smoothness))\(framePairs) |")
+            lines.append("  | >70 上下身运动一致 | >70 方向稳定 | <40 动作不稳定 |")
+            lines.append("")
+        }
 
         // 关键时刻
         if !output.keyMoments.isEmpty {
@@ -551,7 +576,10 @@ public struct ReportGenerator {
             stdDev: s.scoreStdDev,
             visibility: visibility,
             hasPoseData: hasPoseData,
-            stableCarvingBaseline: stableBaseline
+            stableCarvingBaseline: stableBaseline,
+            flowMotionCoherence: s.flowMotionCoherence,
+            flowDirectionalStability: s.flowDirectionalStability,
+            flowVelocitySmoothness: s.flowVelocitySmoothness
         )
     }
 
@@ -770,19 +798,6 @@ public struct ReportGenerator {
         return abs(hash)
     }
 
-    private static func averageSubScores(from frames: [DetectionResult]) -> (forwardLean: Double, kneeBend: Double, calfLean: Double, gravity: Double, symmetry: Double) {
-        let scores = reliablePoseScores(from: frames)
-        guard !scores.isEmpty else { return (50, 50, 50, 50, 50) }
-        let count = Double(scores.count)
-        return (
-            forwardLean: scores.map(\.forwardLeanScore).reduce(0, +) / count,
-            kneeBend: scores.map(\.kneeBendScore).reduce(0, +) / count,
-            calfLean: scores.map(\.calfLeanScore).reduce(0, +) / count,
-            gravity: scores.map(\.gravityScore).reduce(0, +) / count,
-            symmetry: scores.map(\.symmetryScore).reduce(0, +) / count
-        )
-    }
-
     private static func averageSubScoreConfidences(from scores: [PoseScore]) -> (forwardLean: Double, kneeBend: Double, calfLean: Double, gravity: Double, symmetry: Double) {
         guard !scores.isEmpty else { return (0, 0, 0, 0, 0) }
         return (
@@ -957,11 +972,6 @@ public struct ReportGenerator {
         "\(String(format: "%.0f", confidence * 100))/100"
     }
 
-    private static func average(_ values: [Double]) -> Double {
-        guard !values.isEmpty else { return 0 }
-        return values.reduce(0, +) / Double(values.count)
-    }
-
     private static func phaseLabel(_ rawValue: String) -> String {
         switch rawValue {
         case TurnPhase.transition.rawValue: return "换刃/过渡"
@@ -992,10 +1002,4 @@ public struct ReportGenerator {
         return "\(mins)分\(secs)秒"
     }
 
-    private static func formatTime(seconds: Double) -> String {
-        let total = Int(seconds)
-        let mins = total / 60
-        let secs = total % 60
-        return String(format: "%02d:%02d", mins, secs)
-    }
 }

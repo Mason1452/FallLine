@@ -252,10 +252,4 @@ private extension TurnPhaseDetector {
         return deltas.reduce(0, +) / Double(deltas.count)
     }
 
-    static func formatTime(_ seconds: Double) -> String {
-        let total = Int(seconds)
-        let mins = total / 60
-        let secs = total % 60
-        return String(format: "%02d:%02d", mins, secs)
-    }
 }

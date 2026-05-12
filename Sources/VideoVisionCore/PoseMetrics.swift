@@ -39,17 +39,6 @@ public struct PoseMetricsCalculator {
         }
         let visibleCount = visibleJoints.count
 
-        // 可见性判断：不仅看数量，也看左右分布
-        // 仅单侧有点 → 无法做对称性评估，但角度计算仍可用
-        let leftJoints: Set<VNHumanBodyPoseObservation.JointName> = [
-            .leftShoulder, .leftHip, .leftKnee, .leftAnkle
-        ]
-        let rightJoints: Set<VNHumanBodyPoseObservation.JointName> = [
-            .rightShoulder, .rightHip, .rightKnee, .rightAnkle
-        ]
-        _ = visibleJoints.filter { leftJoints.contains($0) }.count
-        _ = visibleJoints.filter { rightJoints.contains($0) }.count
-
         let visibility: VisibilityLevel = {
             if visibleCount == 8 { return .full }
             if visibleCount >= 4 { return .partial }
@@ -493,15 +482,7 @@ extension PoseMetricsCalculator {
         return MetricWithConfidence(value: angle, confidence: pointConfidence * geometryConfidence)
     }
 
-    private func normalizeAngle(_ angle: Double) -> Double {
-        var normalized = angle.truncatingRemainder(dividingBy: 360)
-        if normalized >= 180 {
-            normalized -= 360
-        } else if normalized < -180 {
-            normalized += 360
-        }
-        return normalized
-    }
+
 
     private func midpoint(_ first: JointPoint?, _ second: JointPoint?) -> JointPoint? {
         if let first, let second {

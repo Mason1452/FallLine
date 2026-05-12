@@ -1,0 +1,26 @@
+index	time	image	poseScore	calfLeanScore	visualBoardAngle	visualBoardConfidence	visualBoardLength	boardSource	boardAngle	travelAngle	sideslipAngle	carvingConfidence	confidence
+1	0.00	frame_0001_00-00.png	73.95	26.90	31.00	0.80	0.26						
+2	1.00	frame_0002_00-01.png	73.95	26.90	31.00	0.80	0.26						
+3	2.00	frame_0003_00-02.png	73.95	26.90	31.00	0.80	0.26						
+4	3.00	frame_0004_00-03.png	73.95	26.90	31.00	0.80	0.26						
+5	4.00	frame_0005_00-04.png											
+6	5.00	frame_0006_00-05.png											
+7	6.00	frame_0007_00-06.png											
+8	7.00	frame_0008_00-07.png	69.35	43.58	16.49	0.53	0.16	ankleProxy	16.49				0.39
+9	8.00	frame_0009_00-08.png	69.35	43.58	16.49	0.53	0.16	ankleProxy	16.49				0.39
+10	9.00	frame_0010_00-09.png	69.35	43.58	16.49	0.53	0.16	ankleProxy	16.49	96.38	79.89	0.00	0.22
+11	10.00	frame_0011_00-10.png	58.78	38.01	8.28	0.12	0.06	ankleProxy	-171.72	96.38	88.09	0.00	0.14
+12	11.00	frame_0012_00-11.png	58.78	38.01	8.28	0.12	0.06	ankleProxy	-171.72				0.25
+13	12.00	frame_0013_00-12.png	58.78	38.01	8.28	0.12	0.06	ankleProxy	-171.72				0.25
+14	13.00	frame_0014_00-13.png	58.78	38.01	8.28	0.12	0.06	ankleProxy	-171.72				0.25
+15	14.00	frame_0015_00-14.png	58.78	38.01	8.28	0.12	0.06	ankleProxy	-171.72				0.25
+16	15.00	frame_0016_00-15.png	58.78	38.01	8.28	0.12	0.06	ankleProxy	-171.72	-174.18	2.46	94.53	0.18
+17	16.00	frame_0017_00-16.png	74.82	45.83	-4.38	0.11	0.07	ankleProxy	175.62	-174.18	10.20	77.34	0.02
+18	17.00	frame_0018_00-17.png	74.82	45.83	-4.38	0.11	0.07	ankleProxy	175.62				0.02
+19	18.00	frame_0019_00-18.png	74.82	45.83	-4.38	0.11	0.07	ankleProxy	175.62				0.02
+20	19.00	frame_0020_00-19.png	74.82	45.83	-4.38	0.11	0.07	ankleProxy	175.62				0.02
+21	20.00	frame_0021_00-20.png	74.82	45.83	-4.38	0.11	0.07	ankleProxy	175.62				0.02
+22	21.00	frame_0022_00-21.png											
+23	22.00	frame_0023_00-22.png											
+24	23.00	frame_0024_00-23.png											
+25	24.00	frame_0025_00-24.png											

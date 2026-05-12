@@ -2,14 +2,88 @@ import Foundation
 
 // MARK: - 通用工具函数
 
+// MARK: - 通用数学工具
+
 /// 将值限制在 [lower, upper] 范围内
-/// - Parameters:
-///   - value: 输入值
-///   - lower: 下限（默认 0）
-///   - upper: 上限（默认 100）
-/// - Returns: 限制后的值
 public func clamp(_ value: Double, lower: Double = 0, upper: Double = 100) -> Double {
     min(max(value, lower), upper)
+}
+
+/// 线性映射：将输入值从 [inMin, inMax] 映射到 [outMin, outMax]，超出范围的值会被钳位
+public func linearMap(_ value: Double, inMin: Double, inMax: Double, outMin: Double, outMax: Double) -> Double {
+    guard inMax != inMin else { return (outMin + outMax) / 2 }
+    let clamped = clamp(value, lower: min(inMin, inMax), upper: max(inMin, inMax))
+    let ratio = (clamped - inMin) / (inMax - inMin)
+    return outMin + ratio * (outMax - outMin)
+}
+
+/// 算术平均
+public func average(_ values: [Double]) -> Double {
+    guard !values.isEmpty else { return 0 }
+    return values.reduce(0, +) / Double(values.count)
+}
+
+/// 加权平均（值和权重配对）
+public func weightedAverage(_ values: [(value: Double, weight: Double)]) -> Double {
+    let totalWeight = values.map(\.weight).reduce(0, +)
+    guard totalWeight > 0 else { return 0 }
+    return values.map { $0.value * $0.weight }.reduce(0, +) / totalWeight
+}
+
+/// 加权置信度
+public func weightedConfidence(_ values: [(confidence: Double, weight: Double)]) -> Double {
+    let totalWeight = values.map(\.weight).reduce(0, +)
+    guard totalWeight > 0 else { return 0 }
+    return values.map { $0.confidence * $0.weight }.reduce(0, +) / totalWeight
+}
+
+/// 加权标准差
+public func weightedStandardDeviation(
+    _ values: [(value: Double, weight: Double)],
+    mean: Double
+) -> Double {
+    let totalWeight = values.map(\.weight).reduce(0, +)
+    guard totalWeight > 0 else { return 0 }
+    let variance = values.map { pow($0.value - mean, 2) * $0.weight }.reduce(0, +) / totalWeight
+    return sqrt(variance)
+}
+
+/// 将角度归一化到 [-180, 180) 范围
+public func normalizeAngle(_ angle: Double) -> Double {
+    var normalized = angle.truncatingRemainder(dividingBy: 360)
+    if normalized >= 180 {
+        normalized -= 360
+    } else if normalized < -180 {
+        normalized += 360
+    }
+    return normalized
+}
+
+/// 从时间戳序列估算中位采样间隔
+public func medianSampleInterval(_ times: [Double]) -> Double {
+    let deltas = zip(times.dropFirst(), times).map { max($0 - $1, 0) }.filter { $0 > 0 }
+    guard !deltas.isEmpty else { return 1 }
+    let sorted = deltas.sorted()
+    return sorted[sorted.count / 2]
+}
+
+/// 根据采样时间戳估算这些样本覆盖的真实时长。
+///
+/// 例如 5fps 下 20 个连续样本的时间戳跨度是 3.8 秒，但覆盖时长应按
+/// 3.8 + 0.2 = 4.0 秒计算。
+public func sampledDuration(fromTimes times: [Double]) -> Double {
+    let sorted = times.sorted()
+    guard let first = sorted.first, let last = sorted.last else { return 0 }
+    let interval = medianSampleInterval(sorted)
+    return max(last - first + interval, interval)
+}
+
+/// 将秒数格式化为 "MM:SS" 字符串
+public func formatTime(_ seconds: Double) -> String {
+    let total = Int(seconds)
+    let mins = total / 60
+    let secs = total % 60
+    return String(format: "%02d:%02d", mins, secs)
 }
 
 // MARK: - 可靠性阈值
@@ -25,11 +99,32 @@ public enum AnalysisReliability {
     /// 低于该置信度的滑雪派生指标不参与“问题帧/最佳帧”判断。
     public static let minimumSkiMetricConfidence = 0.35
 
-    /// 少于该数量的可靠帧时，不输出高光片段，避免把几帧偶然高分包装成最佳片段。
-    public static let minimumHighlightFrameCount = 8
+    /// 少于该时长的可靠片段不输出高光，避免高采样率下把短暂偶然高分包装成最佳片段。
+    public static let minimumHighlightDuration = 8.0
+
+    /// 可靠评分片段很短时的强封顶阈值，单位秒。
+    public static let sparseReliableScoreDuration = 5.0
+
+    /// 可靠评分片段偏短时的中等封顶阈值，单位秒。
+    public static let limitedReliableScoreDuration = 8.0
+
+    /// 达到该可靠评分时长后，才认为片段长度足以完整评分，单位秒。
+    public static let fullReliableScoreDuration = 12.0
 
     /// 板身/运动方向证据低于该置信度时，不能用姿态单帧把综合分或高光推高。
     public static let minimumBoardKinematicConfidenceForHighScore = 0.15
+
+    /// 高横滑封顶至少需要该持续时长的运动学证据，避免高采样率下的一小段误判。
+    public static let minimumBoardKinematicDurationForHighScore = 3.0
+
+    /// 短片段的低板身置信度才触发保守封顶；长片段中脚踝代理可能因视角失效。
+    public static let shortClipBoardEvidenceDuration = 10.0
+
+    /// 稳定刻滑基线至少需要的可靠评分覆盖时长，单位秒。
+    public static let minimumStableCarvingReliableDuration = 12.0
+
+    /// 稳定刻滑平台至少需要持续的时长，单位秒。
+    public static let minimumStableCarvingPlateauDuration = 5.0
 
     /// 板身方向与滑行方向夹角小于等于该值时，才认为有明确沿板身移动证据。
     public static let alignedBoardTravelAngle = 15.0
@@ -54,7 +149,7 @@ public enum AnalysisReliability {
 /// 就只能说明“不足以支持高分/高光”，而不应把一两帧姿态当作真实刻滑证据。
 public func hasInsufficientBoardKinematicEvidenceForHighScore(from frames: [DetectionResult]) -> Bool {
     // 先只约束短片段：长片段里的低姿态刻滑可能让脚踝代理失效，但不能因此误伤好样本。
-    guard reliablePoseFrames(from: frames).count < 10 else { return false }
+    guard reliablePoseDuration(from: frames) < AnalysisReliability.shortClipBoardEvidenceDuration else { return false }
 
     guard let summary = BoardDirectionAnalyzer.analyze(frames: frames).summary,
           summary.averageSideslipAngle != nil else {
@@ -69,15 +164,23 @@ public func hasInsufficientBoardKinematicEvidenceForHighScore(from frames: [Dete
 /// 核心逻辑：板身方向由左右脚踝连线代理，滑行方向由连续帧身体/脚踝中心位移估计。
 /// 两者夹角越大，越接近横滑、推坡或搓雪，不能把单帧姿态解释为高质量刻滑。
 public func boardKinematicHighScoreCap(from frames: [DetectionResult]) -> Double? {
-    guard let summary = BoardDirectionAnalyzer.analyze(frames: frames).summary,
+    let analysis = BoardDirectionAnalyzer.analyze(frames: frames)
+    guard let summary = analysis.summary,
           let sideslip = summary.averageSideslipAngle else {
         return nil
     }
 
     if summary.confidence < AnalysisReliability.minimumBoardKinematicConfidenceForHighScore {
-        return reliablePoseFrames(from: frames).count < 10
+        return reliablePoseDuration(from: frames) < AnalysisReliability.shortClipBoardEvidenceDuration
             ? AnalysisReliability.lowBoardEvidenceScoreCap
             : nil
+    }
+
+    let kinematicDuration = sampledDuration(fromTimes: analysis.frames.compactMap { frame in
+        frame.kinematics == nil ? nil : frame.time
+    })
+    guard kinematicDuration >= AnalysisReliability.minimumBoardKinematicDurationForHighScore else {
+        return nil
     }
 
     if sideslip >= AnalysisReliability.dominantSideslipAngle {
@@ -90,11 +193,16 @@ public func boardKinematicHighScoreCap(from frames: [DetectionResult]) -> Double
 }
 
 public func hasHighSideslipEvidenceForHighScore(from frames: [DetectionResult]) -> Bool {
-    guard let summary = BoardDirectionAnalyzer.analyze(frames: frames).summary,
+    let analysis = BoardDirectionAnalyzer.analyze(frames: frames)
+    guard let summary = analysis.summary,
           let sideslip = summary.averageSideslipAngle else {
         return false
     }
-    return summary.confidence >= AnalysisReliability.minimumBoardKinematicConfidenceForHighScore
+    let kinematicDuration = sampledDuration(fromTimes: analysis.frames.compactMap { frame in
+        frame.kinematics == nil ? nil : frame.time
+    })
+    return kinematicDuration >= AnalysisReliability.minimumBoardKinematicDurationForHighScore
+        && summary.confidence >= AnalysisReliability.minimumBoardKinematicConfidenceForHighScore
         && sideslip >= AnalysisReliability.highSideslipAngle
 }
 
@@ -146,6 +254,10 @@ public func reliablePoseScores(from frames: [DetectionResult]) -> [PoseScore] {
     reliablePoseFrames(from: frames).compactMap(\.poseScore)
 }
 
+public func reliablePoseDuration(from frames: [DetectionResult]) -> Double {
+    sampledDuration(fromTimes: reliablePoseFrames(from: frames).map(\.time))
+}
+
 /// 用小腿倾斜分作为当前 2D 姿态管线里的持续立刃证据代理。
 /// 返回 nil 表示没有足够置信度的数据，不应据此下结论。
 public func averageEdgeEvidenceScore(from frames: [DetectionResult]) -> Double? {
@@ -166,13 +278,15 @@ public func stableCarvingBaseline(
 ) -> StableCarvingBaseline? {
     let reliableFrames = reliablePoseFrames(from: frames)
         .sorted { $0.time < $1.time }
-    guard reliableFrames.count >= 12, motionStability >= 85 else { return nil }
+    guard reliablePoseDuration(from: frames) >= AnalysisReliability.minimumStableCarvingReliableDuration,
+          motionStability >= 85 else { return nil }
 
     let entries = reliableFrames.compactMap { frame -> (frame: DetectionResult, score: Double, weight: Double)? in
         guard let poseScore = frame.poseScore else { return nil }
         return (frame, poseScore.totalScore, max(0.01, poseScore.totalConfidence))
     }
-    guard entries.count >= 12 else { return nil }
+    let totalDuration = sampledDuration(fromTimes: entries.map { $0.frame.time })
+    guard totalDuration >= AnalysisReliability.minimumStableCarvingReliableDuration else { return nil }
 
     let rawAverage = weightedAverage(entries.map { ($0.score, $0.weight) })
     let bestScore = entries.map(\.score).max() ?? 0
@@ -197,20 +311,13 @@ public func stableCarvingBaseline(
         plateaus.append(current)
     }
 
-    guard let plateau = plateaus.max(by: { $0.count < $1.count }),
-          plateau.count >= 5 else {
+    guard let plateau = plateaus.max(by: { $0.count < $1.count }) else {
         return nil
     }
 
-    let sampleInterval = medianSampleInterval(entries.map { $0.frame.time })
-    let totalDuration = max(
-        (entries.last?.frame.time ?? 0) - (entries.first?.frame.time ?? 0) + sampleInterval,
-        sampleInterval
-    )
-    let plateauDuration = max(
-        (plateau.last?.frame.time ?? 0) - (plateau.first?.frame.time ?? 0) + sampleInterval,
-        sampleInterval
-    )
+    let plateauDuration = sampledDuration(fromTimes: plateau.map { $0.frame.time })
+    guard plateauDuration >= AnalysisReliability.minimumStableCarvingPlateauDuration else { return nil }
+
     let coverage = plateauDuration / totalDuration
     guard coverage >= 0.18 else { return nil }
 
@@ -225,17 +332,4 @@ public func stableCarvingBaseline(
         plateauFrameCount: plateau.count,
         plateauCoverage: coverage
     )
-}
-
-private func weightedAverage(_ values: [(value: Double, weight: Double)]) -> Double {
-    let totalWeight = values.map(\.weight).reduce(0, +)
-    guard totalWeight > 0 else { return 0 }
-    return values.map { $0.value * $0.weight }.reduce(0, +) / totalWeight
-}
-
-private func medianSampleInterval(_ times: [Double]) -> Double {
-    let deltas = zip(times.dropFirst(), times).map { max($0 - $1, 0) }.filter { $0 > 0 }
-    guard !deltas.isEmpty else { return 1 }
-    let sorted = deltas.sorted()
-    return sorted[sorted.count / 2]
 }
