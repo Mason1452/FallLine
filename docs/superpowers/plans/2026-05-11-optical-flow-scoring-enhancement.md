@@ -14,18 +14,18 @@
 
 | File | Role |
 |------|------|
-| `Sources/VideoVisionCore/FlowMetricsCalculator.swift` | **New** — Flow computation, 3-metric derivation, modulation formula |
-| `Sources/VideoVisionCore/VideoAnalyzer.swift` | Frame cache during analyze(), computeFlowMetrics(), modulation in generateSummary() |
-| `Sources/VideoVisionCore/Models.swift` | 3 optional flow fields in VideoSummary |
-| `Sources/VideoVisionCore/ReportGenerator.swift` | Display flow metrics in tech section of report |
-| `Tests/VideoVisionCoreTests/FlowMetricsCalculatorTests.swift` | **New** — Unit tests for metrics and modulation |
+| `Sources/FallLineCore/FlowMetricsCalculator.swift` | **New** — Flow computation, 3-metric derivation, modulation formula |
+| `Sources/FallLineCore/VideoAnalyzer.swift` | Frame cache during analyze(), computeFlowMetrics(), modulation in generateSummary() |
+| `Sources/FallLineCore/Models.swift` | 3 optional flow fields in VideoSummary |
+| `Sources/FallLineCore/ReportGenerator.swift` | Display flow metrics in tech section of report |
+| `Tests/FallLineCoreTests/FlowMetricsCalculatorTests.swift` | **New** — Unit tests for metrics and modulation |
 
 ---
 
 ### Task 1: FlowMetrics data model + modulation formula
 
 **Files:**
-- Create: `Sources/VideoVisionCore/FlowMetricsCalculator.swift`
+- Create: `Sources/FallLineCore/FlowMetricsCalculator.swift`
 
 - [ ] **Step 1: Create the file with FlowMetrics struct and FlowMetricsCalculator skeleton**
 
@@ -335,7 +335,7 @@ Expected: Build succeeds (the file won't be linked yet since it's not referenced
 - [ ] **Step 3: Commit**
 
 ```bash
-git add Sources/VideoVisionCore/FlowMetricsCalculator.swift
+git add Sources/FallLineCore/FlowMetricsCalculator.swift
 git commit -m "feat: add FlowMetricsCalculator with flow metrics model and modulation formula"
 ```
 
@@ -344,13 +344,13 @@ git commit -m "feat: add FlowMetricsCalculator with flow metrics model and modul
 ### Task 2: Unit tests for FlowMetricsCalculator
 
 **Files:**
-- Create: `Tests/VideoVisionCoreTests/FlowMetricsCalculatorTests.swift`
+- Create: `Tests/FallLineCoreTests/FlowMetricsCalculatorTests.swift`
 
 - [ ] **Step 1: Write the test file**
 
 ```swift
 import XCTest
-@testable import VideoVisionCore
+@testable import FallLineCore
 
 final class FlowMetricsCalculatorTests: XCTestCase {
 
@@ -511,7 +511,7 @@ Expected: All 15 tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add Tests/VideoVisionCoreTests/FlowMetricsCalculatorTests.swift
+git add Tests/FallLineCoreTests/FlowMetricsCalculatorTests.swift
 git commit -m "test: add FlowMetricsCalculator unit tests for modulation formula and edge cases"
 ```
 
@@ -520,11 +520,11 @@ git commit -m "test: add FlowMetricsCalculator unit tests for modulation formula
 ### Task 3: Extend VideoSummary in Models.swift
 
 **Files:**
-- Modify: `Sources/VideoVisionCore/Models.swift:703-729`
+- Modify: `Sources/FallLineCore/Models.swift:703-729`
 
 - [ ] **Step 1: Add optional flow fields to VideoSummary**
 
-Open `Sources/VideoVisionCore/Models.swift` and find `public struct VideoSummary: Codable {` around line 703. Add three new fields after `overallLevel`:
+Open `Sources/FallLineCore/Models.swift` and find `public struct VideoSummary: Codable {` around line 703. Add three new fields after `overallLevel`:
 
 ```swift
 // In VideoSummary struct, after:
@@ -602,7 +602,7 @@ Expected: Build succeeds.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add Sources/VideoVisionCore/Models.swift
+git add Sources/FallLineCore/Models.swift
 git commit -m "feat: add optional optical flow metrics fields to VideoSummary"
 ```
 
@@ -611,7 +611,7 @@ git commit -m "feat: add optional optical flow metrics fields to VideoSummary"
 ### Task 4: Integrate frame cache and flow computation in VideoAnalyzer
 
 **Files:**
-- Modify: `Sources/VideoVisionCore/VideoAnalyzer.swift`
+- Modify: `Sources/FallLineCore/VideoAnalyzer.swift`
 
 - [ ] **Step 1: Add frame cache property**
 
@@ -751,7 +751,7 @@ Expected: Build succeeds.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add Sources/VideoVisionCore/VideoAnalyzer.swift
+git add Sources/FallLineCore/VideoAnalyzer.swift
 git commit -m "feat: integrate optical flow frame cache and modulation into VideoAnalyzer"
 ```
 
@@ -760,7 +760,7 @@ git commit -m "feat: integrate optical flow frame cache and modulation into Vide
 ### Task 5: Update CLI main.swift for async generateSummary
 
 **Files:**
-- Modify: `Sources/VideoVisionCLI/main.swift:73`
+- Modify: `Sources/FallLineCLI/main.swift:73`
 
 - [ ] **Step 1: Add await to generateSummary call**
 
@@ -789,7 +789,7 @@ Expected: Build succeeds.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add Sources/VideoVisionCLI/main.swift
+git add Sources/FallLineCLI/main.swift
 git commit -m "fix: add await to generateSummary call for async flow computation"
 ```
 
@@ -798,7 +798,7 @@ git commit -m "fix: add await to generateSummary call for async flow computation
 ### Task 6: Display flow metrics in report
 
 **Files:**
-- Modify: `Sources/VideoVisionCore/ReportGenerator.swift`
+- Modify: `Sources/FallLineCore/ReportGenerator.swift`
 
 - [ ] **Step 1: Add flow metrics to ReportContext**
 
@@ -869,7 +869,7 @@ Expected: Build succeeds.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Sources/VideoVisionCore/ReportGenerator.swift
+git add Sources/FallLineCore/ReportGenerator.swift
 git commit -m "feat: display optical flow metrics in report tech section"
 ```
 
@@ -908,7 +908,7 @@ for group in bad good middle root; do
   for video in video/$group/*.{MP4,MOV,mp4,mov}; do
     [ -f "$video" ] || continue
     echo "Processing: $video"
-    swift run VideoVisionCLI "$video" --json > "outputs/flow_modulation_test_20260511/$(basename "$video").json" 2>/dev/null
+    swift run FallLineCLI "$video" --json > "outputs/flow_modulation_test_20260511/$(basename "$video").json" 2>/dev/null
   done
 done
 ```

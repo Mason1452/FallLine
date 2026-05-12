@@ -1,5 +1,5 @@
 import XCTest
-@testable import VideoVisionCore
+@testable import FallLineCore
 
 final class BoardDirectionAnalyzerTests: XCTestCase {
 

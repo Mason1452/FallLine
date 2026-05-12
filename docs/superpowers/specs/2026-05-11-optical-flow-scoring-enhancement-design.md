@@ -213,8 +213,8 @@ public let flowVelocitySmoothness: Double?
 
 | File | Change |
 |------|--------|
-| `Sources/VideoVisionCore/FlowMetricsCalculator.swift` | **New** |
-| `Sources/VideoVisionCore/VideoAnalyzer.swift` | Frame cache + computeFlowMetrics + modulation call |
-| `Sources/VideoVisionCore/Models.swift` | 3 optional fields in VideoSummary |
-| `Sources/VideoVisionCore/ReportGenerator.swift` | Display flow metrics in tech section |
-| `Tests/VideoVisionCoreTests/FlowMetricsCalculatorTests.swift` | **New** |
+| `Sources/FallLineCore/FlowMetricsCalculator.swift` | **New** |
+| `Sources/FallLineCore/VideoAnalyzer.swift` | Frame cache + computeFlowMetrics + modulation call |
+| `Sources/FallLineCore/Models.swift` | 3 optional fields in VideoSummary |
+| `Sources/FallLineCore/ReportGenerator.swift` | Display flow metrics in tech section |
+| `Tests/FallLineCoreTests/FlowMetricsCalculatorTests.swift` | **New** |

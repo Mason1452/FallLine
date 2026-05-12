@@ -5,7 +5,7 @@ import PackageDescription
 ///
 /// 构建方式：
 ///   1. Xcode: 在项目设置中添加本地 Swift Package 依赖（路径: ../），
-///      然后删除 SkiAnaylze/Sources/ 下与 VideoVisionCore 重复的 8 个文件
+///      然后删除 SkiAnaylze/Sources/ 下与 FallLineCore 重复的 8 个文件
 ///   2. 命令行: 执行 scripts/setup_ios.sh 自动完成上述步骤
 ///
 /// 注意: 此 Package.swift 仅用于声明依赖关系。
@@ -23,7 +23,7 @@ let package = Package(
         .target(
             name: "SkiAnaylze",
             dependencies: [
-                .product(name: "VideoVisionCore", package: "VideoVision")
+                .product(name: "FallLineCore", package: "FallLine")
             ],
             path: "SkiAnaylze",
             exclude: ["Sources"]

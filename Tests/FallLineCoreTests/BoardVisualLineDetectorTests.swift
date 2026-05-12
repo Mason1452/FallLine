@@ -1,6 +1,6 @@
 import CoreGraphics
 import XCTest
-@testable import VideoVisionCore
+@testable import FallLineCore
 
 final class BoardVisualLineDetectorTests: XCTestCase {
 

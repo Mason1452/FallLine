@@ -1,5 +1,5 @@
 import XCTest
-@testable import VideoVisionCore
+@testable import FallLineCore
 
 // MARK: - 边界情况测试
 

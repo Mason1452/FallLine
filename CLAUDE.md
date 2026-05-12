@@ -6,8 +6,8 @@
 
 ```bash
 swift build -c release          # Build CLI (macOS)
-swift run VideoVisionCLI <video> # Run analysis → JSON + Markdown report
-swift run VideoVisionCLI --debug-overlay <video>  # + per-frame debug PNGs
+swift run FallLineCLI <video> # Run analysis → JSON + Markdown report
+swift run FallLineCLI --debug-overlay <video>  # + per-frame debug PNGs
 swift test                       # 88 tests
 swift test --filter <TestName>
 swift test 2>&1 | tail -5        # Summary only
@@ -15,11 +15,11 @@ swift test 2>&1 | tail -5        # Summary only
 
 ## Project architecture
 
-VideoVision analyzes ski posture from video using Apple Vision. macOS 14+.
+FallLine analyzes ski posture from video using Apple Vision. macOS 14+.
 
-- **VideoVisionCore** — 15 source files
-- **VideoVisionCLI** — macOS CLI, depends on VideoVisionCore
-- **VideoVisionCoreTests** — 11 test files
+- **FallLineCore** — 15 source files
+- **FallLineCLI** — macOS CLI, depends on FallLineCore
+- **FallLineCoreTests** — 11 test files
 - `SkiAnaylze/` — iOS app with duplicated core code (known debt, not in SwiftPM workspace)
 
 ## Analysis pipeline
@@ -57,7 +57,7 @@ Post-processing in generateSummary():
 
 ## Code duplication
 
-`SkiAnaylze/SkiAnaylze/Sources/` has 8 files duplicated from VideoVisionCore/. `SkiAnaylze/Package.swift` declares the dependency but Xcode project not updated. See REFACTOR_PLAN.md Phase 2. Utilities already consolidated (2026-05-06).
+`SkiAnaylze/SkiAnaylze/Sources/` has 8 files duplicated from FallLineCore/. `SkiAnaylze/Package.swift` declares the dependency but Xcode project not updated. See REFACTOR_PLAN.md Phase 2. Utilities already consolidated (2026-05-06).
 
 ## Scoring thresholds
 

@@ -1,4 +1,4 @@
-# VideoVision Work Log
+# FallLine Work Log
 
 ## Current State (2026-05-12)
 
@@ -50,12 +50,12 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 
 ## Important Files
 
-- `Sources/VideoVisionCore/FlowMetricsCalculator.swift` — Phase 1 光流
-- `Sources/VideoVisionCore/VideoAnalyzer.swift` — 管线编排
-- `Sources/VideoVisionCore/Models.swift` — 数据结构
-- `Sources/VideoVisionCore/ReportGenerator.swift` — 报告生成
-- `Sources/VideoVisionCore/BoardDirectionAnalyzer.swift` — 板身判断
-- `Tests/VideoVisionCoreTests/FlowMetricsCalculatorTests.swift` — 19 tests
+- `Sources/FallLineCore/FlowMetricsCalculator.swift` — Phase 1 光流
+- `Sources/FallLineCore/VideoAnalyzer.swift` — 管线编排
+- `Sources/FallLineCore/Models.swift` — 数据结构
+- `Sources/FallLineCore/ReportGenerator.swift` — 报告生成
+- `Sources/FallLineCore/BoardDirectionAnalyzer.swift` — 板身判断
+- `Tests/FallLineCoreTests/FlowMetricsCalculatorTests.swift` — 19 tests
 - `docs/superpowers/specs/2026-05-11-optical-flow-scoring-enhancement-design.md`
 - `docs/superpowers/plans/2026-05-11-optical-flow-scoring-enhancement.md`
 - `outputs/all_video_scores_20260511_224820/score_summary.tsv`

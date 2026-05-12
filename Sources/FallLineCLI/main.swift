@@ -1,6 +1,6 @@
 import Foundation
 import AVFoundation
-import VideoVisionCore
+import FallLineCore
 
 struct CLIOptions {
     let videoPath: String
@@ -9,10 +9,10 @@ struct CLIOptions {
 }
 
 func printUsage() {
-    print("用法: swift run VideoVision <视频路径>")
-    print("  例: swift run VideoVision 1.MP4")
-    print("  调试覆盖图: swift run VideoVisionCLI --debug-overlay 1.MP4")
-    print("  指定输出目录: swift run VideoVisionCLI --debug-overlay --debug-overlay-dir /tmp/debug_frames 1.MP4")
+    print("用法: swift run FallLineCLI <视频路径>")
+    print("  例: swift run FallLineCLI 1.MP4")
+    print("  调试覆盖图: swift run FallLineCLI --debug-overlay 1.MP4")
+    print("  指定输出目录: swift run FallLineCLI --debug-overlay --debug-overlay-dir /tmp/debug_frames 1.MP4")
 }
 
 func parseOptions(arguments: [String]) -> CLIOptions? {
@@ -57,7 +57,7 @@ let videoPath = options.videoPath
 
 let separator = String(repeating: "=", count: 50)
 print(separator)
-print("  🎬 VideoVision - Apple Vision 视频分析工具")
+print("  🎬 FallLine - Apple Vision 视频分析工具")
 print("  📌 专注滑雪姿态分析")
 print(separator)
 print()
