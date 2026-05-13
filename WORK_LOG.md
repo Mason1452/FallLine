@@ -1,10 +1,14 @@
 # FallLine Work Log
 
-## Current State (2026-05-12)
+## Current State (2026-05-13)
 
 **代码已提交到 `feature/optical-flow-phase1` 分支**，88 tests 全通过，`swift build -c release` 通过。
 
 **未验证**：光流调制在真实视频上的效果。需要批量跑 49 个视频对比调制前后分数。
+
+**文档补充**：新增中文版 `file_manifest.md` 作为项目文件索引，按源代码、测试、iOS App、文档、脚本、样本视频与生成产物分组说明。
+
+**增量记录**：新增 `delta_update.md`，后续每轮结束只记录本轮变化，不重复全量项目背景。
 
 **最新批量基线**：`outputs/all_video_scores_20260511_224820/` — bad=57.6, good=74.7, middle=66.4, testvideo=64.7, 全体 67.1。含光流三项指标和 Ablation Scores。
 
@@ -40,6 +44,10 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 - Phase 1 光流增强：FlowMetricsCalculator + 帧缓存 + async generateSummary + 调制集成
 - sampleInterval 1.0→0.2s，帧数阈值→时长阈值
 - 评分拆解字段 + 报告拆解行
+- 新增 `file_manifest.md`，用于快速定位项目文件与产物目录
+- 将新增文件索引及引用说明改为中文
+- 新增 `delta_update.md`，约束每轮结束只记录增量变化
+- 统一使用 `delta_update.md` 作为增量记录文件名
 - 88 tests, 0 failures
 
 ## Next Steps
@@ -58,4 +66,6 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 - `Tests/FallLineCoreTests/FlowMetricsCalculatorTests.swift` — 19 tests
 - `docs/superpowers/specs/2026-05-11-optical-flow-scoring-enhancement-design.md`
 - `docs/superpowers/plans/2026-05-11-optical-flow-scoring-enhancement.md`
+- `delta_update.md` — 每轮增量变化记录
+- `file_manifest.md` — 项目文件索引
 - `outputs/all_video_scores_20260511_224820/score_summary.tsv`

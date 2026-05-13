@@ -71,6 +71,8 @@ Empirical, not experimental. Calibration anchors in `annotations/calibration_anc
 
 ## Reading guide
 
+- **增量记录**：`delta_update.md` — 每轮结束只记录本轮变化、验证和遗留问题，不重讲全量项目
+- **文件索引**：`file_manifest.md` — 源码、测试、iOS App、文档、脚本和生成产物清单
 - **Pipeline**: `VideoAnalyzer.swift`, `main.swift`
 - **Flow**: `FlowMetricsCalculator.swift` (compute, computeModulation, applyModulation)
 - **Models**: `Models.swift` — read by keyword, not whole file
