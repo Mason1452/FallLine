@@ -100,30 +100,29 @@ do {
     // 全视频平均滑雪指标
     let avgSkiMetrics = SkiMetricsCalculator.average(from: framesWithMetrics, stability: stability)
 
-    // 关键时刻
-    let keyMoments = KeyMomentDetector.detect(
+    // 关键时刻、高光片段、板身方向、转弯阶段四者独立，并发执行
+    async let keyMoments = KeyMomentDetector.detect(
         from: framesWithMetrics,
         duration: totalSeconds,
         summary: outputSummary
     )
 
-    // 高光片段
-    let highlightMoments = HighlightMomentDetector.detect(
+    async let highlightMoments = HighlightMomentDetector.detect(
         from: framesWithMetrics,
         summary: outputSummary
     )
 
-    // 板身方向与横滑分析
-    let boardAnalysis = BoardDirectionAnalyzer.analyze(frames: framesWithMetrics)
+    async let boardAnalysis = BoardDirectionAnalyzer.analyze(frames: framesWithMetrics)
 
-    // 转弯阶段分析
-    let turnAnalysis = TurnPhaseDetector.analyze(frames: framesWithMetrics)
+    async let turnAnalysis = TurnPhaseDetector.analyze(frames: framesWithMetrics)
 
-    // 重心阶段适配分析
+    let (km, hm, ba, ta) = await (keyMoments, highlightMoments, boardAnalysis, turnAnalysis)
+
+    // 重心阶段适配依赖转弯阶段分析结果
     let centerOfMassAnalysis = CenterOfMassFitCalculator.analyze(
         frames: framesWithMetrics,
         summary: outputSummary,
-        turnAnalysis: turnAnalysis
+        turnAnalysis: ta
     )
 
     // 构建完整输出
@@ -134,11 +133,11 @@ do {
         frames: framesWithMetrics,
         summary: outputSummary,
         skiMetrics: avgSkiMetrics,
-        keyMoments: keyMoments,
-        highlightMoments: highlightMoments,
+        keyMoments: km,
+        highlightMoments: hm,
         centerOfMassAnalysis: centerOfMassAnalysis,
-        boardAnalysis: boardAnalysis,
-        turnAnalysis: turnAnalysis
+        boardAnalysis: ba,
+        turnAnalysis: ta
     )
 
     // 输出到同名 JSON 文件（视频同目录）

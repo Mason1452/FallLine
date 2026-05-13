@@ -23,6 +23,11 @@ public class VideoAnalyzer {
     /// 最大帧尺寸。nil 表示使用视频原始分辨率
     private let maxFrameSize: CGSize?
 
+    /// 并行帧分析的批次大小
+    private let batchSize: Int
+    /// 光流缓存帧的最大尺寸，超过则下采样（nil = 不限制）
+    private let flowFrameMaxSize: CGSize?
+
     /// 光流分析用帧缓存（仅缓存姿态检测成功的帧）
     private var frameCache: [(image: CGImage, pose: BodyPoseData)] = []
 
@@ -33,17 +38,23 @@ public class VideoAnalyzer {
     ///   - sampleInterval: 采样间隔秒数（默认 0.2）
     ///   - maxFrameSize: 最大帧分辨率，nil 使用视频原始尺寸（默认 1920x1080）
     ///   - visionOptions: Vision 请求选项（默认仅姿态检测）
+    ///   - batchSize: 并行分析批次大小（默认 8）
+    ///   - flowFrameMaxSize: 光流缓存帧最大尺寸（默认 640x480）
     public init(
         videoURL: URL,
         pointConfidenceThreshold: VNConfidence = 0.3,
         sampleInterval: Double = 0.2,
         maxFrameSize: CGSize? = CGSize(width: 1920, height: 1080),
-        visionOptions: VisionAnalysisOptions = .skiAnalysis
+        visionOptions: VisionAnalysisOptions = .skiAnalysis,
+        batchSize: Int = 8,
+        flowFrameMaxSize: CGSize? = CGSize(width: 640, height: 480)
     ) {
         self.videoURL = videoURL
         self.asset = AVAsset(url: videoURL)
         self.sampleInterval = max(0.1, sampleInterval)
         self.maxFrameSize = maxFrameSize
+        self.batchSize = max(1, batchSize)
+        self.flowFrameMaxSize = flowFrameMaxSize
         self.frameAnalyzer = VisionFrameAnalyzer(options: visionOptions)
         self.metricsCalculator = PoseMetricsCalculator(pointConfidenceThreshold: pointConfidenceThreshold)
         self.poseScorer = PoseScorer()
@@ -75,40 +86,81 @@ public class VideoAnalyzer {
         }
 
         var currentTime: Double = 0.0
-        while currentTime < totalSeconds {
-            let time = CMTime(seconds: currentTime, preferredTimescale: 600)
+        var globalIndex = 0
 
-            do {
-                let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
-                let result = try await analyzeFrame(cgImage: cgImage, at: time)
-                results.append(result)
-                // 缓存姿态成功的帧用于后续光流分析
-                if result.bodyPose.detected && result.bodyPose.visibility != .none {
-                    frameCache.append((cgImage, result.bodyPose))
+        while currentTime < totalSeconds {
+            // 1. 批次内顺序提取帧（AVAssetImageGenerator 非线程安全）
+            var batch: [(index: Int, cgImage: CGImage, time: CMTime)] = []
+            for _ in 0..<batchSize where currentTime < totalSeconds {
+                let time = CMTime(seconds: currentTime, preferredTimescale: 600)
+                do {
+                    let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
+                    batch.append((globalIndex, cgImage, time))
+                } catch {
+                    results.append(DetectionResult(
+                        time: currentTime,
+                        objects: [], faces: [], textObservations: [], sceneClassifications: [],
+                        bodyPose: BodyPoseData(
+                            detected: false, visibility: .none,
+                            bodyLeanAngle: nil, leftBodyLeanAngle: nil, rightBodyLeanAngle: nil,
+                            leftKneeBendAngle: nil, rightKneeBendAngle: nil,
+                            leftCalfLeanAngle: nil, rightCalfLeanAngle: nil,
+                            centerOfGravity: nil
+                        ),
+                        poseScore: nil,
+                        error: "帧提取失败: \(error.localizedDescription)"
+                    ))
                 }
-            } catch {
-                // 单帧失败不中断整体流程，但记录错误信息
-                results.append(DetectionResult(
-                    time: currentTime,
-                    objects: [],
-                    faces: [],
-                    textObservations: [],
-                    sceneClassifications: [],
-                    bodyPose: BodyPoseData(
-                        detected: false, visibility: .none,
-                        bodyLeanAngle: nil, leftBodyLeanAngle: nil, rightBodyLeanAngle: nil,
-                        leftKneeBendAngle: nil, rightKneeBendAngle: nil,
-                        leftCalfLeanAngle: nil, rightCalfLeanAngle: nil,
-                        centerOfGravity: nil
-                    ),
-                    poseScore: nil,
-                    error: "帧提取或分析失败: \(error.localizedDescription)"
-                ))
+                currentTime += sampleInterval
+                globalIndex += 1
             }
 
-            currentTime += sampleInterval
-            let progress = min(currentTime / totalSeconds, 1.0)
-            progressHandler?(progress)
+            guard !batch.isEmpty else { continue }
+
+            // 2. 批次内并行分析
+            let batchResults: [(Int, DetectionResult)] = try await withThrowingTaskGroup(
+                of: (Int, DetectionResult).self
+            ) { group in
+                for item in batch {
+                    group.addTask {
+                        do {
+                            let result = try await self.analyzeFrame(cgImage: item.cgImage, at: item.time)
+                            return (item.index, result)
+                        } catch {
+                            return (item.index, DetectionResult(
+                                time: CMTimeGetSeconds(item.time),
+                                objects: [], faces: [], textObservations: [], sceneClassifications: [],
+                                bodyPose: BodyPoseData(
+                                    detected: false, visibility: .none,
+                                    bodyLeanAngle: nil, leftBodyLeanAngle: nil, rightBodyLeanAngle: nil,
+                                    leftKneeBendAngle: nil, rightKneeBendAngle: nil,
+                                    leftCalfLeanAngle: nil, rightCalfLeanAngle: nil,
+                                    centerOfGravity: nil
+                                ),
+                                poseScore: nil,
+                                error: "帧分析失败: \(error.localizedDescription)"
+                            ))
+                        }
+                    }
+                }
+                var collected: [(Int, DetectionResult)] = []
+                for try await pair in group {
+                    collected.append(pair)
+                }
+                return collected.sorted(by: { $0.0 < $1.0 })
+            }
+
+            // 3. 按时间顺序追加结果并更新帧缓存
+            for (index, result) in batchResults {
+                results.append(result)
+                if result.bodyPose.detected && result.bodyPose.visibility != .none,
+                   let item = batch.first(where: { $0.index == index }) {
+                    let cachedImage = downscaleImageForFlow(item.cgImage)
+                    frameCache.append((cachedImage, result.bodyPose))
+                }
+            }
+
+            progressHandler?(min(currentTime / totalSeconds, 1.0))
         }
 
         return results
@@ -202,7 +254,7 @@ public class VideoAnalyzer {
         let std = weightedStandardDeviation(scoreEntries.map { ($0.score, $0.confidence) }, mean: rawAvg)
         // 总分一致性只解释评分波动，不代表真实动作稳定性。
         let scoreConsistencyScore = clamp(100 - std * 10, lower: 0, upper: 100)
-        let stabilityScore = calculateMotionStability(from: results)
+        let stabilityScore = calculateMotionStability(from: reliableFrames)
         let stableBaseline = stableCarvingBaseline(from: results, motionStability: stabilityScore)
         let uncappedAverage = max(bestThirdAvg, stableBaseline?.adjustedAverageScore ?? 0)
         let techniqueCappedAverage = applyEdgeEvidenceCaps(
@@ -337,10 +389,8 @@ public class VideoAnalyzer {
     // MARK: - 动作稳定性
 
     /// 基于姿态指标的时间平滑度计算动作稳定性。
-    ///
-    /// 这个分数衡量相邻有效姿态帧之间的关键角度变化是否平滑，
-    /// 与 `scoreConsistencyScore` 区分开：后者只衡量总分波动。
-    private func calculateMotionStability(from results: [DetectionResult]) -> Double {
+    /// 入参为已过滤的可靠帧（由 generateSummary 预计算）。
+    private func calculateMotionStability(from reliableFrames: [DetectionResult]) -> Double {
         struct MotionSample {
             let time: Double
             let bodyLean: MetricWithConfidence<Double>?
@@ -351,7 +401,7 @@ public class VideoAnalyzer {
             let gravityLevel: MetricWithConfidence<Double>?
         }
 
-        let samples: [MotionSample] = reliablePoseFrames(from: results).compactMap { result in
+        let samples: [MotionSample] = reliableFrames.compactMap { result in
             guard result.bodyPose.detected, result.bodyPose.visibility != .minimal else {
                 return nil
             }
@@ -442,6 +492,23 @@ public class VideoAnalyzer {
         }
 
         return await calculator.compute(from: pairs)
+    }
+
+    // MARK: - 图像缩放
+
+    /// 按 flowFrameMaxSize 降采样图像，用于光流缓存。
+    /// nil 参数时直接返回原图。
+    private func downscaleImageForFlow(_ image: CGImage) -> CGImage {
+        guard let maxSize = flowFrameMaxSize else { return image }
+        let width = image.width
+        let height = image.height
+        guard width > Int(maxSize.width) || height > Int(maxSize.height) else { return image }
+
+        let ciImage = CIImage(cgImage: image)
+        let scale = min(maxSize.width / CGFloat(width), maxSize.height / CGFloat(height))
+        let filtered = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let context = CIContext()
+        return context.createCGImage(filtered, from: filtered.extent) ?? image
     }
 
     // MARK: - 工具
