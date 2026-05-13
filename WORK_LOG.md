@@ -2,15 +2,19 @@
 
 ## Current State (2026-05-13)
 
-**代码已提交到 `feature/optical-flow-phase1` 分支**，88 tests 全通过，`swift build -c release` 通过。
+**流水线性能优化已完成**，88 tests 全通过，`swift build -c release` 通过。
 
-**未验证**：光流调制在真实视频上的效果。需要批量跑 49 个视频对比调制前后分数。
+**优化内容**：
+- 批次并行帧分析（batchSize=8，TaskGroup 并发）
+- 帧缓存降采样（640x480，mem ~400MB → ~60MB）
+- main.swift 四个检测器 async let 并发
+- generateSummary 内 reliableFrames 缓存复用
 
-**文档补充**：新增中文版 `file_manifest.md` 作为项目文件索引，按源代码、测试、iOS App、文档、脚本、样本视频与生成产物分组说明。
+**未验证**：并行优化在真实视频上的加速效果，以及输出一致性。
 
-**增量记录**：新增 `delta_update.md`，后续每轮结束只记录本轮变化，不重复全量项目背景。
+**光流调制也未验证**：需要批量跑 49 个视频对比调制前后分数。
 
-**最新批量基线**：`outputs/all_video_scores_20260511_224820/` — bad=57.6, good=74.7, middle=66.4, testvideo=64.7, 全体 67.1。含光流三项指标和 Ablation Scores。
+**最新批量基线**：`outputs/all_video_scores_20260511_224820/` — bad=57.6, good=74.7, middle=66.4, testvideo=64.7, 全体 67.1。
 
 **沙箱**：`mcp__workspace__bash` 不可用。git/build/test 需用户在终端执行后贴结果。
 
@@ -26,6 +30,8 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 - `VideoSummary` 含评分拆解字段：rawPoseAverageScore → bestThirdAverageScore → evidenceCappedScore → flowModulationFactor → 最终分。报告显示拆解行。
 - `sampleInterval` 默认 0.2s（5fps），帧数阈值已改为时长阈值。
 - 板身判断用脚踝代理线；紫色图像候选线仅 debug，存在 near_board_false_positive 问题。
+- 帧分析改为批次并行（batchSize=8），AVAssetImageGenerator 非线程安全故提取串行、分析并行。
+- 帧缓存降采样至 640x480 再入光流，大幅降低内存。
 
 ## Existing Review Assets
 
@@ -49,23 +55,45 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 - 新增 `delta_update.md`，约束每轮结束只记录增量变化
 - 统一使用 `delta_update.md` 作为增量记录文件名
 - 88 tests, 0 failures
+- 流水线性能优化：并行帧分析 + 帧缓存降采样 + async let 并发后处理 + reliableFrames 缓存复用
+- CLAUDE.md 更新为启动时同时读取 WORK_LOG.md + file_manifest.md + delta_update.md
+
+## Recorded: 待优化点
+
+### 中优先级
+1. SkiAnaylze 代码重复 — 8 文件落后于 FallLineCore，`scripts/setup_ios_deps.sh` 写好删除逻辑
+2. 光流信号薄弱 — 只用髋+踝 2 关键点，circularVariance 硬编码边界未文档化
+3. 置信度阈值分散 — 五处各自定义（0.30/0.35/0.15/0.65），无单一来源
+4. ReportGenerator 种子溢出 — `abs(Int.min)` 可能崩溃
+5. 报告优势/问题阈值不对称 — 系统性负面偏见
+6. "重心旧分"与"重心阶段适配"并存 — 用户易困惑
+
+### 低优先级
+1. CI/CD 缺失 — 无 GitHub Actions、无 lint、无覆盖率
+2. 输出资产膨胀 — edge_debug_review/（399 MB）、misjudgment_review/（242 MB）
+3. 4 个过期批量跑分目录可清理
+4. TemporalSmoother 孤文档 — 设计已写但从未实现
+5. DebugOverlayRenderer.swift:115 唯一 `!` 强制解包
+6. 提交信息风格不一致
 
 ## Next Steps
 
 1. 批量跑 49 视频，对比光流调制前后分数，重点看变化 >5 分的
-2. 效果好 → merge 到 main；效果差 → 调参重跑
-3. 长期：Phase 2 光流纳入 PoseScorer 独立维度
+2. 同期验证并行优化的输出一致性（JSON/MD 与优化前对比）
+3. 效果好 → merge 到 main；效果差 → 调参重跑
+4. 长期：Phase 2 光流纳入 PoseScorer 独立维度
 
 ## Important Files
 
+- `Sources/FallLineCore/VideoAnalyzer.swift` — 管线编排（含批次并行 + 帧缓存降采样）
 - `Sources/FallLineCore/FlowMetricsCalculator.swift` — Phase 1 光流
-- `Sources/FallLineCore/VideoAnalyzer.swift` — 管线编排
+- `Sources/FallLineCLI/main.swift` — CLI 入口（含 async let 并发后处理）
 - `Sources/FallLineCore/Models.swift` — 数据结构
 - `Sources/FallLineCore/ReportGenerator.swift` — 报告生成
 - `Sources/FallLineCore/BoardDirectionAnalyzer.swift` — 板身判断
 - `Tests/FallLineCoreTests/FlowMetricsCalculatorTests.swift` — 19 tests
 - `docs/superpowers/specs/2026-05-11-optical-flow-scoring-enhancement-design.md`
 - `docs/superpowers/plans/2026-05-11-optical-flow-scoring-enhancement.md`
-- `delta_update.md` — 每轮增量变化记录
+- `delta_update.md` — 每轮增量变化记录（含中低优待办清单）
 - `file_manifest.md` — 项目文件索引
 - `outputs/all_video_scores_20260511_224820/score_summary.tsv`
