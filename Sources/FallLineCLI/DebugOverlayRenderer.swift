@@ -123,7 +123,10 @@ public struct DebugOverlayRenderer {
 
         let frames = analysis.frames.sorted { $0.time < $1.time }
         let boardFrames = analysis.boardAnalysis.frames.sorted { $0.time < $1.time }
-        let interval = medianSampleInterval(frames.map(\.time))
+
+        guard !frames.isEmpty else {
+            throw RenderError.noValidFrames
+        }
 
         guard let (outputWidth, outputHeight) = try await outputDimensions(
             generator: generator,
@@ -131,6 +134,19 @@ public struct DebugOverlayRenderer {
             maxDimension: maxDimension
         ) else {
             throw RenderError.noValidFrames
+        }
+
+        // Use original video frame rate, not analysis sample rate
+        let videoTrack = try await asset.loadTracks(withMediaType: .video).first
+        let nominalFPS = try await videoTrack?.load(.nominalFrameRate)
+        let originalFPS = Double(nominalFPS ?? 30)
+        let frameDuration = 1.0 / max(originalFPS, 1.0)
+        let videoDuration = CMTimeGetSeconds(try await asset.load(.duration))
+        let totalFrames = max(1, Int(videoDuration * originalFPS))
+
+        // Remove existing file so writer can create a fresh one
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            try FileManager.default.removeItem(at: outputURL)
         }
 
         let writer = try AVAssetWriter(url: outputURL, fileType: .mp4)
@@ -163,18 +179,17 @@ public struct DebugOverlayRenderer {
         writer.startSession(atSourceTime: .zero)
 
         var frameCount = 0
-        let frameDuration = CMTime(
-            seconds: interval > 0 ? interval : 0.2,
-            preferredTimescale: 600
-        )
+        let ptsDuration = CMTime(seconds: frameDuration, preferredTimescale: 600)
 
-        for frame in frames {
+        for i in 0..<totalFrames {
             guard writerInput.isReadyForMoreMediaData else {
                 try await Task.sleep(nanoseconds: 10_000_000)
                 continue
             }
 
-            let time = CMTime(seconds: frame.time, preferredTimescale: 600)
+            let seconds = Double(i) * frameDuration
+            let time = CMTime(seconds: seconds, preferredTimescale: 600)
+
             let cgImage: CGImage
             do {
                 cgImage = try generator.copyCGImage(at: time, actualTime: nil)
@@ -182,15 +197,13 @@ public struct DebugOverlayRenderer {
                 continue
             }
 
-            let boardFrame = nearestBoardFrame(
-                to: frame.time,
-                in: boardFrames,
-                tolerance: max(interval * 0.75, 0.55)
-            )
+            // Nearest analysis data for every original frame
+            let nearestFrame = findNearestFrame(to: seconds, in: frames)
+            let boardFrame = findNearestBoardFrame(to: seconds, in: boardFrames)
 
             let bitmap = renderOverlay(
                 image: cgImage,
-                frame: frame,
+                frame: nearestFrame,
                 boardFrame: boardFrame,
                 summary: analysis.summary
             )
@@ -199,7 +212,7 @@ public struct DebugOverlayRenderer {
                 continue
             }
 
-            let pts = CMTimeMultiply(frameDuration, multiplier: Int32(frameCount))
+            let pts = CMTimeMultiply(ptsDuration, multiplier: Int32(frameCount))
             adaptor.append(pixelBuffer, withPresentationTime: pts)
             frameCount += 1
         }
@@ -211,11 +224,10 @@ public struct DebugOverlayRenderer {
             throw RenderError.writerFailed(writer.error)
         }
 
-        let duration = Double(frameCount) * CMTimeGetSeconds(frameDuration)
         return RenderVideoResult(
             outputURL: outputURL,
             frameCount: frameCount,
-            duration: duration
+            duration: Double(frameCount) * frameDuration
         )
     }
 }
@@ -572,6 +584,20 @@ private extension DebugOverlayRenderer {
             .filter { $0.distance <= tolerance }
             .min { $0.distance < $1.distance }?
             .frame
+    }
+
+    static func findNearestFrame(
+        to time: Double,
+        in frames: [DetectionResult]
+    ) -> DetectionResult {
+        frames.min { abs($0.time - time) < abs($1.time - time) } ?? frames[0]
+    }
+
+    static func findNearestBoardFrame(
+        to time: Double,
+        in frames: [BoardFrameAnalysis]
+    ) -> BoardFrameAnalysis? {
+        frames.min { abs($0.time - time) < abs($1.time - time) }
     }
 
     static func clearExistingDebugFiles(in directory: URL) throws {
