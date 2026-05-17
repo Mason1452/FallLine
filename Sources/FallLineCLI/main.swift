@@ -181,6 +181,21 @@ do {
         print("✅ 调试覆盖图已保存至: \(overlayResult.outputDirectory.path)")
         print("   帧数: \(overlayResult.frameCount) · manifest: \(overlayResult.manifestURL.path)")
     }
+
+    if options.outputVideo {
+        let videoDir = videoURL.deletingLastPathComponent()
+        let baseName = videoURL.deletingPathExtension().lastPathComponent
+        let outputFile = videoDir
+            .appendingPathComponent("\(baseName)_analyzed")
+            .appendingPathExtension("mp4")
+        let videoResult = try await DebugOverlayRenderer.renderVideoOverlay(
+            videoURL: videoURL,
+            analysis: output,
+            outputURL: outputFile
+        )
+        print("✅ 标注视频已保存至: \(videoResult.outputURL.path)")
+        print("   帧数: \(videoResult.frameCount) · 时长: \(String(format: "%.1f", videoResult.duration))s")
+    }
     print()
 
     // 打印到控制台
