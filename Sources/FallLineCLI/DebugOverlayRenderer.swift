@@ -13,6 +13,26 @@ public struct DebugOverlayRenderer {
         public let manifestURL: URL
     }
 
+    public struct RenderVideoResult {
+        public let outputURL: URL
+        public let frameCount: Int
+        public let duration: Double
+    }
+
+    enum RenderError: Error, LocalizedError {
+        case noValidFrames
+        case writerFailed(Error?)
+
+        var errorDescription: String? {
+            switch self {
+            case .noValidFrames:
+                return "没有可写入的视频帧"
+            case .writerFailed(let error):
+                return "视频写入失败: \(error?.localizedDescription ?? "未知错误")"
+            }
+        }
+    }
+
     public init() {}
 
     public static func renderFrameOverlays(
@@ -87,6 +107,115 @@ public struct DebugOverlayRenderer {
             outputDirectory: destination,
             frameCount: renderedCount,
             manifestURL: manifestURL
+        )
+    }
+
+    public static func renderVideoOverlay(
+        videoURL: URL,
+        analysis: AnalysisOutput,
+        outputURL: URL,
+        maxDimension: CGFloat = 1280
+    ) async throws -> RenderVideoResult {
+        let asset = AVAsset(url: videoURL)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: maxDimension, height: maxDimension)
+
+        let frames = analysis.frames.sorted { $0.time < $1.time }
+        let boardFrames = analysis.boardAnalysis.frames.sorted { $0.time < $1.time }
+        let interval = medianSampleInterval(frames.map(\.time))
+
+        guard let (outputWidth, outputHeight) = try await outputDimensions(
+            generator: generator,
+            frames: frames,
+            maxDimension: maxDimension
+        ) else {
+            throw RenderError.noValidFrames
+        }
+
+        let writer = try AVAssetWriter(url: outputURL, fileType: .mp4)
+        let videoSettings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: outputWidth,
+            AVVideoHeightKey: outputHeight,
+            AVVideoCompressionPropertiesKey: [
+                AVVideoProfileLevelKey: AVVideoProfileLevelH264BaselineAutoLevel,
+                AVVideoAverageBitRateKey: 3_000_000
+            ]
+        ]
+        let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+        writerInput.expectsMediaDataInRealTime = false
+        writer.add(writerInput)
+
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: writerInput,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: outputWidth,
+                kCVPixelBufferHeightKey as String: outputHeight,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+            ]
+        )
+
+        guard writer.startWriting() else {
+            throw RenderError.writerFailed(writer.error)
+        }
+        writer.startSession(atSourceTime: .zero)
+
+        var frameCount = 0
+        let frameDuration = CMTime(
+            seconds: interval > 0 ? interval : 0.2,
+            preferredTimescale: 600
+        )
+
+        for frame in frames {
+            guard writerInput.isReadyForMoreMediaData else {
+                try await Task.sleep(nanoseconds: 10_000_000)
+                continue
+            }
+
+            let time = CMTime(seconds: frame.time, preferredTimescale: 600)
+            let cgImage: CGImage
+            do {
+                cgImage = try generator.copyCGImage(at: time, actualTime: nil)
+            } catch {
+                continue
+            }
+
+            let boardFrame = nearestBoardFrame(
+                to: frame.time,
+                in: boardFrames,
+                tolerance: max(interval * 0.75, 0.55)
+            )
+
+            let bitmap = renderOverlay(
+                image: cgImage,
+                frame: frame,
+                boardFrame: boardFrame,
+                summary: analysis.summary
+            )
+
+            guard let pixelBuffer = pixelBuffer(from: bitmap, width: outputWidth, height: outputHeight) else {
+                continue
+            }
+
+            let pts = CMTimeMultiply(frameDuration, multiplier: Int32(frameCount))
+            adaptor.append(pixelBuffer, withPresentationTime: pts)
+            frameCount += 1
+        }
+
+        writerInput.markAsFinished()
+        await writer.finishWriting()
+
+        if writer.status == .failed {
+            throw RenderError.writerFailed(writer.error)
+        }
+
+        let duration = Double(frameCount) * CMTimeGetSeconds(frameDuration)
+        return RenderVideoResult(
+            outputURL: outputURL,
+            frameCount: frameCount,
+            duration: duration
         )
     }
 }
@@ -528,6 +657,67 @@ private extension DebugOverlayRenderer {
 
     static func fileSafeTime(_ seconds: Double) -> String {
         formatTime(seconds).replacingOccurrences(of: ":", with: "-")
+    }
+
+    static func outputDimensions(
+        generator: AVAssetImageGenerator,
+        frames: [DetectionResult],
+        maxDimension: CGFloat
+    ) async throws -> (Int, Int)? {
+        for frame in frames {
+            let time = CMTime(seconds: frame.time, preferredTimescale: 600)
+            guard let cgImage = try? generator.copyCGImage(at: time, actualTime: nil) else {
+                continue
+            }
+            let w = CGFloat(cgImage.width)
+            let h = CGFloat(cgImage.height)
+            let scale = min(maxDimension / w, maxDimension / h, 1.0)
+            return (Int(w * scale), Int(h * scale))
+        }
+        return nil
+    }
+
+    static func pixelBuffer(
+        from bitmap: NSBitmapImageRep,
+        width: Int,
+        height: Int
+    ) -> CVPixelBuffer? {
+        var pixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            nil,
+            width,
+            height,
+            kCVPixelFormatType_32BGRA,
+            [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary,
+            &pixelBuffer
+        )
+        guard status == kCVReturnSuccess, let pixelBuffer else { return nil }
+
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+
+        guard let destBase = CVPixelBufferGetBaseAddress(pixelBuffer),
+              let srcBase = bitmap.bitmapData else {
+            return nil
+        }
+        let destBPR = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let srcBPR = bitmap.bytesPerRow
+
+        for row in 0..<height {
+            let srcPtr = srcBase + row * srcBPR
+            let dstPtr = destBase.advanced(by: row * destBPR)
+            for col in 0..<width {
+                let r = srcPtr[col * 4 + 0]
+                let g = srcPtr[col * 4 + 1]
+                let b = srcPtr[col * 4 + 2]
+                let a = srcPtr[col * 4 + 3]
+                dstPtr.storeBytes(of: b, toByteOffset: col * 4 + 0, as: UInt8.self)
+                dstPtr.storeBytes(of: g, toByteOffset: col * 4 + 1, as: UInt8.self)
+                dstPtr.storeBytes(of: r, toByteOffset: col * 4 + 2, as: UInt8.self)
+                dstPtr.storeBytes(of: a, toByteOffset: col * 4 + 3, as: UInt8.self)
+            }
+        }
+        return pixelBuffer
     }
 }
 
