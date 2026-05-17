@@ -6,6 +6,7 @@ struct CLIOptions {
     let videoPath: String
     let debugOverlay: Bool
     let debugOverlayDirectory: String?
+    let outputVideo: Bool
 }
 
 func printUsage() {
@@ -13,12 +14,14 @@ func printUsage() {
     print("  例: swift run FallLineCLI 1.MP4")
     print("  调试覆盖图: swift run FallLineCLI --debug-overlay 1.MP4")
     print("  指定输出目录: swift run FallLineCLI --debug-overlay --debug-overlay-dir /tmp/debug_frames 1.MP4")
+    print("  输出标注视频: swift run FallLineCLI --output-video 1.MP4")
 }
 
 func parseOptions(arguments: [String]) -> CLIOptions? {
     var videoPath: String?
     var debugOverlay = false
     var debugOverlayDirectory: String?
+    var outputVideo = false
 
     var index = 1
     while index < arguments.count {
@@ -33,6 +36,8 @@ func parseOptions(arguments: [String]) -> CLIOptions? {
             guard nextIndex < arguments.count else { return nil }
             debugOverlayDirectory = arguments[nextIndex]
             index = nextIndex
+        case "--output-video":
+            outputVideo = true
         default:
             guard !argument.hasPrefix("--"), videoPath == nil else { return nil }
             videoPath = argument
@@ -44,7 +49,8 @@ func parseOptions(arguments: [String]) -> CLIOptions? {
     return CLIOptions(
         videoPath: videoPath,
         debugOverlay: debugOverlay,
-        debugOverlayDirectory: debugOverlayDirectory
+        debugOverlayDirectory: debugOverlayDirectory,
+        outputVideo: outputVideo
     )
 }
 
