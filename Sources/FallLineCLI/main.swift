@@ -123,7 +123,11 @@ do {
         summary: outputSummary
     )
 
-    async let boardAnalysis = BoardDirectionAnalyzer.analyze(frames: framesWithMetrics)
+    let flowTravelDirs = analyzer.flowTravelDirections()
+    async let boardAnalysis = BoardDirectionAnalyzer.analyze(
+        frames: framesWithMetrics,
+        flowTravelDirections: flowTravelDirs
+    )
 
     async let turnAnalysis = TurnPhaseDetector.analyze(frames: framesWithMetrics)
 
