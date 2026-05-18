@@ -51,7 +51,7 @@ public class VideoAnalyzer {
     ) {
         self.videoURL = videoURL
         self.asset = AVAsset(url: videoURL)
-        self.sampleInterval = max(0.1, sampleInterval)
+        self.sampleInterval = max(1.0 / 60.0, sampleInterval)
         self.maxFrameSize = maxFrameSize
         self.batchSize = max(1, batchSize)
         self.flowFrameMaxSize = flowFrameMaxSize
@@ -81,6 +81,8 @@ public class VideoAnalyzer {
 
         let imageGenerator = AVAssetImageGenerator(asset: asset)
         imageGenerator.appliesPreferredTrackTransform = true
+        imageGenerator.requestedTimeToleranceBefore = .zero
+        imageGenerator.requestedTimeToleranceAfter = .zero
         if let maxSize = maxFrameSize {
             imageGenerator.maximumSize = maxSize
         }

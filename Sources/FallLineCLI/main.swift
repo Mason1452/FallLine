@@ -70,8 +70,13 @@ print()
 
 do {
     let videoURL = URL(fileURLWithPath: videoPath)
-    let analyzer = VideoAnalyzer(videoURL: videoURL)
-    let duration = try await analyzer.asset.load(.duration)
+    let asset = AVAsset(url: videoURL)
+    let videoTrack = try await asset.loadTracks(withMediaType: .video).first
+    let nominalFPS = try await videoTrack?.load(.nominalFrameRate)
+    let nativeFPS = Double(nominalFPS ?? 30)
+    let sampleInterval = options.outputVideo ? (1.0 / max(nativeFPS, 1.0)) : 0.2
+    let analyzer = VideoAnalyzer(videoURL: videoURL, sampleInterval: sampleInterval)
+    let duration = try await asset.load(.duration)
     let totalSeconds = CMTimeGetSeconds(duration)
     let results = try await analyzer.analyze()
 

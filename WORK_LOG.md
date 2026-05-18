@@ -1,22 +1,29 @@
 # FallLine Work Log
 
-## Current State (2026-05-13)
+## Current State (2026-05-18)
 
-**流水线性能优化已完成**，88 tests 全通过，`swift build -c release` 通过。
+**--output-video 功能已完成（含每帧独立分析）**，88 tests 全通过，`swift build -c release` 通过。
 
-**优化内容**：
+**已完成功能**：
+- `--output-video` CLI 开关：将姿态分析覆盖图渲染为 MP4 (H.264) 视频
+- 直接复用 `renderOverlay()` 绘制逻辑，与 `--debug-overlay` 的 PNG 覆盖图内容一致
+- 输出原视频**每一帧**（原生帧率），**每帧独立跑 Vision 姿态检测**，标注数据随帧实时更新
+- `AVAssetImageGenerator` 精确帧提取：`requestedTimeToleranceBefore/After = .zero`（修复前几秒帧重复 bug）
+- `VideoAnalyzer` 采样间隔下限从 0.1s 降至 1/60s，支持原生 60fps 分析
+- `--output-video` 启用时自动检测视频原生帧率作为采样间隔
+- AVAssetWriter 管线：NSBitmapImageRep → CVPixelBuffer (BGRA, IOSurface backed) → H.264 Baseline 3Mbps
+- 默认输出路径：原视频同目录 `<视频名>_analyzed.mp4`
+
+**之前完成的优化（2026-05-13）**：
 - 批次并行帧分析（batchSize=8，TaskGroup 并发）
 - 帧缓存降采样（640x480，mem ~400MB → ~60MB）
 - main.swift 四个检测器 async let 并发
 - generateSummary 内 reliableFrames 缓存复用
 
 **未验证**：并行优化在真实视频上的加速效果，以及输出一致性。
-
 **光流调制也未验证**：需要批量跑 49 个视频对比调制前后分数。
 
 **最新批量基线**：`outputs/all_video_scores_20260511_224820/` — bad=57.6, good=74.7, middle=66.4, testvideo=64.7, 全体 67.1。
-
-**沙箱**：`mcp__workspace__bash` 不可用。git/build/test 需用户在终端执行后贴结果。
 
 ## Current Goal
 
@@ -57,6 +64,7 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 - 88 tests, 0 failures
 - 流水线性能优化：并行帧分析 + 帧缓存降采样 + async let 并发后处理 + reliableFrames 缓存复用
 - CLAUDE.md 更新为启动时同时读取 WORK_LOG.md + file_manifest.md + delta_update.md
+- --output-video 功能：独立 CLI 开关 → renderVideoOverlay → AVAssetWriter H.264 MP4，每帧独立跑 Vision 姿态检测，标注数据随帧实时更新。修复了帧提取容差和采样间隔下限两个 bug
 
 ## Recorded: 待优化点
 
@@ -87,13 +95,16 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 
 - `Sources/FallLineCore/VideoAnalyzer.swift` — 管线编排（含批次并行 + 帧缓存降采样）
 - `Sources/FallLineCore/FlowMetricsCalculator.swift` — Phase 1 光流
-- `Sources/FallLineCLI/main.swift` — CLI 入口（含 async let 并发后处理）
+- `Sources/FallLineCLI/main.swift` — CLI 入口（含 async let 并发后处理 + --output-video 分支）
+- `Sources/FallLineCLI/DebugOverlayRenderer.swift` — 调试图渲染（PNG 帧 + MP4 视频覆盖图）
 - `Sources/FallLineCore/Models.swift` — 数据结构
 - `Sources/FallLineCore/ReportGenerator.swift` — 报告生成
 - `Sources/FallLineCore/BoardDirectionAnalyzer.swift` — 板身判断
 - `Tests/FallLineCoreTests/FlowMetricsCalculatorTests.swift` — 19 tests
 - `docs/superpowers/specs/2026-05-11-optical-flow-scoring-enhancement-design.md`
+- `docs/superpowers/specs/2026-05-17-output-video-overlay-design.md`
 - `docs/superpowers/plans/2026-05-11-optical-flow-scoring-enhancement.md`
+- `docs/superpowers/plans/2026-05-17-output-video-overlay-plan.md`
 - `delta_update.md` — 每轮增量变化记录（含中低优待办清单）
 - `file_manifest.md` — 项目文件索引
 - `outputs/all_video_scores_20260511_224820/score_summary.tsv`
