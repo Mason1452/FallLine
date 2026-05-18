@@ -8,6 +8,7 @@
 swift build -c release          # Build CLI (macOS)
 swift run FallLineCLI <video> # Run analysis → JSON + Markdown report
 swift run FallLineCLI --debug-overlay <video>  # + per-frame debug PNGs
+swift run FallLineCLI --output-video <video>  # + annotated MP4 (native FPS, per-frame Vision)
 swift test                       # 88 tests
 swift test --filter <TestName>
 swift test 2>&1 | tail -5        # Summary only
@@ -34,16 +35,16 @@ Video frame (CGImage, sampleInterval 0.2s = 5fps)
 Post-processing in generateSummary():
   → SkiMetricsCalculator (edge quality, pressure support, fore-aft)
   → KeyMomentDetector (best/worst frames)
-  → BoardDirectionAnalyzer (ankle-proxy → sideslip, carving confidence)
+  → FlowMetricsCalculator (optical flow: coherence, stability, smoothness, travel directions)
+  → BoardDirectionAnalyzer (ankle-proxy + flow travel angle → sideslip, carving confidence)
   → TurnPhaseDetector (transition/initiation/shaping/release)
   → CenterOfMassFitCalculator (stage-aware hip-ratio targets)
   → HighlightMomentDetector (best continuous segments)
-  → FlowMetricsCalculator (optical flow: coherence, stability, smoothness)
   → Flow modulation (±13% score adjustment)
   → ReportGenerator (Markdown report)
 ```
 
-`VideoAnalyzer` orchestrates frame extraction + per-frame analysis. Post-processing in `main.swift`.
+`VideoAnalyzer` orchestrates frame extraction + per-frame analysis. `FlowMetricsCalculator.computeWithDirections()` 单次光流遍历同时产出 FlowMetrics 和行进方向。Post-processing in `main.swift`.
 
 ## Key design decisions
 
@@ -54,6 +55,7 @@ Post-processing in generateSummary():
 - **Score transparency**: `VideoSummary` includes rawPoseAverageScore, bestThirdAverageScore, evidenceCappedScore, flowModulationFactor. Reports show decomposition.
 - **VideoSeed**: DJB2 hash of filename for deterministic output.
 - **Board detection**: ankle-proxy is primary; visual line detector is debug-only (near_board_false_positive issue).
+- **Travel direction**: 光流 (`computeWithDirections`) 采样髋+踝位置的像素运动向量作为行进方向，替代了 hipCenter 2D 位移。已知问题：低置信度帧角度跳动大，画面 2D 像素运动 ≠ 雪板实际行进方向。travelAngle → sideslip → carvingConfidence → boardKinematicHighScoreCap (62分封顶) 链路可能误判，待决策。
 
 ## Code duplication
 

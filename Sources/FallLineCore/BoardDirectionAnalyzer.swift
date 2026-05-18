@@ -8,17 +8,33 @@ public struct BoardDirectionAnalyzer {
 
     public static let minimumTravelDistance = 0.005
     private static let fullTravelConfidenceDistance = 0.04
+    private static let travelWindowHalfWidth = 3
 
-    public static func analyze(frames: [DetectionResult]) -> BoardAnalysis {
+    public static func analyze(
+        frames: [DetectionResult],
+        flowTravelDirections: [(time: Double, angle: Double, confidence: Double)] = []
+    ) -> BoardAnalysis {
         let prepared = frames.compactMap(PreparedFrame.init(frame:))
         guard !prepared.isEmpty else { return .empty }
 
+        let flowAngleByTime = flowTravelDirections.isEmpty
+            ? nil
+            : Dictionary(flowTravelDirections.map { ($0.time, (angle: $0.angle, confidence: $0.confidence)) },
+                         uniquingKeysWith: { first, _ in first })
+
         let analyses = prepared.indices.map { index in
             let observation = prepared[index].observation
+            let flowOverride = flowAngleByTime?[prepared[index].time]
             return BoardFrameAnalysis(
                 time: prepared[index].time,
                 observation: observation,
-                kinematics: kinematics(at: index, in: prepared, observation: observation)
+                kinematics: kinematics(
+                    at: index,
+                    in: prepared,
+                    observation: observation,
+                    flowTravelAngle: flowOverride?.angle,
+                    flowTravelConfidence: flowOverride?.confidence
+                )
             )
         }
 
@@ -66,8 +82,8 @@ private extension BoardDirectionAnalyzer {
             )
             guard let selectedObservation else { return nil }
 
-            let motionX = pose.bodyCenterX ?? ankleX
-            let motionY = pose.bodyCenterY ?? ankleY
+            let motionX = pose.hipCenterX ?? ankleX
+            let motionY = pose.hipCenterY ?? ankleY
 
             self.time = frame.time
             self.selectedObservation = selectedObservation
@@ -89,38 +105,44 @@ private extension BoardDirectionAnalyzer {
     static func kinematics(
         at index: Int,
         in frames: [PreparedFrame],
-        observation: BoardObservation
+        observation: BoardObservation,
+        flowTravelAngle: Double?,
+        flowTravelConfidence: Double?
     ) -> BoardKinematics? {
-        guard frames.count >= 2 else { return nil }
+        let travelAngle: Double
+        let travelConfidence: Double
 
-        let start: PreparedFrame
-        let end: PreparedFrame
-        if index == 0 {
-            start = frames[index]
-            end = frames[index + 1]
-        } else if index == frames.count - 1 {
-            start = frames[index - 1]
-            end = frames[index]
+        if let flowAngle = flowTravelAngle, let flowConf = flowTravelConfidence {
+            travelAngle = flowAngle
+            travelConfidence = flowConf
         } else {
-            start = frames[index - 1]
-            end = frames[index + 1]
+            guard frames.count >= 2 else { return nil }
+
+            let start: PreparedFrame
+            let end: PreparedFrame
+            let half = min(travelWindowHalfWidth, frames.count / 2)
+            let startIndex = max(0, index - half)
+            let endIndex = min(frames.count - 1, index + half)
+            start = frames[startIndex]
+            end = frames[endIndex]
+
+            let dx = end.motionCenterX - start.motionCenterX
+            let dy = end.motionCenterY - start.motionCenterY
+            let distance = sqrt(dx * dx + dy * dy)
+            guard distance >= minimumTravelDistance else { return nil }
+
+            travelAngle = normalizeAngle(atan2(dy, dx) * 180 / Double.pi)
+            travelConfidence = clamp(distance / fullTravelConfidenceDistance, lower: 0, upper: 1)
         }
 
-        let dx = end.motionCenterX - start.motionCenterX
-        let dy = end.motionCenterY - start.motionCenterY
-        let distance = sqrt(dx * dx + dy * dy)
-        guard distance >= minimumTravelDistance else { return nil }
-
-        let travelAngle = normalizeAngle(atan2(dy, dx) * 180 / Double.pi)
         let sideslipAngle = axisAngleDifference(observation.axisAngle, travelAngle)
         let carvingConfidence = clamp(
             100 - sideslipAngle / AnalysisReliability.dominantSideslipAngle * 100,
             lower: 0,
             upper: 100
         )
-        let travelConfidence = clamp(distance / fullTravelConfidenceDistance, lower: 0, upper: 1)
-        let centerConfidence = min(start.motionCenterConfidence, end.motionCenterConfidence)
-        let confidence = observation.confidence * travelConfidence * centerConfidence
+        let centerConfidence = observation.confidence
+        let confidence = centerConfidence * travelConfidence
 
         return BoardKinematics(
             boardAngle: observation.axisAngle,

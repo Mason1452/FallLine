@@ -30,6 +30,10 @@ public class VideoAnalyzer {
 
     /// 光流分析用帧缓存（仅缓存姿态检测成功的帧）
     private var frameCache: [(image: CGImage, pose: BodyPoseData)] = []
+    /// 帧缓存对应的时间（与 frameCache 一一对应）
+    private var frameCacheTimes: [Double] = []
+    /// 光流行进方向缓存（由 computeFlowMetrics() 在一次光流遍历中填充）
+    private var cachedTravelDirections: [(time: Double, angle: Double, confidence: Double)] = []
 
     /// 初始化分析器
     /// - Parameters:
@@ -67,6 +71,7 @@ public class VideoAnalyzer {
     /// - Returns: 每帧的检测结果数组
     public func analyze(progressHandler: ((Double) -> Void)? = nil) async throws -> [DetectionResult] {
         frameCache.removeAll(keepingCapacity: true)
+        frameCacheTimes.removeAll(keepingCapacity: true)
 
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
         guard !videoTracks.isEmpty else {
@@ -159,6 +164,7 @@ public class VideoAnalyzer {
                    let item = batch.first(where: { $0.index == index }) {
                     let cachedImage = downscaleImageForFlow(item.cgImage)
                     frameCache.append((cachedImage, result.bodyPose))
+                    frameCacheTimes.append(result.time)
                 }
             }
 
@@ -476,13 +482,12 @@ public class VideoAnalyzer {
 
     // MARK: - 光流指标计算
 
-    /// 基于缓存的帧对计算光流指标
+    /// 基于缓存的帧对计算光流指标，同时缓存行进方向供后续查询。
     private func computeFlowMetrics() async -> FlowMetrics {
         guard frameCache.count >= 2 else { return .empty }
 
         let calculator = FlowMetricsCalculator()
 
-        // 构建连续帧对
         var pairs: [(prevImage: CGImage, prevPose: BodyPoseData, nextImage: CGImage, nextPose: BodyPoseData)] = []
         for i in 0..<(frameCache.count - 1) {
             pairs.append((
@@ -493,7 +498,21 @@ public class VideoAnalyzer {
             ))
         }
 
-        return await calculator.compute(from: pairs)
+        let result = await calculator.computeWithDirections(from: pairs)
+
+        // 填充行进方向缓存
+        var travelDirs: [(time: Double, angle: Double, confidence: Double)] = []
+        for (i, dir) in result.directions.enumerated() where dir.confidence > 0 {
+            travelDirs.append((time: frameCacheTimes[i + 1], angle: dir.angle, confidence: dir.confidence))
+        }
+        cachedTravelDirections = travelDirs
+
+        return result.metrics
+    }
+
+    /// 返回由 computeFlowMetrics() 缓存的光流行进方向。
+    public func flowTravelDirections() -> [(time: Double, angle: Double, confidence: Double)] {
+        return cachedTravelDirections
     }
 
     // MARK: - 图像缩放

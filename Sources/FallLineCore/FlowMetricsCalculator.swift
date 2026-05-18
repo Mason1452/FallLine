@@ -78,12 +78,23 @@ public struct FlowMetricsCalculator {
     public func compute(
         from framePairs: [(prevImage: CGImage, prevPose: BodyPoseData, nextImage: CGImage, nextPose: BodyPoseData)]
     ) async -> FlowMetrics {
-        guard framePairs.count >= 2 else { return .empty }
+        let result = await computeWithDirections(from: framePairs)
+        return result.metrics
+    }
+
+    /// 合并计算：一次光流遍历同时产出 FlowMetrics 和帧级行进方向。
+    /// - Returns: (metrics, directions)。directions 与输入帧对一一对应，失败项 confidence=0。
+    public func computeWithDirections(
+        from framePairs: [(prevImage: CGImage, prevPose: BodyPoseData, nextImage: CGImage, nextPose: BodyPoseData)]
+    ) async -> (metrics: FlowMetrics, directions: [(angle: Double, confidence: Double)]) {
+        guard framePairs.count >= 2 else { return (.empty, []) }
 
         var coherenceSamples: [Double] = []
         var hipFlowDirections: [Double] = []
         var velocityChanges: [Double] = []
         var previousVelocity: Double? = nil
+        var directions: [(angle: Double, confidence: Double)] = []
+        directions.reserveCapacity(framePairs.count)
 
         for pair in framePairs {
             guard let flowVectors = await sampleFlowVectors(
@@ -92,6 +103,7 @@ public struct FlowMetricsCalculator {
                 prevPose: pair.prevPose,
                 nextPose: pair.nextPose
             ) else {
+                directions.append((angle: 0, confidence: 0))
                 continue
             }
 
@@ -112,9 +124,21 @@ public struct FlowMetricsCalculator {
                 velocityChanges.append(changeRate)
             }
             previousVelocity = velocity
+
+            // 行进方向：髋部+脚踝光流向量的平均
+            let dx = (flowVectors.hip.dx + flowVectors.ankle.dx) / 2
+            let dy = (flowVectors.hip.dy + flowVectors.ankle.dy) / 2
+            let magnitude = sqrt(dx * dx + dy * dy)
+            if magnitude > 0 {
+                let angle = normalizeAngle(atan2(dy, dx) * 180 / Double.pi)
+                let conf = clamp(magnitude / 8.0, lower: 0, upper: 1)
+                directions.append((angle: angle, confidence: conf))
+            } else {
+                directions.append((angle: 0, confidence: 0))
+            }
         }
 
-        guard !coherenceSamples.isEmpty else { return .empty }
+        guard !coherenceSamples.isEmpty else { return (.empty, directions) }
 
         let motionCoherence = clamp(coherenceSamples.reduce(0, +) / Double(coherenceSamples.count), lower: 0, upper: 100)
         let directionalStability = computeCircularStability(hipFlowDirections)
@@ -126,11 +150,14 @@ public struct FlowMetricsCalculator {
             velocitySmoothness = linearMap(avgChange, inMin: 0.15, inMax: 0.50, outMin: 100, outMax: 0)
         }
 
-        return FlowMetrics(
-            motionCoherence: motionCoherence,
-            directionalStability: directionalStability,
-            velocitySmoothness: velocitySmoothness,
-            framePairsUsed: framePairs.count
+        return (
+            metrics: FlowMetrics(
+                motionCoherence: motionCoherence,
+                directionalStability: directionalStability,
+                velocitySmoothness: velocitySmoothness,
+                framePairsUsed: framePairs.count
+            ),
+            directions: directions
         )
     }
 
@@ -188,6 +215,44 @@ public struct FlowMetricsCalculator {
             modulation -= smoothnessPenaltyAmount
         }
         return clamp(modulation, lower: 0.87, upper: 1.13)
+    }
+
+    // MARK: - 光流行进方向
+
+    /// 从帧对序列中提取每帧的行进方向。
+    /// 在每个帧对的髋部+脚踝位置采样光流，平均 (dx, dy) 后转换为角度。
+    /// 返回数组与输入帧对一一对应（失败项跳过，因此返回长度可能小于输入）。
+    public func computeTravelDirections(
+        from framePairs: [(prevImage: CGImage, prevPose: BodyPoseData, nextImage: CGImage, nextPose: BodyPoseData)]
+    ) async -> [(angle: Double, confidence: Double)] {
+        var directions: [(angle: Double, confidence: Double)] = []
+        directions.reserveCapacity(framePairs.count)
+
+        for pair in framePairs {
+            guard let flowVectors = await sampleFlowVectors(
+                prevImage: pair.prevImage,
+                nextImage: pair.nextImage,
+                prevPose: pair.prevPose,
+                nextPose: pair.nextPose
+            ) else {
+                directions.append((angle: 0, confidence: 0))
+                continue
+            }
+
+            let dx = (flowVectors.hip.dx + flowVectors.ankle.dx) / 2
+            let dy = (flowVectors.hip.dy + flowVectors.ankle.dy) / 2
+            let magnitude = sqrt(dx * dx + dy * dy)
+            guard magnitude > 0 else {
+                directions.append((angle: 0, confidence: 0))
+                continue
+            }
+
+            let angle = normalizeAngle(atan2(dy, dx) * 180 / Double.pi)
+            let confidence = clamp(magnitude / 8.0, lower: 0, upper: 1)
+            directions.append((angle: angle, confidence: confidence))
+        }
+
+        return directions
     }
 
     // MARK: - 光流采样

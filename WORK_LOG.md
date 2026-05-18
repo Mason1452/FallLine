@@ -4,6 +4,8 @@
 
 **--output-video 功能已完成（含每帧独立分析）**，88 tests 全通过，`swift build -c release` 通过。
 
+**运动方向（cyan 箭头）稳定性待解决**：已从 hipCenter 位移切换为光流方案，有改善但仍不可靠。低置信度帧的角度跳动很大（-4.7° ↔ 112.4°）。核心矛盾：画面 2D 像素运动 ≠ 雪板实际行进方向。
+
 **已完成功能**：
 - `--output-video` CLI 开关：将姿态分析覆盖图渲染为 MP4 (H.264) 视频
 - 直接复用 `renderOverlay()` 绘制逻辑，与 `--debug-overlay` 的 PNG 覆盖图内容一致
@@ -68,6 +70,9 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 
 ## Recorded: 待优化点
 
+### 高优先级
+1. **运动方向（travelAngle）不可靠** — 光流方案低置信度帧角度跳动大。travelAngle → sideslipAngle → carvingConfidence → boardKinematicHighScoreCap（62分封顶）这条链路如果 travelAngle 不准，封顶可能误判。选项：A) 删除整条链路，edgeQualityScore 独立已够；B) 光流高置信度时启用，低时退化为不封顶；C) 继续优化光流采样方式。待决策。
+
 ### 中优先级
 1. SkiAnaylze 代码重复 — 8 文件落后于 FallLineCore，`scripts/setup_ios_deps.sh` 写好删除逻辑
 2. 光流信号薄弱 — 只用髋+踝 2 关键点，circularVariance 硬编码边界未文档化
@@ -86,10 +91,11 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 
 ## Next Steps
 
-1. 批量跑 49 视频，对比光流调制前后分数，重点看变化 >5 分的
-2. 同期验证并行优化的输出一致性（JSON/MD 与优化前对比）
-3. 效果好 → merge 到 main；效果差 → 调参重跑
-4. 长期：Phase 2 光流纳入 PoseScorer 独立维度
+1. **决定运动方向（travelAngle）去留**：选项 A（删除）/ B（置信度 gating）/ C（继续优化）。影响 boardKinematicHighScoreCap 62分封顶的准确性
+2. 批量跑 49 视频，对比光流调制前后分数，重点看变化 >5 分的
+3. 同期验证并行优化的输出一致性（JSON/MD 与优化前对比）
+4. 效果好 → merge 到 main；效果差 → 调参重跑
+5. 长期：Phase 2 光流纳入 PoseScorer 独立维度
 
 ## Important Files
 

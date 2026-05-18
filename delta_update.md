@@ -12,6 +12,40 @@
 - 每轮结束时新增一条简短记录；优先记录事实，不写推测。
 - 同一轮没有代码变更时，明确写“仅文档变更”或“未运行测试”的原因。
 
+## 2026-05-18 (运动方向稳定性 — 光流方案与遗留问题)
+
+### 问题
+- 调试覆盖图中 cyan 箭头（运动方向 travelAngle）错误率很高，帧间角度大幅跳动
+- 根因：之前用 hipCenter/bodyCenter 2D 位移作为行进方向代理，滑雪时髋部有独立垂直位移，2D 位移 ≠ 雪板行进方向
+- 即使在 2D 坐标下，bodyCenter（肩+髋+踝三区域平均）也会因关键点遮挡导致项数变化（3→2→1），信号结构性跳动
+
+### 代码变更
+- **FlowMetricsCalculator.swift**: 新增 `computeWithDirections()` — 单次光流遍历同时产出 FlowMetrics + 行进方向，避免双重计算；在髋部+脚踝位置采样光流向量后平均 (dx, dy) → 角度作为行进方向
+- **VideoAnalyzer.swift**: 新增 `frameCacheTimes`、`cachedTravelDirections`；`computeFlowMetrics()` 改用 `computeWithDirections()` 并缓存行进方向；新增 `flowTravelDirections()` 公共访问器
+- **BoardDirectionAnalyzer.swift**: `analyze()` 接受可选 `flowTravelDirections` 参数；有光流数据时优先用光流行进角，无光流时回退到宽窗口 hipCenter 位移（窗口从 ±1 拓宽到 ±3）
+- **main.swift**: 光流行进方向从 analyzer 取出，传入 `BoardDirectionAnalyzer.analyze()`
+
+### 效果
+- 比 hipCenter 位移方案好，但仍然不可靠
+- 高置信度帧（conf ≥ 0.289）：角度相对稳定（~174°）
+- 低置信度帧（conf ~0.001）：角度仍然大幅跳动（-4.7°、112.4°、115.0°）
+- DebugOverlayRenderer 未对 travelAngle 置信度做 gating，所有帧全不透明度渲染
+
+### 核心矛盾
+画面 2D 像素运动 ≠ 雪板实际行进方向。即使在光流层面，低纹理区域的运动向量也会被噪声主导。
+
+### 遗留问题
+- travelAngle → sideslipAngle → carvingConfidence → boardKinematicHighScoreCap（62分封顶）。若 travelAngle 不准，封顶可能误判
+- 选项待决策：A) 删除 travelAngle/sideslip/carving 链路，edgeQualityScore 已独立给出走刃评估；B) 光流高置信度时启用，低置信度时退化；C) 继续优化光流采样
+- 未提交：本次改动尚在工作树中
+
+### 验证
+- `swift build -c release` 通过
+- `swift test` 88 tests, 0 failures
+- E2E：middle 视频输出 303 帧含 kinematics 数据
+
+---
+
 ## 2026-05-18 (--output-video 每帧独立分析修复)
 
 ### 问题
