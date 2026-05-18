@@ -1,6 +1,6 @@
 # FallLine 文件清单
 
-最后更新：2026-05-13
+最后更新：2026-05-18
 
 本文档是项目文件索引，用来帮助快速判断“应该读哪个文件、改哪个文件、哪些目录只是样本或生成产物”。源码文件逐个列出；视频、日志、调试图这类大目录按用途归类，不逐个枚举每个媒体或输出文件。
 
@@ -53,7 +53,7 @@ macOS 命令行入口和可选调试图渲染。
 | 文件 | 用途 |
 | --- | --- |
 | `main.swift` | CLI 参数解析、视频分析执行、JSON/Markdown 输出和汇总生成。 |
-| `DebugOverlayRenderer.swift` | 渲染逐帧调试覆盖图：板身方向、图像候选线、运动方向和骨架标记。 |
+| `DebugOverlayRenderer.swift` | 渲染逐帧调试覆盖图：板身方向、图像候选线、运动方向和骨架标记。也包含 `renderVideoOverlay()` 用于将分析覆盖图渲染为 MP4 视频。 |
 
 ## 测试
 
@@ -103,7 +103,9 @@ SwiftUI iOS App。`SkiAnaylze/SkiAnaylze/Sources/` 下存在一份核心分析�
 | `annotations/good_coach_annotations.json` | 教练/参考标注数据。 |
 | `docs/superpowers/specs/2026-05-08-temporal-smoothing-design.md` | 时间平滑设计说明。 |
 | `docs/superpowers/specs/2026-05-11-optical-flow-scoring-enhancement-design.md` | 光流评分增强设计说明。 |
+| `docs/superpowers/specs/2026-05-17-output-video-overlay-design.md` | --output-video 输出标注视频功能设计说明。 |
 | `docs/superpowers/plans/2026-05-11-optical-flow-scoring-enhancement.md` | 光流增强实现计划。 |
+| `docs/superpowers/plans/2026-05-17-output-video-overlay-plan.md` | --output-video 输出标注视频实现计划。 |
 
 ## 脚本
 

@@ -120,6 +120,8 @@ public struct DebugOverlayRenderer {
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: maxDimension, height: maxDimension)
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
 
         let frames = analysis.frames.sorted { $0.time < $1.time }
         let boardFrames = analysis.boardAnalysis.frames.sorted { $0.time < $1.time }
