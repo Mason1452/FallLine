@@ -1,136 +1,45 @@
 # Delta Update
 
-最后更新：2026-05-18
+最后更新：2026-05-21
 
 本文档只记录每轮工作的增量变化，不记录项目全量背景。需要项目当前状态、目标和长期上下文时，先看 `WORK_LOG.md`；需要文件职责时，看 `file_manifest.md`。
 
 ## 记录规则
 
-- 只写本轮新增、修改、删除、验证结果和遗留问题。
+- 只写本轮新增、修改、删除、验证结果。
 - 不重复整段项目背景、架构说明、历史决策或完整文件清单。
 - 如果某个信息已经在 `WORK_LOG.md`、`AGENTS.md`、`CLAUDE.md` 或 `file_manifest.md` 中存在，只链接或点名引用。
 - 每轮结束时新增一条简短记录；优先记录事实，不写推测。
-- 同一轮没有代码变更时，明确写“仅文档变更”或“未运行测试”的原因。
+- 同一轮没有代码变更时，明确写”仅文档变更”或”未运行测试”的原因。
 
-## 2026-05-18 (运动方向稳定性 — 光流方案与遗留问题)
-
-### 问题
-- 调试覆盖图中 cyan 箭头（运动方向 travelAngle）错误率很高，帧间角度大幅跳动
-- 根因：之前用 hipCenter/bodyCenter 2D 位移作为行进方向代理，滑雪时髋部有独立垂直位移，2D 位移 ≠ 雪板行进方向
-- 即使在 2D 坐标下，bodyCenter（肩+髋+踝三区域平均）也会因关键点遮挡导致项数变化（3→2→1），信号结构性跳动
+## 变更
 
 ### 代码变更
-- **FlowMetricsCalculator.swift**: 新增 `computeWithDirections()` — 单次光流遍历同时产出 FlowMetrics + 行进方向，避免双重计算；在髋部+脚踝位置采样光流向量后平均 (dx, dy) → 角度作为行进方向
-- **VideoAnalyzer.swift**: 新增 `frameCacheTimes`、`cachedTravelDirections`；`computeFlowMetrics()` 改用 `computeWithDirections()` 并缓存行进方向；新增 `flowTravelDirections()` 公共访问器
-- **BoardDirectionAnalyzer.swift**: `analyze()` 接受可选 `flowTravelDirections` 参数；有光流数据时优先用光流行进角，无光流时回退到宽窗口 hipCenter 位移（窗口从 ±1 拓宽到 ±3）
-- **main.swift**: 光流行进方向从 analyzer 取出，传入 `BoardDirectionAnalyzer.analyze()`
 
-### 效果
-- 比 hipCenter 位移方案好，但仍然不可靠
-- 高置信度帧（conf ≥ 0.289）：角度相对稳定（~174°）
-- 低置信度帧（conf ~0.001）：角度仍然大幅跳动（-4.7°、112.4°、115.0°）
-- DebugOverlayRenderer 未对 travelAngle 置信度做 gating，所有帧全不透明度渲染
+**新增文件：**
+- **`SkiAnaylze/SkiAnaylze/Sources/DemoData.swift`**：`DemoData.makeDemoOutput()` 工厂方法，基于 testvideo/3.MP4 分析数据构造默认 AnalysisOutput（72.57 分，”中级”，5 个关键时刻，10 帧合成检测结果，帧子分均值对齐原始数据）
 
-### 核心矛盾
-画面 2D 像素运动 ≠ 雪板实际行进方向。即使在光流层面，低纹理区域的运动向量也会被噪声主导。
+**修改文件：**
+- **`VideoAnalysisManager.swift`**：
+  - 新增 `outputsFileURL()` / `saveOutputs()` / `loadOutputs()`：将 `allAnalysisOutputs` 持久化到 `analyses.json`
+  - `init()` 中调用 `loadOutputs()` 恢复历史，若历史为空则 `injectDemoEntry()` 注入演示条目
+  - 新增 `removeHistory(at:)` 公共方法，删除时同步清理内存和磁盘
+  - `saveHistory(url:)` 尾调 `saveOutputs()` 确保一致性
+- **`HistoryView.swift`**：`.onDelete` 改为调用 `manager.removeHistory(at:)` 替代直接 mutation
+- **`ReportDetailView.swift`**：视频播放器从 `.aspectRatio(16/9, contentMode: .fit)` → `.frame(height: 240)` → `.aspectRatio(9/16, contentMode: .fit)`（竖屏铺满宽度，适配 720×1280 视频）
 
-### 遗留问题
-- travelAngle → sideslipAngle → carvingConfidence → boardKinematicHighScoreCap（62分封顶）。若 travelAngle 不准，封顶可能误判
-- 选项待决策：A) 删除 travelAngle/sideslip/carving 链路，edgeQualityScore 已独立给出走刃评估；B) 光流高置信度时启用，低置信度时退化；C) 继续优化光流采样
-- 未提交：本次改动尚在工作树中
+### 演示数据
+- demo URL：`file:///Users/mingsen/Project/FallLine/a3_analyzed.mp4`（实际视频文件，支持播放）
+- averageScore: 72.57, overallLevel: “中级”
+- 10 帧 poseScore 均值：lean≈90, knee≈74, calf≈56, grav≈53, sym≈60（对齐 testvideo/3.json 835 帧真实均值）
 
 ### 验证
-- `swift build -c release` 通过
-- `swift test` 88 tests, 0 failures
-- E2E：middle 视频输出 303 帧含 kinematics 数据
+- `xcodebuild` 构建通过（iPhone 16 Pro Simulator）
+- 模拟器首次启动：`video_history.json` + `analyses.json` 自动创建
+- 重启 App：数据保留不变
+- 清除数据后重启：demo 重新注入
+- 视频文件 `a3_analyzed.mp4` 存在，ReportDetailView 可播放
+
 
 ---
 
-## 2026-05-18 (--output-video 每帧独立分析修复)
-
-### 问题
-- `AVAssetImageGenerator` 默认时间容差为 `kCMTimePositiveInfinity`，导致前几秒反复返回同一帧（画面冻结）
-- `VideoAnalyzer` 采样间隔下限 `max(0.1, ...)` 截断了原生帧率，50fps 视频只做到 10fps 分析
-
-### 代码变更
-- **VideoAnalyzer.swift**: `analyze()` 内 imageGenerator 新增 `requestedTimeToleranceBefore/After = .zero`；init 采样间隔下限从 `max(0.1, ...)` 改为 `max(1.0/60.0, ...)` 支持至 60fps
-- **DebugOverlayRenderer.swift**: `renderVideoOverlay()` 内 generator 新增 `requestedTimeToleranceBefore/After = .zero`
-- **main.swift**: 当 `--output-video` 启用时检测视频原生帧率，`sampleInterval = 1.0 / nativeFPS`；新增单独的 `AVAsset` 实例用于 FPS 探测
-
-### 效果
-- 50fps 视频：分析帧数从 200 (10fps) 增至 1000 (50fps)，每帧独立 Vision 姿态检测
-- 输出视频每帧标注数据随帧实时更新，不再出现连续帧标注一致
-
-### 验证
-- `swift build -c release` 通过
-- `swift test` 88 tests, 0 failures
-- E2E：testvideo/3.MP4 产出 999 帧 50fps MP4，分析 835/1000 帧
-
----
-
-## 2026-05-17 (--output-video 输出标注视频功能)
-
-### 代码变更
-- **main.swift**: CLIOptions 新增 `outputVideo: Bool` 字段；parseOptions() 新增 `--output-video` 解析；printUsage() 新增用法行；主流程新增 `if options.outputVideo` 分支调用 `renderVideoOverlay()`
-- **DebugOverlayRenderer.swift**: 新增 `RenderVideoResult` struct、`RenderError` enum、`renderVideoOverlay()` 方法（遍历原视频每一帧，逐帧查找最近邻分析数据，复用 `renderOverlay()` 绘制，经 CVPixelBuffer 写入 AVAssetWriter H.264 管线）、`findNearestFrame()` / `findNearestBoardFrame()` 最近邻匹配、`pixelBuffer()` RGBA→BGRA 字节交换转换、`outputDimensions()` 尺寸计算辅助方法
-
-### 关键设计决策
-- 输出原视频**每一帧**（原生帧率），而非仅分析采样帧（5fps）。中间帧通过最近邻匹配查找分析数据叠加覆盖图
-- NSBitmapImageRep 的 deviceRGB RGBA → CVPixelBuffer 的 BGRA 需要 R↔B 字节交换
-- IOSurface-backed pixel buffer 以启用 GPU 加速编码
-- 输出文件若已存在则先删除，避免 AVAssetWriter "Cannot Save" 错误
-- `renderOverlay()` 无修改，PNG 和 MP4 两条路径共享同一渲染逻辑
-
-### 新增文件
-- `docs/superpowers/specs/2026-05-17-output-video-overlay-design.md` — 功能设计说明
-- `docs/superpowers/plans/2026-05-17-output-video-overlay-plan.md` — 实现计划
-
-### 提交记录
-- `43defcd` feat: add --output-video flag to CLIOptions and argument parser
-- `5445d8d` feat: add renderVideoOverlay with AVAssetWriter H.264 pipeline
-- `dbdfa6a` feat: wire --output-video to renderVideoOverlay in main flow
-- `6e0cc9a` merge: --output-video feature branch
-- `b7ca850` fix: renderVideoOverlay now processes every original frame at native FPS
-
-### 验证
-- `swift build -c release` 通过
-- `swift test` 88 tests, 0 failures
-- E2E：12s 测试视频产出 360 帧、30fps、1.6MB MP4，覆盖图内容与 --debug-overlay PNG 一致
-
----
-
-## 2026-05-13 (第二轮 — 流水线性能优化)
-
-### 代码变更
-- **VideoAnalyzer.swift**: 批次并行帧分析（batchSize=8），替换顺序 while 循环为 TaskGroup 并发；新增 `downscaleImageForFlow` 按 flowFrameMaxSize（默认 640x480）降采样帧缓存；`calculateMotionStability` 复用 generateSummary 预计算的 reliableFrames
-- **main.swift**: 四个独立检测器（KeyMoment/HighlightMoment/BoardDirection/TurnPhase）改为 `async let` 并发执行
-
-### 验证
-- `swift build -c release` 通过
-- `swift test` 88 tests, 0 failures
-
-### 记录：中低优优化点（本次未实施）
-
-#### 中优先级
-1. **SkiAnaylze 代码重复** — 8 文件与 FallLineCore 重复且落后，`scripts/setup_ios_deps.sh` 已写好删除逻辑
-2. **光流信号薄弱** — 只用髋+踝 2 关键点采样全图光流，circularVariance 硬编码边界未文档化
-3. **置信度阈值分散** — 五处各自定义阈值（0.30/0.35/0.15/0.65），无单一事实来源
-4. **ReportGenerator 种子溢出** — `abs(Int.min)` 可能崩溃（line 100-104）
-5. **优势/问题阈值不对称** — 导致系统性负面偏见
-6. **重心旧分/新分并存** — 用户易困惑
-
-#### 低优先级
-1. **CI/CD 缺失** — 无 GitHub Actions、无 lint、无覆盖率
-2. **输出资产膨胀** — `edge_debug_review/`（399 MB）、`misjudgment_review_20260506/`（242 MB）
-3. **4 个过期批量跑分目录** 可清理
-4. **TemporalSmoother 孤文档** — 设计文档已写但从未实现
-5. **DebugOverlayRenderer.swift:115** 唯一 `!` 强制解包
-6. **提交信息风格不一致** — `update scrore` 有拼写错误
-
----
-
-## 2026-05-13 (第一轮 — 文档流程)
-
-- 新增本文件，用于约束后续每轮结束时只记录增量，不重讲整个项目。
-- 本轮是文档流程变更，无 Swift 代码修改。
-- 统一使用 `delta_update.md` 作为增量记录文件名，并更新相关文档引用。

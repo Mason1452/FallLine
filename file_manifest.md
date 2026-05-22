@@ -1,6 +1,6 @@
 # FallLine 文件清单
 
-最后更新：2026-05-18
+最后更新：2026-05-21
 
 本文档是项目文件索引，用来帮助快速判断“应该读哪个文件、改哪个文件、哪些目录只是样本或生成产物”。源码文件逐个列出；视频、日志、调试图这类大目录按用途归类，不逐个枚举每个媒体或输出文件。
 
@@ -93,6 +93,7 @@ SwiftUI iOS App。`SkiAnaylze/SkiAnaylze/Sources/` 下存在一份核心分析�
 | `SkiAnaylze/SkiAnaylze/Views/AnalysisProgressView.swift` | 分析进度界面。 |
 | `SkiAnaylze/SkiAnaylze/Views/HistoryView.swift` | 已保存报告/历史记录界面。 |
 | `SkiAnaylze/SkiAnaylze/Views/ReportDetailView.swift` | 报告展示和分享界面。 |
+| `SkiAnaylze/SkiAnaylze/Sources/DemoData.swift` | 模拟器测试用默认演示 AnalysisOutput（基于 testvideo/3.MP4 数据）。 |
 | `SkiAnaylze/SkiAnaylze/Sources/` | 重复的分析核心子集：`Models`、`VideoAnalyzer`、`VisionFrameAnalyzer`、`PoseMetrics`、`PoseScorer`、`SkiMetricsCalculator`、`KeyMomentDetector`、`ReportGenerator`。 |
 
 ## 文档和标定
