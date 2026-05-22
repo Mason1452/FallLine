@@ -63,11 +63,7 @@ struct HistoryView: View {
                     }
             }
             .onDelete { indexSet in
-                for index in indexSet {
-                    if index < manager.historyURLs.count {
-                        manager.historyURLs.remove(at: index)
-                    }
-                }
+                manager.removeHistory(at: indexSet)
             }
         }
         .listStyle(.plain)

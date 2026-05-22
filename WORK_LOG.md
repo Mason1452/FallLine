@@ -1,6 +1,6 @@
 # FallLine Work Log
 
-## Current State (2026-05-18)
+## Current State (2026-05-21)
 
 **--output-video 功能已完成（含每帧独立分析）**，88 tests 全通过，`swift build -c release` 通过。
 
@@ -15,6 +15,12 @@
 - `--output-video` 启用时自动检测视频原生帧率作为采样间隔
 - AVAssetWriter 管线：NSBitmapImageRep → CVPixelBuffer (BGRA, IOSurface backed) → H.264 Baseline 3Mbps
 - 默认输出路径：原视频同目录 `<视频名>_analyzed.mp4`
+
+**iOS App 模拟器测试支持（2026-05-21）**：
+- 新增 `DemoData.swift`：基于 testvideo/3.MP4 分析数据构建默认演示 AnalysisOutput（72.57 分，"中级"）
+- `VideoAnalysisManager` 新增 AnalysisOutput 持久化（`analyses.json`），首次启动自动注入 demo 条目
+- `HistoryView` 删除操作同步清理持久化数据
+- `ReportDetailView` 视频播放器改为 9:16 竖屏比例铺满宽度
 
 **之前完成的优化（2026-05-13）**：
 - 批次并行帧分析（batchSize=8，TaskGroup 并发）
@@ -67,6 +73,7 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 - 流水线性能优化：并行帧分析 + 帧缓存降采样 + async let 并发后处理 + reliableFrames 缓存复用
 - CLAUDE.md 更新为启动时同时读取 WORK_LOG.md + file_manifest.md + delta_update.md
 - --output-video 功能：独立 CLI 开关 → renderVideoOverlay → AVAssetWriter H.264 MP4，每帧独立跑 Vision 姿态检测，标注数据随帧实时更新。修复了帧提取容差和采样间隔下限两个 bug
+- iOS App 模拟器测试支持：新增 DemoData.swift（72.57分 demo 数据）、AnalysisOutput 持久化到 analyses.json、首次启动注入 demo 条目、HistoryView 删除同步清理、ReportDetailView 视频播放器竖屏比例
 
 ## Recorded: 待优化点
 

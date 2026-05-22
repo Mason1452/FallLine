@@ -48,6 +48,10 @@ class VideoAnalysisManager: ObservableObject {
 
     private init() {
         loadHistory()
+        loadOutputs()
+        if historyURLs.isEmpty {
+            injectDemoEntry()
+        }
     }
 
     // MARK: - 选择视频
@@ -199,5 +203,69 @@ class VideoAnalysisManager: ObservableObject {
         if let data = try? JSONEncoder().encode(paths) {
             try? data.write(to: historyFileURL())
         }
+        saveOutputs()
+    }
+
+    // MARK: - 分析结果持久化
+
+    private func outputsFileURL() -> URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        return docs.appendingPathComponent("analyses.json")
+    }
+
+    private func saveOutputs() {
+        var dict: [String: AnalysisOutput] = [:]
+        for (key, value) in allAnalysisOutputs {
+            dict[key.absoluteString] = value
+        }
+        if let data = try? JSONEncoder().encode(dict) {
+            try? data.write(to: outputsFileURL())
+        }
+    }
+
+    private func loadOutputs() {
+        let url = outputsFileURL()
+        guard let data = try? Data(contentsOf: url),
+              let dict = try? JSONDecoder().decode([String: AnalysisOutput].self, from: data) else {
+            return
+        }
+        var outputs: [URL: AnalysisOutput] = [:]
+        for (key, value) in dict {
+            if let url = URL(string: key) {
+                outputs[url] = value
+            }
+        }
+        allAnalysisOutputs = outputs
+    }
+
+    // MARK: - 默认演示数据
+
+    private func injectDemoEntry() {
+        let demoURL = URL(fileURLWithPath: "/Users/mingsen/Project/FallLine/a3_analyzed.mp4")
+        let output = DemoData.makeDemoOutput()
+        allAnalysisOutputs[demoURL] = output
+        historyURLs = [demoURL]
+        let paths = historyURLs.map { $0.absoluteString }
+        if let data = try? JSONEncoder().encode(paths) {
+            try? data.write(to: historyFileURL())
+        }
+        saveOutputs()
+    }
+
+    // MARK: - 删除历史记录
+
+    func removeHistory(at offsets: IndexSet) {
+        for index in offsets {
+            if index < historyURLs.count {
+                let url = historyURLs[index]
+                allAnalysisOutputs.removeValue(forKey: url)
+                historyURLs.remove(at: index)
+            }
+        }
+        let paths = historyURLs.map { $0.absoluteString }
+        if let data = try? JSONEncoder().encode(paths) {
+            try? data.write(to: historyFileURL())
+        }
+        saveOutputs()
     }
 }

@@ -95,13 +95,13 @@ struct ReportDetailView: View {
         VStack(spacing: 8) {
             if let player = player {
                 VideoPlayer(player: player)
-                    .aspectRatio(16/9, contentMode: .fit)
+                    .aspectRatio(9/16, contentMode: .fit)
                     .cornerRadius(12)
             } else {
                 ZStack {
                     RoundedRectangle(cornerRadius: 12)
                         .fill(Color.themeCard)
-                        .aspectRatio(16/9, contentMode: .fit)
+                        .aspectRatio(9/16, contentMode: .fit)
 
                     VStack(spacing: 8) {
                         Image(systemName: "play.slash")
