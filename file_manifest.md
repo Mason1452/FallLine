@@ -108,6 +108,7 @@ SwiftUI iOS App。`SkiAnaylze/SkiAnaylze/Sources/` 下存在一份核心分析�
 | `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md` | iOS App UI 重设计规格：Ice Sport Technology / 冰雪运动科技方向。 |
 | `docs/superpowers/plans/2026-05-11-optical-flow-scoring-enhancement.md` | 光流增强实现计划。 |
 | `docs/superpowers/plans/2026-05-17-output-video-overlay-plan.md` | --output-video 输出标注视频实现计划。 |
+| `docs/superpowers/plans/2026-05-25-ios-ui-ice-sport-technology.md` | iOS App UI 重设计实现计划。 |
 
 ## 脚本
 

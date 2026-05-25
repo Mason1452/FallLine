@@ -48,7 +48,7 @@ Post-processing in generateSummary():
 
 ## Key design decisions
 
-- **iOS UI design direction (2026-05-25)**: The next `SkiAnaylze/` UI redesign uses **Ice Sport Technology**. Visual keywords: mountain silhouettes, carving traces, pose skeletons, data HUD, ice-blue glass panels, and score rings. Spec: `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md`. Implementation should stay in iOS SwiftUI UI/theme files and must not change scoring logic, analysis models, or persistence behavior.
+- **iOS UI design direction (2026-05-25)**: The next `SkiAnaylze/` UI redesign uses **Ice Sport Technology**. Visual keywords: mountain silhouettes, carving traces, pose skeletons, data HUD, ice-blue glass panels, and score rings. Spec: `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md`; plan: `docs/superpowers/plans/2026-05-25-ios-ui-ice-sport-technology.md`. Implementation should stay in iOS SwiftUI UI/theme files and must not change scoring logic, analysis models, or persistence behavior.
 - **Confidence gating**: minimumPoseScoreConfidence=0.30, minimumSkiMetricConfidence=0.35. Low-confidence excluded from scoring. Reports show "暂不评分".
 - **Stable carving baseline**: stability ≥85 + continuous ≥5-frame plateau ≥18% of video → plateau average as true score. Prevents low-confidence carving frames from being misjudged.
 - **Evidence caps**: edge/board/时长 evidence each cap the score. Duration-based thresholds (seconds), not frame counts (5fps).
@@ -80,6 +80,6 @@ Empirical, not experimental. Calibration anchors in `annotations/calibration_anc
 - **Flow**: `FlowMetricsCalculator.swift` (compute, computeModulation, applyModulation)
 - **Models**: `Models.swift` — read by keyword, not whole file
 - **Reports**: `ReportGenerator.swift` — `buildContext()` is entry point
-- **iOS UI redesign**: read `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md` before changing `SkiAnaylze/SkiAnaylze/AppTheme.swift` or `Views/`
+- **iOS UI redesign**: read `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md` and `docs/superpowers/plans/2026-05-25-ios-ui-ice-sport-technology.md` before changing `SkiAnaylze/SkiAnaylze/AppTheme.swift` or `Views/`
 - Skip full reads of `PoseMetrics.swift`, `PoseScorer.swift`, `DebugOverlayRenderer.swift`
 - Use `rg "keyword" Sources/` for lookups; `git diff --stat` before expanding diffs
