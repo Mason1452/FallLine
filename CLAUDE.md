@@ -48,6 +48,7 @@ generateSummary() 后处理：
 
 ## 关键设计决策
 
+- **iOS UI 设计方向（2026-05-25）**：`SkiAnaylze/` 的下一轮 UI 重设计采用 **Ice Sport Technology / 冰雪运动科技**。视觉关键词：雪山剪影、坡线轨迹、姿态骨架、数据 HUD、冰蓝玻璃面板、环形评分仪表。正式规格：`docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md`。实现时只改 iOS SwiftUI UI/主题层，不改评分算法、分析模型或持久化行为。
 - **置信度门控**：minimumPoseScoreConfidence=0.30，minimumSkiMetricConfidence=0.35。低置信度帧不计入评分，报告中显示"暂不评分"。
 - **稳定刻滑基线**：稳定性 ≥85 + 连续 ≥5 帧的平台期 ≥ 视频总时长 18% → 取平台期平均值作为真实分数。防止低置信度刻滑帧被误判。
 - **证据上限**：立刃/雪板/时长证据各自对分数设上限。阈值基于时长（秒），而非帧数（5fps）。
@@ -79,5 +80,6 @@ generateSummary() 后处理：
 - **光流**：`FlowMetricsCalculator.swift`（compute、computeModulation、applyModulation）
 - **模型**：`Models.swift` — 按关键词查找，不要通读全文件
 - **报告**：`ReportGenerator.swift` — `buildContext()` 是入口点
+- **iOS UI 重设计**：先读 `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md`，再改 `SkiAnaylze/SkiAnaylze/AppTheme.swift` 和 `Views/`
 - 可跳过通读的文件：`PoseMetrics.swift`、`PoseScorer.swift`、`DebugOverlayRenderer.swift`
 - 使用 `rg "keyword" Sources/` 进行查找；展开 diff 前先用 `git diff --stat`

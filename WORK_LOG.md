@@ -1,6 +1,12 @@
 # FallLine Work Log
 
-## Current State (2026-05-21)
+## Current State (2026-05-25)
+
+**iOS App UI redesign direction approved（设计阶段，尚未实现）**：当前 UI 被判断为通用 dark-card 风格，滑雪主题和高级感不足。已选定新方向 **Ice Sport Technology / 冰雪运动科技**：雪山剪影、坡线轨迹、姿态骨架、数据 HUD、冰蓝玻璃面板、环形评分仪表。正式设计规格见 `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md`。下一步是按该规格改 `SkiAnaylze/SkiAnaylze/` 的 SwiftUI UI 层，不改分析算法。
+
+**本轮未改 App 代码，未运行构建/测试。** 验证标准已写入设计规格：iPhone Simulator 构建通过，首页/确认/分析中/报告/历史/分享流程视觉统一，现有上传、demo、历史、删除、分享流程不回归。
+
+## Previous State (2026-05-21)
 
 **--output-video 功能已完成（含每帧独立分析）**，88 tests 全通过，`swift build -c release` 通过。
 
@@ -34,6 +40,10 @@
 **最新批量基线**：`outputs/all_video_scores_20260511_224820/` — bad=57.6, good=74.7, middle=66.4, testvideo=64.7, 全体 67.1。
 
 ## Current Goal
+
+Implement the approved iOS UI redesign for `SkiAnaylze/` using the Ice Sport Technology direction. Keep changes local to SwiftUI UI/theme files and preserve existing analysis behavior.
+
+Previous analysis goal:
 
 Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个运动指标，以 ±13% 调制系数修正姿态总分，提升泛化性。Phase 1 仅做后处理调制，后续验证有效后可纳入 PoseScorer 作为独立维度（Phase 2）。
 
@@ -106,6 +116,12 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 
 ## Important Files
 
+- `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md` — iOS UI redesign approved design spec
+- `SkiAnaylze/SkiAnaylze/AppTheme.swift` — UI redesign theme/component entry point
+- `SkiAnaylze/SkiAnaylze/Views/HomeView.swift` — redesigned home/upload flow target
+- `SkiAnaylze/SkiAnaylze/Views/AnalysisProgressView.swift` — redesigned analysis progress target
+- `SkiAnaylze/SkiAnaylze/Views/HistoryView.swift` — redesigned training records target
+- `SkiAnaylze/SkiAnaylze/Views/ReportDetailView.swift` — redesigned report/detail/share target
 - `Sources/FallLineCore/VideoAnalyzer.swift` — 管线编排（含批次并行 + 帧缓存降采样）
 - `Sources/FallLineCore/FlowMetricsCalculator.swift` — Phase 1 光流
 - `Sources/FallLineCLI/main.swift` — CLI 入口（含 async let 并发后处理 + --output-video 分支）
