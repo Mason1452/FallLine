@@ -9,28 +9,21 @@ struct HomeView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
-                    // 顶部 Logo 区
-                    headerArea
-
-                    // 选择视频按钮
-                    selectVideoButton
-
-                    // 辅助入口
-                    auxiliaryLinks
-
-                    // 最近报告
-                    if !manager.historyURLs.isEmpty {
-                        recentReportsSection
+            ZStack {
+                FallLineBackground()
+                ScrollView {
+                    VStack(spacing: 22) {
+                        headerArea
+                        lastSessionPanel
+                        selectVideoButton
+                        if !manager.historyURLs.isEmpty {
+                            recentReportsSection
+                        }
                     }
-
-                    Spacer()
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 32)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
             }
-            .background(Color.themeBackground.ignoresSafeArea())
             .sheet(isPresented: $showPicker) {
                 VideoPicker { url in
                     manager.didPickVideo(url: url)
@@ -71,25 +64,32 @@ struct HomeView: View {
     // MARK: - Header
 
     private var headerArea: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "snowflake")
-                .font(.system(size: 40))
-                .foregroundColor(.themePrimary)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("AI Ski Motion Coach")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.themeTextTertiary)
+                        .textCase(.uppercase)
+                    Text("Carve\nSharper.")
+                        .font(.system(size: 42, weight: .black))
+                        .foregroundColor(.themeTextPrimary)
+                        .lineSpacing(-4)
+                }
+                Spacer()
+                Image(systemName: "waveform.path.ecg")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundColor(.themePrimary)
+                    .padding(12)
+                    .background(Color.fallLineSnow.opacity(0.08), in: Circle())
+            }
 
-            Text("FallLine")
-                .font(.system(size: 28, weight: .bold))
-                .foregroundColor(.themeTextPrimary)
-
-            Text("滑雪动作分析")
-                .font(.system(size: 16))
+            Text("上传滑雪视频，分析走刃、重心、支撑和稳定性。")
+                .font(.system(size: 15, weight: .medium))
                 .foregroundColor(.themeTextSecondary)
-
-            Text("上传滑雪视频，自动生成动作报告")
-                .font(.system(size: 14))
-                .foregroundColor(.themeTextTertiary)
-                .padding(.top, 4)
         }
-        .padding(.top, 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 28)
     }
 
     // MARK: - 选择视频按钮
@@ -98,38 +98,38 @@ struct HomeView: View {
         Button {
             showPicker = true
         } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "video.fill")
-                    .font(.title2)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("选择滑雪视频")
-                        .font(.system(size: 18, weight: .semibold))
-                    Text("支持 .mp4 / .mov 格式")
-                        .font(.system(size: 13))
-                        .foregroundColor(.themeTextTertiary)
-                }
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(.themeTextTertiary)
-            }
-            .padding(20)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.themePrimary.opacity(0.2), Color.themeCard],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color.themePrimary.opacity(0.3), lineWidth: 1)
-                    )
-            )
+            PrimaryIceButtonLabel(title: "选择滑雪视频", systemImage: "plus")
         }
         .buttonStyle(.plain)
+    }
+
+    private var lastSessionPanel: some View {
+        let output = manager.historyURLs.first.flatMap { manager.output(for: $0) }
+        let totalValue: String
+        let edgeValue: String
+        let supportValue: String
+        if let output {
+            totalValue = "\(Int(output.summary.averageScore.rounded()))"
+            edgeValue = "\(Int(output.skiMetrics.edgeQualityScore.rounded()))"
+            supportValue = "\(Int(output.skiMetrics.pressureSupportScore.rounded()))"
+        } else {
+            totalValue = "--"
+            edgeValue = "--"
+            supportValue = "--"
+        }
+        return GlassPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Last Session")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.themeTextTertiary)
+                    .textCase(.uppercase)
+                HStack(spacing: 10) {
+                    MetricTile(value: totalValue, label: "总分")
+                    MetricTile(value: edgeValue, label: "走刃")
+                    MetricTile(value: supportValue, label: "支撑")
+                }
+            }
+        }
     }
 
     // MARK: - 辅助入口
@@ -189,9 +189,13 @@ struct HomeView: View {
             }
         } label: {
             HStack {
-                Image(systemName: "film")
-                    .foregroundColor(.themePrimary)
-                    .font(.title3)
+                if let output = output {
+                    ScoreRing(score: output.summary.averageScore, size: 44)
+                } else {
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                        .foregroundColor(.themePrimary)
+                        .font(.title3)
+                }
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(url.lastPathComponent)
