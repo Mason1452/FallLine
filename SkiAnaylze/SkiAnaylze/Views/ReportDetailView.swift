@@ -502,73 +502,74 @@ struct ReportDetailView: View {
     // MARK: - 生成分享图片
 
     private func generateShareImage() {
-        // 用简单的文字图片代替
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 390, height: 690))
         let image = renderer.image { ctx in
             let c = ctx.cgContext
-            // 背景
-            UIColor(Color.themeBackground).setFill()
-            c.fill(CGRect(x: 0, y: 0, width: 390, height: 690))
+            let rect = CGRect(x: 0, y: 0, width: 390, height: 690)
 
-            // 标题
-            let title = "我的滑雪动作分析"
-            let attrs: [NSAttributedString.Key: Any] = [
+            let gradient = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: [
+                    UIColor(Color.fallLineNavy).cgColor,
+                    UIColor(Color.fallLineNight).cgColor
+                ] as CFArray,
+                locations: [0, 1]
+            )
+            if let gradient {
+                c.drawLinearGradient(
+                    gradient,
+                    start: CGPoint(x: rect.minX, y: rect.minY),
+                    end: CGPoint(x: rect.maxX, y: rect.maxY),
+                    options: []
+                )
+            }
+
+            UIColor(Color.fallLineCyan.opacity(0.45)).setStroke()
+            c.setLineWidth(3)
+            c.move(to: CGPoint(x: 330, y: 120))
+            c.addCurve(
+                to: CGPoint(x: 230, y: 520),
+                control1: CGPoint(x: 420, y: 250),
+                control2: CGPoint(x: 120, y: 360)
+            )
+            c.strokePath()
+
+            "FallLine Report".draw(at: CGPoint(x: 28, y: 48), withAttributes: [
+                .font: UIFont.boldSystemFont(ofSize: 14),
+                .foregroundColor: UIColor(Color.fallLineSnow)
+            ])
+
+            "Carve\nSharper.".draw(with: CGRect(x: 28, y: 88, width: 280, height: 112), options: [.usesLineFragmentOrigin], attributes: [
+                .font: UIFont.boldSystemFont(ofSize: 42),
+                .foregroundColor: UIColor(Color.themeTextPrimary)
+            ], context: nil)
+
+            "\(Int(output.summary.averageScore.rounded()))".draw(at: CGPoint(x: 28, y: 250), withAttributes: [
+                .font: UIFont.boldSystemFont(ofSize: 92),
+                .foregroundColor: UIColor(Color.themeTextPrimary)
+            ])
+
+            output.summary.overallLevel.draw(at: CGPoint(x: 34, y: 348), withAttributes: [
                 .font: UIFont.boldSystemFont(ofSize: 22),
-                .foregroundColor: UIColor(Color.themeTextPrimary)
-            ]
-            title.draw(at: CGPoint(x: 24, y: 40), withAttributes: attrs)
+                .foregroundColor: UIColor(Color.fallLineCyan)
+            ])
 
-            // 分数
-            let score = "\(Int(output.summary.averageScore.rounded()))"
-            let scoreAttrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.boldSystemFont(ofSize: 56),
-                .foregroundColor: UIColor(Color.scoreColor(output.summary.averageScore))
-            ]
-            score.draw(at: CGPoint(x: 24, y: 80), withAttributes: scoreAttrs)
-
-            // 阶段
-            let stage = output.summary.overallLevel
-            let stageAttrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.boldSystemFont(ofSize: 18),
-                .foregroundColor: UIColor(Color.themeTextPrimary)
-            ]
-            stage.draw(at: CGPoint(x: 24, y: 140), withAttributes: stageAttrs)
-
-            // 滑雪维度
-            var y: CGFloat = 200
-            let dimAttrs: [NSAttributedString.Key: Any] = [
-                .font: UIFont.systemFont(ofSize: 14),
-                .foregroundColor: UIColor(Color.themeTextSecondary)
-            ]
             let dims = [
-                ("走刃质量", output.skiMetrics.edgeQualityScore),
-                ("板压支撑", output.skiMetrics.pressureSupportScore),
-                ("前后支撑", output.skiMetrics.foreAftSupportScore)
+                "走刃质量  \(Int(output.skiMetrics.edgeQualityScore.rounded()))",
+                "板压支撑  \(Int(output.skiMetrics.pressureSupportScore.rounded()))",
+                "动作稳定  \(Int(output.summary.stabilityScore.rounded()))"
             ]
-            for (name, val) in dims {
-                let text = "\(name): \(Int(val.rounded()))"
-                text.draw(at: CGPoint(x: 24, y: y), withAttributes: dimAttrs)
-                y += 24
-            }
-
-            // 主要问题
-            y += 16
-            let issues = mainIssues
-            if !issues.isEmpty {
-                "主要问题：".draw(at: CGPoint(x: 24, y: y), withAttributes: [
-                    .font: UIFont.boldSystemFont(ofSize: 14),
-                    .foregroundColor: UIColor(Color.themeProblem)
+            var y: CGFloat = 414
+            for dim in dims {
+                dim.draw(at: CGPoint(x: 34, y: y), withAttributes: [
+                    .font: UIFont.boldSystemFont(ofSize: 17),
+                    .foregroundColor: UIColor(Color.fallLineSnow)
                 ])
-                y += 24
-                for issue in issues {
-                    issue.draw(at: CGPoint(x: 24, y: y), withAttributes: dimAttrs)
-                    y += 22
-                }
+                y += 34
             }
 
-            // 底部
-            "FallLine 生成".draw(at: CGPoint(x: 24, y: 640), withAttributes: [
-                .font: UIFont.systemFont(ofSize: 12),
+            "AI Ski Motion Coach".draw(at: CGPoint(x: 28, y: 630), withAttributes: [
+                .font: UIFont.systemFont(ofSize: 13, weight: .semibold),
                 .foregroundColor: UIColor(Color.themeTextTertiary)
             ])
         }
