@@ -9,7 +9,7 @@ struct ContentView: View {
             HomeView()
                 .environmentObject(manager)
                 .tabItem {
-                    Image(systemName: "house.fill")
+                    Image(systemName: "figure.skiing.downhill")
                     Text("分析")
                 }
                 .tag(0)
@@ -17,13 +17,13 @@ struct ContentView: View {
             HistoryView()
                 .environmentObject(manager)
                 .tabItem {
-                    Image(systemName: "clock.fill")
-                    Text("历史")
+                    Image(systemName: "chart.line.uptrend.xyaxis")
+                    Text("记录")
                 }
                 .tag(1)
         }
         .preferredColorScheme(.dark)
-        .accentColor(.themePrimary)
+        .tint(.themePrimary)
     }
 }
 
