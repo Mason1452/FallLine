@@ -4,6 +4,8 @@
 
 **iOS App UI redesign direction approved（设计阶段，尚未实现）**：当前 UI 被判断为通用 dark-card 风格，滑雪主题和高级感不足。已选定新方向 **Ice Sport Technology / 冰雪运动科技**：雪山剪影、坡线轨迹、姿态骨架、数据 HUD、冰蓝玻璃面板、环形评分仪表。正式设计规格见 `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md`。下一步是按该规格改 `SkiAnaylze/SkiAnaylze/` 的 SwiftUI UI 层，不改分析算法。
 
+**实现计划已确认并写入**：`docs/superpowers/plans/2026-05-25-ios-ui-ice-sport-technology.md`。计划按主题组件、首页/壳层、视频确认、分析进度、报告详情、历史/分享、最终 QA 七个任务实施。
+
 **本轮未改 App 代码，未运行构建/测试。** 验证标准已写入设计规格：iPhone Simulator 构建通过，首页/确认/分析中/报告/历史/分享流程视觉统一，现有上传、demo、历史、删除、分享流程不回归。
 
 ## Previous State (2026-05-21)
@@ -117,6 +119,7 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 ## Important Files
 
 - `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md` — iOS UI redesign approved design spec
+- `docs/superpowers/plans/2026-05-25-ios-ui-ice-sport-technology.md` — iOS UI redesign implementation plan
 - `SkiAnaylze/SkiAnaylze/AppTheme.swift` — UI redesign theme/component entry point
 - `SkiAnaylze/SkiAnaylze/Views/HomeView.swift` — redesigned home/upload flow target
 - `SkiAnaylze/SkiAnaylze/Views/AnalysisProgressView.swift` — redesigned analysis progress target
