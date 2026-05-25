@@ -12,43 +12,46 @@ struct ReportDetailView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 20) {
-                    // 1. 视频播放器
-                    videoPlayerSection
+            ZStack {
+                FallLineBackground(showTrace: false)
 
-                    // 2. 综合评分卡
-                    scoreCardSection
+                ScrollView {
+                    VStack(spacing: 20) {
+                        // 1. 视频播放器
+                        videoPlayerSection
 
-                    // 3. 教练观察
-                    if !coachObservation.isEmpty {
-                        coachObservationSection
+                        // 2. 综合评分卡
+                        scoreCardSection
+
+                        // 3. 教练观察
+                        if !coachObservation.isEmpty {
+                            coachObservationSection
+                        }
+
+                        // 4. 关键时刻
+                        if !output.keyMoments.isEmpty {
+                            keyMomentsSection
+                        }
+
+                        // 5. 滑雪维度评分
+                        skiMetricsSection
+
+                        // 6. 主要问题
+                        mainIssuesSection
+
+                        // 7. 训练建议
+                        trainingSuggestionSection
+
+                        // 8. 分享按钮
+                        shareButton
+
+                        Spacer()
                     }
-
-                    // 4. 关键时刻
-                    if !output.keyMoments.isEmpty {
-                        keyMomentsSection
-                    }
-
-                    // 5. 滑雪维度评分
-                    skiMetricsSection
-
-                    // 6. 主要问题
-                    mainIssuesSection
-
-                    // 7. 训练建议
-                    trainingSuggestionSection
-
-                    // 8. 分享按钮
-                    shareButton
-
-                    Spacer()
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 40)
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 40)
             }
-            .background(Color.themeBackground.ignoresSafeArea())
             .navigationTitle("分析报告")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -92,33 +95,62 @@ struct ReportDetailView: View {
     // MARK: - 1. 视频播放器
 
     private var videoPlayerSection: some View {
-        VStack(spacing: 8) {
-            if let player = player {
-                VideoPlayer(player: player)
-                    .aspectRatio(9/16, contentMode: .fit)
-                    .cornerRadius(12)
-            } else {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.themeCard)
+        VStack(spacing: 10) {
+            ZStack(alignment: .bottomLeading) {
+                if let player = player {
+                    VideoPlayer(player: player)
                         .aspectRatio(9/16, contentMode: .fit)
+                } else {
+                    missingVideoFallback
+                }
 
-                    VStack(spacing: 8) {
-                        Image(systemName: "play.slash")
-                            .font(.system(size: 36))
-                            .foregroundColor(.themeTextTertiary)
-                        Text("视频文件未找到")
-                            .font(.system(size: 14))
-                            .foregroundColor(.themeTextTertiary)
+                if let bestMoment = output.keyMoments.first {
+                    GlassPanel(padding: 10) {
+                        HStack {
+                            Text(bestMoment.time)
+                                .font(.system(size: 12, weight: .black))
+                                .foregroundColor(.themePrimary)
+                            Text(bestMoment.title)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.themeTextPrimary)
+                                .lineLimit(1)
+                            Spacer()
+                        }
                     }
+                    .padding(12)
                 }
             }
+            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(Color.fallLineSnow.opacity(0.14), lineWidth: 1)
+            )
 
             // 进度条
             if !output.keyMoments.isEmpty {
                 momentTimeline
             }
         }
+    }
+
+    private var missingVideoFallback: some View {
+        ZStack {
+            LinearGradient(
+                colors: [.fallLinePanel, .fallLineNavy],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            VStack(spacing: 10) {
+                Image(systemName: "play.slash")
+                    .font(.system(size: 34, weight: .bold))
+                    .foregroundColor(.themeTextTertiary)
+                Text("视频文件未找到")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.themeTextTertiary)
+            }
+        }
+        .aspectRatio(9/16, contentMode: .fit)
     }
 
     // MARK: - 关键时刻时间线
@@ -173,31 +205,25 @@ struct ReportDetailView: View {
 
     private var scoreCardSection: some View {
         let score = output.summary.averageScore
-        return VStack(spacing: 16) {
-            // 大分数
-            VStack(spacing: 4) {
-                Text("\(Int(score.rounded()))")
-                    .font(.system(size: 56, weight: .bold))
-                    .foregroundColor(Color.scoreColor(score))
-
-                Text("/ 100")
-                    .font(.system(size: 18))
-                    .foregroundColor(.themeTextTertiary)
+        return GlassPanel {
+            HStack(spacing: 16) {
+                ScoreRing(score: score, size: 96)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(output.summary.overallLevel)
+                        .font(.system(size: 20, weight: .black))
+                        .foregroundColor(.themeTextPrimary)
+                    Text(stageDescription)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.themeTextSecondary)
+                        .lineLimit(3)
+                    MetricBar(
+                        label: "动作稳定性",
+                        score: output.summary.stabilityScore,
+                        color: Color.scoreColor(output.summary.stabilityScore)
+                    )
+                }
             }
-
-            // 阶段
-            Text(output.summary.overallLevel)
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundColor(.themeTextPrimary)
-
-            // 阶段描述
-            Text(stageDescription)
-                .font(.system(size: 14))
-                .foregroundColor(.themeTextSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 8)
         }
-        .card()
     }
 
     // MARK: - 3. 教练观察
@@ -224,123 +250,129 @@ struct ReportDetailView: View {
     }
 
     private var coachObservationSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("教练观察", systemImage: "person.fill.questionmark")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.themePrimary)
+        GlassPanel {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("教练观察", systemImage: "person.fill.questionmark")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.themePrimary)
 
-            Text(coachObservation)
-                .font(.system(size: 14))
-                .foregroundColor(.themeTextSecondary)
-                .lineSpacing(4)
+                Text(coachObservation)
+                    .font(.system(size: 14))
+                    .foregroundColor(.themeTextSecondary)
+                    .lineSpacing(4)
+            }
         }
-        .card()
     }
 
     // MARK: - 4. 关键时刻
 
     private var keyMomentsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("关键时刻", systemImage: "magnifyingglass")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.themePrimary)
+        GlassPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("关键时刻", systemImage: "magnifyingglass")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.themePrimary)
 
-            ForEach(output.keyMoments, id: \.seconds) { moment in
-                Button {
-                    seekTo(seconds: moment.seconds)
-                } label: {
-                    HStack(alignment: .top, spacing: 12) {
-                        // 缩略图占位
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(Color.themeCardSecondary)
-                                .frame(width: 60, height: 45)
+                ForEach(output.keyMoments, id: \.seconds) { moment in
+                    Button {
+                        seekTo(seconds: moment.seconds)
+                    } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [.fallLineIce.opacity(0.8), .fallLineBlue.opacity(0.5), .fallLinePanel],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                                .frame(width: 66, height: 48)
+                                .overlay(
+                                    Image(systemName: "play.fill")
+                                        .font(.caption)
+                                        .foregroundColor(.fallLineNight)
+                                )
 
-                            Image(systemName: "play.fill")
-                                .font(.caption)
-                                .foregroundColor(.themePrimary)
-                        }
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: moment.type.contains("best") ? "star.fill" : "exclamationmark.triangle.fill")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(moment.type.contains("best") ? .themeSuccess : .themeWarning)
 
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(spacing: 6) {
-                                Image(systemName: moment.type.contains("best") ? "star.fill" : "exclamationmark.triangle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(moment.type.contains("best") ? .themeSuccess : .themeWarning)
+                                    Text(moment.time)
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundColor(.themeTextPrimary)
 
-                                Text(moment.time)
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundColor(.themeTextPrimary)
+                                    Text(moment.title)
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundColor(moment.type.contains("best") ? .themeSuccess : .themeWarning)
+                                }
 
-                                Text(moment.title)
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundColor(moment.type.contains("best") ? .themeSuccess : .themeWarning)
+                                Text(moment.description)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.themeTextTertiary)
+                                    .lineLimit(2)
                             }
 
-                            Text(moment.description)
-                                .font(.system(size: 12))
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
                                 .foregroundColor(.themeTextTertiary)
-                                .lineLimit(2)
                         }
-
-                        Spacer()
-
-                        Image(systemName: "chevron.right")
-                            .font(.caption2)
-                            .foregroundColor(.themeTextTertiary)
+                        .padding(12)
+                        .background(Color.fallLineSnow.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
-                    .padding(12)
-                    .background(Color.themeCardSecondary)
-                    .cornerRadius(10)
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
-        .card()
     }
 
     // MARK: - 5. 滑雪维度评分
 
     private var skiMetricsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("滑雪维度", systemImage: "figure.skiing")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.themePrimary)
+        GlassPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("滑雪维度", systemImage: "figure.skiing")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.themePrimary)
 
-            ScoreBar(
-                label: "走刃质量",
-                score: output.skiMetrics.edgeQualityScore,
-                color: Color.scoreColor(output.skiMetrics.edgeQualityScore)
-            )
-
-            ScoreBar(
-                label: "板压支撑",
-                score: output.skiMetrics.pressureSupportScore,
-                color: Color.scoreColor(output.skiMetrics.pressureSupportScore)
-            )
-
-            ScoreBar(
-                label: "前后支撑",
-                score: output.skiMetrics.foreAftSupportScore,
-                color: Color.scoreColor(output.skiMetrics.foreAftSupportScore)
-            )
-
-            // 稳定性
-            ScoreBar(
-                label: "动作稳定性",
-                score: output.summary.stabilityScore,
-                color: Color.scoreColor(output.summary.stabilityScore)
-            )
-
-            // 左右一致性
-            if let firstFrame = output.frames.first?.poseScore {
                 ScoreBar(
-                    label: "左右一致性",
-                    score: firstFrame.symmetryScore,
-                    color: Color.scoreColor(firstFrame.symmetryScore)
+                    label: "走刃质量",
+                    score: output.skiMetrics.edgeQualityScore,
+                    color: Color.scoreColor(output.skiMetrics.edgeQualityScore)
                 )
+
+                ScoreBar(
+                    label: "板压支撑",
+                    score: output.skiMetrics.pressureSupportScore,
+                    color: Color.scoreColor(output.skiMetrics.pressureSupportScore)
+                )
+
+                ScoreBar(
+                    label: "前后支撑",
+                    score: output.skiMetrics.foreAftSupportScore,
+                    color: Color.scoreColor(output.skiMetrics.foreAftSupportScore)
+                )
+
+                // 稳定性
+                ScoreBar(
+                    label: "动作稳定性",
+                    score: output.summary.stabilityScore,
+                    color: Color.scoreColor(output.summary.stabilityScore)
+                )
+
+                // 左右一致性
+                if let firstFrame = output.frames.first?.poseScore {
+                    ScoreBar(
+                        label: "左右一致性",
+                        score: firstFrame.symmetryScore,
+                        color: Color.scoreColor(firstFrame.symmetryScore)
+                    )
+                }
             }
         }
-        .card()
     }
 
     // MARK: - 6. 主要问题
@@ -374,24 +406,25 @@ struct ReportDetailView: View {
         guard !issues.isEmpty else { return AnyView(EmptyView()) }
 
         return AnyView(
-            VStack(alignment: .leading, spacing: 8) {
-                Label("主要问题", systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.themeProblem)
+            GlassPanel {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("主要问题", systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.themeProblem)
 
-                ForEach(Array(issues.enumerated()), id: \.offset) { index, issue in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("\(index + 1).")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(.themeProblem)
-                        Text(issue)
-                            .font(.system(size: 14))
-                            .foregroundColor(.themeTextSecondary)
-                            .lineSpacing(3)
+                    ForEach(Array(issues.enumerated()), id: \.offset) { index, issue in
+                        HStack(alignment: .top, spacing: 8) {
+                            Text("\(index + 1).")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundColor(.themeProblem)
+                            Text(issue)
+                                .font(.system(size: 14))
+                                .foregroundColor(.themeTextSecondary)
+                                .lineSpacing(3)
+                        }
                     }
                 }
             }
-            .card()
         )
     }
 
@@ -425,32 +458,33 @@ struct ReportDetailView: View {
         guard !suggestion.isEmpty else { return AnyView(EmptyView()) }
 
         return AnyView(
-            VStack(alignment: .leading, spacing: 8) {
-                Label("训练建议", systemImage: "target")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.themeSuccess)
+            GlassPanel {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("训练建议", systemImage: "target")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.themeSuccess)
 
-                Text(suggestion)
-                    .font(.system(size: 14))
-                    .foregroundColor(.themeTextSecondary)
-                    .lineSpacing(4)
+                    Text(suggestion)
+                        .font(.system(size: 14))
+                        .foregroundColor(.themeTextSecondary)
+                        .lineSpacing(4)
 
-                Button {} label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "play.rectangle.fill")
-                            .font(.caption)
-                        Text("查看这个练习怎么做")
-                            .font(.system(size: 13, weight: .medium))
+                    Button {} label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "play.rectangle.fill")
+                                .font(.caption)
+                            Text("查看这个练习怎么做")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .foregroundColor(.themePrimary)
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 14)
+                        .background(Color.themePrimary.opacity(0.12))
+                        .cornerRadius(8)
                     }
-                    .foregroundColor(.themePrimary)
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 14)
-                    .background(Color.themePrimary.opacity(0.12))
-                    .cornerRadius(8)
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
-            .card()
         )
     }
 
@@ -460,16 +494,7 @@ struct ReportDetailView: View {
         Button {
             generateShareImage()
         } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "square.and.arrow.up")
-                Text("分享报告图片")
-            }
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundColor(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(Color.themePrimary)
-            .cornerRadius(12)
+            PrimaryIceButtonLabel(title: "分享报告图片", systemImage: "square.and.arrow.up")
         }
         .buttonStyle(.plain)
     }
