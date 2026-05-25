@@ -2,11 +2,14 @@
 
 ## Current State (2026-05-25)
 
-**iOS App UI redesign direction approved（设计阶段，尚未实现）**：当前 UI 被判断为通用 dark-card 风格，滑雪主题和高级感不足。已选定新方向 **Ice Sport Technology / 冰雪运动科技**：雪山剪影、坡线轨迹、姿态骨架、数据 HUD、冰蓝玻璃面板、环形评分仪表。正式设计规格见 `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md`。下一步是按该规格改 `SkiAnaylze/SkiAnaylze/` 的 SwiftUI UI 层，不改分析算法。
+**iOS App UI redesign implemented**：`SkiAnaylze/` 已按 **Ice Sport Technology / 冰雪运动科技** 方向完成第一轮 SwiftUI 改造。视觉语言覆盖首页/壳层、视频确认、分析进度、报告详情、历史记录和分享卡：雪山剪影、坡线轨迹、数据 HUD、冰蓝玻璃面板、环形评分仪表。规格见 `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md`，计划见 `docs/superpowers/plans/2026-05-25-ios-ui-ice-sport-technology.md`。
 
-**实现计划已确认并写入**：`docs/superpowers/plans/2026-05-25-ios-ui-ice-sport-technology.md`。计划按主题组件、首页/壳层、视频确认、分析进度、报告详情、历史/分享、最终 QA 七个任务实施。
+**验证状态**：
+- `xcodebuild -project SkiAnaylze/SkiAnaylze.xcodeproj -scheme SkiAnaylze -destination 'platform=iOS Simulator,name=iPhone 16 Pro' build`：`** BUILD SUCCEEDED **`
+- `swift test`：88 tests, 0 failures
+- iPhone 16 Pro Simulator：启动成功，首页/训练记录/报告页可渲染；用户已确认视觉效果“可以”。
 
-**本轮未改 App 代码，未运行构建/测试。** 验证标准已写入设计规格：iPhone Simulator 构建通过，首页/确认/分析中/报告/历史/分享流程视觉统一，现有上传、demo、历史、删除、分享流程不回归。
+**变更边界**：本次只改 iOS SwiftUI UI/主题文件和项目文档，不改 `Sources/FallLineCore/`、`Sources/FallLineCLI/`、`SkiAnaylze/SkiAnaylze/Sources/` 的分析逻辑、评分模型或持久化行为。
 
 ## Previous State (2026-05-21)
 
@@ -43,7 +46,7 @@
 
 ## Current Goal
 
-Implement the approved iOS UI redesign for `SkiAnaylze/` using the Ice Sport Technology direction. Keep changes local to SwiftUI UI/theme files and preserve existing analysis behavior.
+Current iOS UI redesign goal is complete. Next UI work should start from the implemented Ice Sport Technology SwiftUI components and preserve existing analysis behavior.
 
 Previous analysis goal:
 

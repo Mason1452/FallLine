@@ -1,6 +1,6 @@
 # FallLine 文件清单
 
-最后更新：2026-05-21
+最后更新：2026-05-25
 
 本文档是项目文件索引，用来帮助快速判断“应该读哪个文件、改哪个文件、哪些目录只是样本或生成产物”。源码文件逐个列出；视频、日志、调试图这类大目录按用途归类，不逐个枚举每个媒体或输出文件。
 
@@ -86,13 +86,13 @@ SwiftUI iOS App。`SkiAnaylze/SkiAnaylze/Sources/` 下存在一份核心分析�
 | `SkiAnaylze/Package.swift` | iOS App 的本地包依赖声明。 |
 | `SkiAnaylze/SkiAnaylze.xcodeproj/` | Xcode 工程、scheme 和 workspace 元数据。 |
 | `SkiAnaylze/SkiAnaylze/SkiAnaylzeApp.swift` | iOS App 入口。 |
-| `SkiAnaylze/SkiAnaylze/ContentView.swift` | App 根视图。 |
+| `SkiAnaylze/SkiAnaylze/ContentView.swift` | App 根视图和 Ice Sport 工具式底部切换。 |
 | `SkiAnaylze/SkiAnaylze/VideoAnalysisManager.swift` | iOS 分析状态和进度编排。 |
-| `SkiAnaylze/SkiAnaylze/AppTheme.swift` | App 颜色、卡片样式、进度条和分数条组件。 |
-| `SkiAnaylze/SkiAnaylze/Views/HomeView.swift` | 视频选择和开始分析流程。 |
-| `SkiAnaylze/SkiAnaylze/Views/AnalysisProgressView.swift` | 分析进度界面。 |
-| `SkiAnaylze/SkiAnaylze/Views/HistoryView.swift` | 已保存报告/历史记录界面。 |
-| `SkiAnaylze/SkiAnaylze/Views/ReportDetailView.swift` | 报告展示和分享界面。 |
+| `SkiAnaylze/SkiAnaylze/AppTheme.swift` | Ice Sport Technology 主题组件：颜色、背景、山形剪影、坡线轨迹、玻璃面板、评分环、指标条和主按钮。 |
+| `SkiAnaylze/SkiAnaylze/Views/HomeView.swift` | Ice Sport 首页、视频选择、视频确认和错误状态。 |
+| `SkiAnaylze/SkiAnaylze/Views/AnalysisProgressView.swift` | Ice Sport 扫描仪表式分析进度界面。 |
+| `SkiAnaylze/SkiAnaylze/Views/HistoryView.swift` | Ice Sport 训练记录列表、空状态和历史行。 |
+| `SkiAnaylze/SkiAnaylze/Views/ReportDetailView.swift` | Ice Sport 报告展示、视频 HUD、关键时刻、指标区和分享卡图片生成。 |
 | `SkiAnaylze/SkiAnaylze/Sources/DemoData.swift` | 模拟器测试用默认演示 AnalysisOutput（基于 testvideo/3.MP4 数据）。 |
 | `SkiAnaylze/SkiAnaylze/Sources/` | 重复的分析核心子集：`Models`、`VideoAnalyzer`、`VisionFrameAnalyzer`、`PoseMetrics`、`PoseScorer`、`SkiMetricsCalculator`、`KeyMomentDetector`、`ReportGenerator`。 |
 
