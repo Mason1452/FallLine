@@ -334,23 +334,18 @@ struct VideoConfirmationView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 24) {
-                // 视频预览
-                videoPreview
-
-                // 信息卡片
-                infoCard
-
-                // 质量提示
-                qualityTips
-
-                Spacer()
-
-                // 开始分析按钮
-                startButton
+            ZStack {
+                FallLineBackground(showTrace: false)
+                ScrollView {
+                    VStack(spacing: 18) {
+                        videoPreview
+                        infoCard
+                        qualityTips
+                        startButton
+                    }
+                    .padding(20)
+                }
             }
-            .padding(20)
-            .background(Color.themeBackground.ignoresSafeArea())
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("取消") { dismiss() }
@@ -363,66 +358,55 @@ struct VideoConfirmationView: View {
     }
 
     private var videoPreview: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.themeCard)
+        ZStack(alignment: .bottomLeading) {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [.fallLineIce.opacity(0.85), .fallLineBlue.opacity(0.55), .fallLineNavy],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
                 .aspectRatio(16/9, contentMode: .fit)
+                .overlay(MountainSilhouette().fill(Color.fallLineSnow.opacity(0.32)).padding(.top, 44))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(Color.fallLineSnow.opacity(0.16), lineWidth: 1)
+                )
 
-            Image(systemName: "play.rectangle")
-                .font(.system(size: 48))
-                .foregroundColor(.themePrimary)
+            Image(systemName: "play.fill")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundColor(.fallLineNight)
+                .padding(14)
+                .background(Color.fallLineIce, in: Circle())
+                .padding(16)
         }
     }
 
     private var infoCard: some View {
-        HStack(spacing: 24) {
-            infoItem(icon: "clock", label: "时长", value: formatDuration(duration))
-            Divider().frame(height: 30).background(Color.themeDivider)
-            infoItem(icon: "film", label: "分辨率", value: "1080p")
-            Divider().frame(height: 30).background(Color.themeDivider)
-            infoItem(icon: "square.grid.2x2", label: "预估帧数", value: "\(estimatedFrames)帧")
+        HStack(spacing: 10) {
+            MetricTile(value: formatDuration(duration), label: "视频时长")
+            MetricTile(value: "9:16", label: "建议比例")
+            MetricTile(value: "\(estimatedFrames)", label: "预估帧")
         }
-        .padding(16)
-        .background(Color.themeCard)
-        .cornerRadius(12)
-    }
-
-    private func infoItem(icon: String, label: String, value: String) -> some View {
-        VStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.caption)
-                .foregroundColor(.themePrimary)
-            Text(value)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.themeTextPrimary)
-            Text(label)
-                .font(.system(size: 11))
-                .foregroundColor(.themeTextTertiary)
-        }
-        .frame(maxWidth: .infinity)
     }
 
     private var qualityTips: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("视频质量提示")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.themeTextPrimary)
-
-            VStack(alignment: .leading, spacing: 6) {
+        GlassPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Quality Scan")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(.themeTextTertiary)
+                    .textCase(.uppercase)
                 Label("人物基本完整", systemImage: "checkmark.circle.fill")
-                    .foregroundColor(.themeSuccess)
                 Label("可检测人体姿态", systemImage: "checkmark.circle.fill")
-                    .foregroundColor(.themeSuccess)
                 Label("建议人物占画面更大", systemImage: "exclamationmark.triangle.fill")
                     .foregroundColor(.themeWarning)
             }
-            .font(.system(size: 13))
+            .font(.system(size: 14, weight: .semibold))
             .foregroundColor(.themeTextSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(16)
-        .background(Color.themeCard)
-        .cornerRadius(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var startButton: some View {
@@ -432,13 +416,7 @@ struct VideoConfirmationView: View {
                 manager.startAnalysis(videoURL: videoURL)
             }
         } label: {
-            Text("开始分析")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
-                .background(Color.themePrimary)
-                .cornerRadius(14)
+            PrimaryIceButtonLabel(title: "开始 AI 分析", systemImage: "waveform.path.ecg")
         }
         .buttonStyle(.plain)
     }
@@ -457,28 +435,33 @@ struct ErrorView: View {
     @Environment(\.dismiss) var dismiss
 
     var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 48))
-                .foregroundColor(.themeDanger)
+        ZStack {
+            FallLineBackground(showTrace: false)
+            GlassPanel {
+                VStack(spacing: 20) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 48))
+                        .foregroundColor(.themeDanger)
 
-            Text("分析失败")
-                .font(.system(size: 20, weight: .bold))
-                .foregroundColor(.themeTextPrimary)
+                    Text("分析失败")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundColor(.themeTextPrimary)
 
-            Text(message)
-                .font(.system(size: 14))
-                .foregroundColor(.themeTextSecondary)
-                .multilineTextAlignment(.center)
+                    Text(message)
+                        .font(.system(size: 14))
+                        .foregroundColor(.themeTextSecondary)
+                        .multilineTextAlignment(.center)
 
-            Button("返回") {
-                dismiss()
+                    Button("返回") {
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.themePrimary)
+                }
+                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.themePrimary)
+            .padding(40)
         }
-        .padding(40)
-        .background(Color.themeBackground.ignoresSafeArea())
     }
 }
 
