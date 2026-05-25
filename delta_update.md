@@ -14,6 +14,22 @@
 
 ## 变更
 
+### 2026-05-25：iOS UI 重设计规格
+
+**新增文件：**
+- **`docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md`**：记录已确认的 iOS UI 重设计方向 Ice Sport Technology（冰雪运动科技），覆盖首页、视频确认、分析中、报告详情、历史和分享卡。
+
+**修改文件：**
+- **`.gitignore`**：新增 `.superpowers/`，忽略本地浏览器设计预览会话产物。
+- **`WORK_LOG.md`**：当前状态和目标更新为 iOS UI 重设计设计阶段已完成、下一步进入 SwiftUI 实现。
+- **`CLAUDE.md` / `AGENTS.md`**：新增 UI 设计方向和实现边界，提醒实现时不改评分算法、分析模型或持久化行为。
+
+**验证：**
+- 本轮仅文档和本地设计稿变更，未改 App 代码。
+- 未运行 `swift build` / `xcodebuild` / `swift test`，因为没有 Swift 源码变更。
+
+---
+
 ### 代码变更
 
 **新增文件：**
@@ -42,4 +58,3 @@
 
 
 ---
-
