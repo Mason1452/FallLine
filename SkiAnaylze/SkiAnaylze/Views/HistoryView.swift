@@ -7,15 +7,17 @@ struct HistoryView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if manager.historyURLs.isEmpty {
-                    emptyState
-                } else {
-                    historyList
+            ZStack {
+                FallLineBackground()
+                Group {
+                    if manager.historyURLs.isEmpty {
+                        emptyState
+                    } else {
+                        historyList
+                    }
                 }
             }
-            .background(Color.themeBackground.ignoresSafeArea())
-            .navigationTitle("历史报告")
+            .navigationTitle("训练记录")
             .navigationBarTitleDisplayMode(.large)
             .sheet(item: $selectedOutput) { output in
                 ReportDetailView(output: output)
@@ -29,17 +31,17 @@ struct HistoryView: View {
         VStack(spacing: 16) {
             Spacer()
 
-            Image(systemName: "doc.text.magnifyingglass")
-                .font(.system(size: 48))
-                .foregroundColor(.themeTextTertiary)
+            Image(systemName: "figure.skiing.downhill")
+                .font(.system(size: 50, weight: .bold))
+                .foregroundColor(.themePrimary)
 
-            Text("暂无历史报告")
-                .font(.system(size: 18, weight: .semibold))
+            Text("还没有训练记录")
+                .font(.system(size: 20, weight: .black))
                 .foregroundColor(.themeTextPrimary)
 
-            Text("完成一次视频分析后，\n报告会出现在这里")
-                .font(.system(size: 14))
-                .foregroundColor(.themeTextTertiary)
+            Text("完成一次视频分析后，这里会显示你的分数、主要问题和训练进展。")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.themeTextSecondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(4)
 
@@ -79,46 +81,30 @@ struct HistoryView: View {
         let stage = output?.summary.overallLevel ?? "未知"
 
         return HStack(spacing: 14) {
-            // 分数圆环
-            ZStack {
-                Circle()
-                    .stroke(Color.themeTextTertiary.opacity(0.2), lineWidth: 3)
-                    .frame(width: 50, height: 50)
+            ScoreRing(score: score, size: 54)
 
-                Circle()
-                    .trim(from: 0, to: CGFloat(score / 100))
-                    .stroke(Color.scoreColor(score), style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    .frame(width: 50, height: 50)
-                    .rotationEffect(.degrees(-90))
-
-                Text("\(Int(score.rounded()))")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(Color.scoreColor(score))
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text(url.lastPathComponent)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 15, weight: .bold))
                     .foregroundColor(.themeTextPrimary)
                     .lineLimit(1)
 
                 HStack(spacing: 8) {
                     Text(stage)
-                        .font(.system(size: 12))
-                        .foregroundColor(.themePrimary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(Color.themePrimary.opacity(0.12))
-                        .cornerRadius(4)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.fallLineNight)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(Color.scoreColor(score), in: Capsule())
 
                     Text(dateText)
-                        .font(.system(size: 12))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.themeTextTertiary)
                 }
 
                 if let output = output {
                     Text("主要问题：\(mainIssueSummary(from: output))")
-                        .font(.system(size: 12))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.themeTextTertiary)
                         .lineLimit(1)
                 }
@@ -127,12 +113,15 @@ struct HistoryView: View {
             Spacer()
 
             Image(systemName: "chevron.right")
-                .font(.caption)
+                .font(.caption.weight(.bold))
                 .foregroundColor(.themeTextTertiary)
         }
         .padding(14)
-        .background(Color.themeCard)
-        .cornerRadius(12)
+        .background(Color.fallLineSnow.opacity(0.065), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.fallLineSnow.opacity(0.10), lineWidth: 1)
+        )
     }
 
     private func mainIssueSummary(from output: AnalysisOutput) -> String {
