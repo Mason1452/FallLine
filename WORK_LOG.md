@@ -2,9 +2,12 @@
 
 ## Current State (2026-05-25)
 
+**iOS App Icon 已更新（2026-05-27）**：`SkiAnaylze/` 的 AppIcon 已替换为已确认的 **Alpine scan-reticle / 山地扫描准星** 方向。图标保留 Ice Sport Technology 的深色山地背景、冰蓝刻滑轨迹和扫描准星，不使用 “AI” 文本。生成脚本见 `scripts/generate_fallline_app_icon.swift`，资产位于 `SkiAnaylze/SkiAnaylze/Assets.xcassets/AppIcon.appiconset/`。
+
 **iOS App UI redesign implemented**：`SkiAnaylze/` 已按 **Ice Sport Technology / 冰雪运动科技** 方向完成第一轮 SwiftUI 改造。视觉语言覆盖首页/壳层、视频确认、分析进度、报告详情、历史记录和分享卡：雪山剪影、坡线轨迹、数据 HUD、冰蓝玻璃面板、环形评分仪表。规格见 `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md`，计划见 `docs/superpowers/plans/2026-05-25-ios-ui-ice-sport-technology.md`。
 
 **验证状态**：
+- App Icon PNG：Default/Dark/Tinted 均为 1024×1024。
 - `xcodebuild -project SkiAnaylze/SkiAnaylze.xcodeproj -scheme SkiAnaylze -destination 'platform=iOS Simulator,name=iPhone 16 Pro' build`：`** BUILD SUCCEEDED **`
 - `swift test`：88 tests, 0 failures
 - iPhone 16 Pro Simulator：启动成功，首页/训练记录/报告页可渲染；用户已确认视觉效果“可以”。
@@ -124,6 +127,8 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 - `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md` — iOS UI redesign approved design spec
 - `docs/superpowers/plans/2026-05-25-ios-ui-ice-sport-technology.md` — iOS UI redesign implementation plan
 - `SkiAnaylze/SkiAnaylze/AppTheme.swift` — UI redesign theme/component entry point
+- `SkiAnaylze/SkiAnaylze/Assets.xcassets/AppIcon.appiconset/` — iOS App Icon assets (Alpine scan-reticle)
+- `scripts/generate_fallline_app_icon.swift` — reproducible generator for the AppIcon PNGs
 - `SkiAnaylze/SkiAnaylze/Views/HomeView.swift` — redesigned home/upload flow target
 - `SkiAnaylze/SkiAnaylze/Views/AnalysisProgressView.swift` — redesigned analysis progress target
 - `SkiAnaylze/SkiAnaylze/Views/HistoryView.swift` — redesigned training records target

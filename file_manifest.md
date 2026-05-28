@@ -86,6 +86,7 @@ SwiftUI iOS App。`SkiAnaylze/SkiAnaylze/Sources/` 下存在一份核心分析�
 | `SkiAnaylze/Package.swift` | iOS App 的本地包依赖声明。 |
 | `SkiAnaylze/SkiAnaylze.xcodeproj/` | Xcode 工程、scheme 和 workspace 元数据。 |
 | `SkiAnaylze/SkiAnaylze/SkiAnaylzeApp.swift` | iOS App 入口。 |
+| `SkiAnaylze/SkiAnaylze/Assets.xcassets/AppIcon.appiconset/` | iOS App Icon：Ice Sport Technology 的 Alpine scan-reticle / 山地扫描准星方向，含 default、dark、tinted 三个 1024 PNG。 |
 | `SkiAnaylze/SkiAnaylze/ContentView.swift` | App 根视图和 Ice Sport 工具式底部切换。 |
 | `SkiAnaylze/SkiAnaylze/VideoAnalysisManager.swift` | iOS 分析状态和进度编排。 |
 | `SkiAnaylze/SkiAnaylze/AppTheme.swift` | Ice Sport Technology 主题组件：颜色、背景、山形剪影、坡线轨迹、玻璃面板、评分环、指标条和主按钮。 |
@@ -115,6 +116,7 @@ SwiftUI iOS App。`SkiAnaylze/SkiAnaylze/Sources/` 下存在一份核心分析�
 | 路径 | 用途 |
 | --- | --- |
 | `scripts/setup_ios_deps.sh` | iOS 依赖设置辅助脚本。 |
+| `scripts/generate_fallline_app_icon.swift` | 生成 `AppIcon.appiconset` 中的 Alpine scan-reticle PNG 资产。 |
 
 ## 视频、输出和复核产物
 
