@@ -2,4 +2,5 @@
 .DS_Store
 .superpowers/
 *.json
+!**/*.appiconset/Contents.json
 !Package.resolved

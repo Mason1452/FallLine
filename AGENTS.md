@@ -49,6 +49,7 @@ Post-processing in generateSummary():
 ## Key design decisions
 
 - **iOS UI redesign (2026-05-25)**: `SkiAnaylze/` has completed the first **Ice Sport Technology** SwiftUI redesign pass. Visual keywords: mountain silhouettes, carving traces, pose skeletons, data HUD, ice-blue glass panels, and score rings. Spec: `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md`; plan: `docs/superpowers/plans/2026-05-25-ios-ui-ice-sport-technology.md`. Future UI work should stay in iOS SwiftUI UI/theme files and must not change scoring logic, analysis models, or persistence behavior.
+- **iOS App Icon (2026-05-27)**: `SkiAnaylze/` AppIcon uses the Ice Sport Technology **Alpine scan-reticle** direction: dark alpine background, mountain silhouette, cyan carving trace, and scan-reticle badge. Do not use text such as "AI" in the icon. Regenerate via `scripts/generate_fallline_app_icon.swift`.
 - **Confidence gating**: minimumPoseScoreConfidence=0.30, minimumSkiMetricConfidence=0.35. Low-confidence excluded from scoring. Reports show "暂不评分".
 - **Stable carving baseline**: stability ≥85 + continuous ≥5-frame plateau ≥18% of video → plateau average as true score. Prevents low-confidence carving frames from being misjudged.
 - **Evidence caps**: edge/board/时长 evidence each cap the score. Duration-based thresholds (seconds), not frame counts (5fps).
@@ -81,5 +82,6 @@ Empirical, not experimental. Calibration anchors in `annotations/calibration_anc
 - **Models**: `Models.swift` — read by keyword, not whole file
 - **Reports**: `ReportGenerator.swift` — `buildContext()` is entry point
 - **iOS UI redesign**: implemented in `SkiAnaylze/SkiAnaylze/AppTheme.swift`, `ContentView.swift`, and `Views/`. Read `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md` and `docs/superpowers/plans/2026-05-25-ios-ui-ice-sport-technology.md` before changing those UI files
+- **iOS App Icon**: `SkiAnaylze/SkiAnaylze/Assets.xcassets/AppIcon.appiconset/` and `scripts/generate_fallline_app_icon.swift`
 - Skip full reads of `PoseMetrics.swift`, `PoseScorer.swift`, `DebugOverlayRenderer.swift`
 - Use `rg "keyword" Sources/` for lookups; `git diff --stat` before expanding diffs
