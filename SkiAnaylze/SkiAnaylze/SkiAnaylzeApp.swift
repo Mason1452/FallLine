@@ -4,7 +4,7 @@ import SwiftUI
 struct SkiAnaylzeApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
         }
     }
 }

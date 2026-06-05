@@ -56,6 +56,7 @@ generateSummary() 后处理：
 - **光流（第一阶段）**：`VNGenerateOpticalFlowRequest` 在缓存的帧对上运行。三个指标调制证据上限分 ±13%。稳定性阈值上下文感知：低分 + 高稳定性 → 加分；高分 + 低稳定性 → 扣分。
 - **分数透明**：`VideoSummary` 包含 rawPoseAverageScore、bestThirdAverageScore、evidenceCappedScore、flowModulationFactor。报告中展示分解明细。
 - **VideoSeed**：使用文件名的 DJB2 哈希，确保输出确定性。
+- **Git hygiene**：忽略 Xcode 用户界面状态文件 `UserInterfaceState.xcuserstate`。如果该文件已经被跟踪，需要单独从索引移除；`.gitignore` 不会自动解除已跟踪文件。
 - **雪板检测**：脚踝代理为主要方法；视觉线条检测仅为调试用途（存在 near_board_false_positive 问题）。
 - **行进方向**：光流（`computeWithDirections`）采样髋+踝位置的像素运动向量作为行进方向，替代了 hipCenter 2D 位移。已知问题：低置信度帧角度跳动大，画面 2D 像素运动 ≠ 雪板实际行进方向。travelAngle → sideslip → carvingConfidence → boardKinematicHighScoreCap（62分封顶）链路可能误判，待决策。
 

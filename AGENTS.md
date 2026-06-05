@@ -56,6 +56,7 @@ Post-processing in generateSummary():
 - **Optical flow (Phase 1)**: `VNGenerateOpticalFlowRequest` on cached frame pairs. Three metrics modulate evidence-capped score ±13%. Stability thresholds context-aware: low score + high stability → boost; high score + low stability → penalty.
 - **Score transparency**: `VideoSummary` includes rawPoseAverageScore, bestThirdAverageScore, evidenceCappedScore, flowModulationFactor. Reports show decomposition.
 - **VideoSeed**: DJB2 hash of filename for deterministic output.
+- **Git hygiene**: Ignore Xcode user interface state file `UserInterfaceState.xcuserstate`. If already tracked, remove it from the index separately; `.gitignore` does not untrack existing files.
 - **Board detection**: ankle-proxy is primary; visual line detector is debug-only (near_board_false_positive issue).
 - **Travel direction**: 光流 (`computeWithDirections`) 采样髋+踝位置的像素运动向量作为行进方向，替代了 hipCenter 2D 位移。已知问题：低置信度帧角度跳动大，画面 2D 像素运动 ≠ 雪板实际行进方向。travelAngle → sideslip → carvingConfidence → boardKinematicHighScoreCap (62分封顶) 链路可能误判，待决策。
 

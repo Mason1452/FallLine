@@ -1,6 +1,44 @@
 # FallLine Work Log
 
-## Current State (2026-05-25)
+## Current State (2026-06-05)
+
+**仓库清理**：`.gitignore` 已加入 `UserInterfaceState.xcuserstate`，用于忽略 Xcode 用户界面状态文件。注意：该文件当前已在 Git 索引中且处于未合并状态，ignore 规则不会自动解除跟踪或解决冲突。
+
+**深度研究完成：算法准确度提升方向**。通过 deep-research 工作流（5 角度搜索 → 22 来源 → 75 声明 → 3 票对抗验证 → 7 综合发现），梳理了单目姿态估计和光流运动分析在滑雪场景下的准确度瓶颈与改进路径。完整报告见 Journal。
+
+**iOS 开屏页面已实现**（2026-05-28）：`SkiAnaylze/` 新增滑雪主题开屏动画，3 秒自动进入主页面，可跳过，预留广告接口。编译通过，模拟器验证通过。
+
+**验证状态**：
+- `xcodebuild -project SkiAnaylze/SkiAnaylze.xcodeproj -scheme SkiAnaylze -destination 'platform=iOS Simulator,name=iPhone 16 Pro' build`：`** BUILD SUCCEEDED **`
+- `swift test`：88 tests, 0 failures（待确认：与上次验证间隔 8 天，其间代码可能有变更）
+
+**变更文件**（开屏）：
+- 新增 `SkiAnaylze/SkiAnaylze/Services/AdProvider.swift` — 广告接口协议 + 默认空实现
+- 新增 `SkiAnaylze/SkiAnaylze/Views/SplashView.swift` — 4 阶段开屏动画 + 跳过按钮 + 广告位
+- 新增 `SkiAnaylze/SkiAnaylze/Views/RootView.swift` — splash → content 状态切换
+- 修改 `SkiAnaylze/SkiAnaylze/SkiAnaylzeApp.swift` — ContentView → RootView
+
+**变更边界**：只改 iOS SwiftUI UI 层，不改 FallLineCore/CLI 的分析逻辑、评分模型或持久化行为。
+
+### 深度研究关键发现
+
+**高置信度（3-0 投票通过）**：
+
+1. **姿态规范化（3DPCNet）**：混合 GCN-Transformer 将单目姿态旋转误差从 >20° 降至 3.4°，MPJPE 降低 27%。Estimator-agnostic——可直接操作 3D 关节点坐标，无需修改底层检测器。[arXiv:2509.23455](https://arxiv.org/html/2509.23455) (ICASSP 2026)
+
+2. **2D 透视误差公式**：E = 100 × d / (D − d)%。简单乘性修正只能纠正平动运动学（位移、速度），**无法纠正关节角度**。透视误差是系统误差（非随机），无法通过平滑消除。[Yokoi & Okada 1994](https://cir.nii.ac.jp/crid/1390001204309690752)
+
+3. **Apple Vision 硬限制**：VNDetectHumanBodyPoseRequest 腿部链终止于脚踝，iOS 18+ 的 3D 变体也未增加足部关键点。脚踝代理方法是当前框架下的最优解——立刃角度检测有理论上限。
+
+4. **时序精度**：跑步步态中 20ms 事件检测偏差 → 20° 膝关节角度误差。当前 5fps（200ms 帧间隔）远超此阈值，提高采样率可能比算法改进更有效。[Mundt et al. 2024](https://pubmed.ncbi.nlm.nih.gov/38984681/)
+
+**中置信度（2-1 投票通过）**：
+- 滑雪专项 AlphaPose 微调：98% PCK，10.32px MPJPE（仅 2 受试者训练，通用性存疑）
+- 2D+3D 融合 + 骨长约束 + Kalman 滤波：MPJPE -10.2%，关节角误差 -16.6%（理疗数据集，非滑雪，arXiv 预印本）
+
+**已剔除声明（≥2 票反对）**：共 14 条，包括 "100Hz 是 2D 分析最低采样率"、"Kalman 可从 2D 恢复 47 DOF 全身关节角" 等。
+
+## Previous State (2026-05-25)
 
 **iOS App Icon 已更新（2026-05-27）**：`SkiAnaylze/` 的 AppIcon 已替换为已确认的 **Alpine scan-reticle / 山地扫描准星** 方向。图标保留 Ice Sport Technology 的深色山地背景、冰蓝刻滑轨迹和扫描准星，不使用 “AI” 文本。生成脚本见 `scripts/generate_fallline_app_icon.swift`，资产位于 `SkiAnaylze/SkiAnaylze/Assets.xcassets/AppIcon.appiconset/`。
 
@@ -96,12 +134,14 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 ## Recorded: 待优化点
 
 ### 高优先级
-1. **运动方向（travelAngle）不可靠** — 光流方案低置信度帧角度跳动大。travelAngle → sideslipAngle → carvingConfidence → boardKinematicHighScoreCap（62分封顶）这条链路如果 travelAngle 不准，封顶可能误判。选项：A) 删除整条链路，edgeQualityScore 独立已够；B) 光流高置信度时启用，低时退化为不封顶；C) 继续优化光流采样方式。待决策。
+1. **运动方向（travelAngle）不可靠** — 光流方案低置信度帧角度跳动大。travelAngle → sideslipAngle → carvingConfidence → boardKinematicHighScoreCap（62分封顶）这条链路如果 travelAngle 不准，封顶可能误判。选项：A) 删除整条链路，edgeQualityScore 独立已够；B) 光流高置信度时启用，低时退化为不封顶；C) 继续优化光流采样方式。**深度研究确认：2D 透视误差是系统误差（E=100d/(D-d)），无法通过平滑消除——这说明 A 或 B 比 C 更合理。**
+2. **5fps 采样率过低** — 深度研究确认：20ms 事件检测偏差 → 20° 膝关节角度误差（Mundt et al. 2024）。当前 200ms 帧间隔远超此阈值。**提高采样率到原生帧率（≥30fps）可显著提升关键事件（换刃/入弯）的时序精度。**
+3. **Apple Vision 缺少足部关键点** — 官方文档确认腿部链终止于脚踝，iOS 18+ 也未增加。**脚踝代理方法是当前框架的理论上限，立刃角度检测存在不可消除的信号丢失。** 长期需考虑光流追踪雪板边缘或 IMU 融合。
 
 ### 中优先级
 1. SkiAnaylze 代码重复 — 8 文件落后于 FallLineCore，`scripts/setup_ios_deps.sh` 写好删除逻辑
 2. 光流信号薄弱 — 只用髋+踝 2 关键点，circularVariance 硬编码边界未文档化
-3. 置信度阈值分散 — 五处各自定义（0.30/0.35/0.15/0.65），无单一来源
+3. 置信度阈值分散 — 五处各自定义（0.30/0.35/0.15/0.65），无单一来源。**深度研究推荐：参考 Anipose 的 confidence-weighted IK 方案，低置信度关节点降低权重而非直接丢弃帧。**
 4. ReportGenerator 种子溢出 — `abs(Int.min)` 可能崩溃
 5. 报告优势/问题阈值不对称 — 系统性负面偏见
 6. "重心旧分"与"重心阶段适配"并存 — 用户易困惑
@@ -110,20 +150,41 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 1. CI/CD 缺失 — 无 GitHub Actions、无 lint、无覆盖率
 2. 输出资产膨胀 — edge_debug_review/（399 MB）、misjudgment_review/（242 MB）
 3. 4 个过期批量跑分目录可清理
-4. TemporalSmoother 孤文档 — 设计已写但从未实现
+4. TemporalSmoother 孤文档 — 设计已写但从未实现。**深度研究为时序平滑提供了三个参考方案：SmoothNet（SOTA plug-and-play）、Anipose Viterbi filter（confidence + 运动先验）、Sports2D pipeline（Hampel 异常值剔除 + GCV 样条 + Kalman）。**
 5. DebugOverlayRenderer.swift:115 唯一 `!` 强制解包
 6. 提交信息风格不一致
 
 ## Next Steps
 
-1. **决定运动方向（travelAngle）去留**：选项 A（删除）/ B（置信度 gating）/ C（继续优化）。影响 boardKinematicHighScoreCap 62分封顶的准确性
-2. 批量跑 49 视频，对比光流调制前后分数，重点看变化 >5 分的
-3. 同期验证并行优化的输出一致性（JSON/MD 与优化前对比）
-4. 效果好 → merge 到 main；效果差 → 调参重跑
-5. 长期：Phase 2 光流纳入 PoseScorer 独立维度
+### 算法准确度提升（来自 2026-06-05 深度研究）
+
+**立即做**：
+1. **提高采样率**：从 5fps 升至视频原生帧率（≥30fps）。200ms 帧间隔远超 20ms/20° 的时序误差阈值。可批量处理、降低 per-frame 分辨率来平衡 Vision API 性能。
+
+**短期（1-2 周）**：
+2. **升级到 VNHumanBodyPose3DObservation**（iOS 17+）：获取 3D 关节点，为后续规范化步骤和视角校准提供基础。当前返回的 2D 关键点无法进行有意义的透视修正（公式确认关节角度无法通过简单比例修正）。
+3. **实现 confidence-weighted 时序平滑**：替代当前的简单置信度门控（<0.30 丢弃）。参考方案：Anipose 的 Viterbi filter（confidence 先验 + 预期运动 std）或 Sports2D 的 pipeline（Hampel 异常值剔除 → GCV 样条 → Kalman）。
+
+**中期（1-2 月）**：
+4. **决定 travelAngle 链路去留**：深度研究确认 2D 透视误差是系统误差、无法通过平滑消除 → 选项 A（删除链路）或 B（光流高置信度时启用）比 C（继续优化光流采样）更合理。
+
+**长期**：
+5. **探索滑雪场景透视误差估计**：基于 Yokoi & Okada 公式 E=100d/(D-d)，假设雪面为标定面来估计 2D 光流与真实 3D 行进方向之间的系统偏差。需验证在非正交相机角度下的适用性。
+6. **评估 3DPCNet 规范化**：在滑雪视频上验证高度 crouch/旋转姿态下的退化程度。如可用，可大幅减少不同拍摄角度下的一致性差异。
+7. **Phase 2 光流纳入 PoseScorer**：前提是完成 travelAngle 去留决策和采样率提升。
+
+### 之前待办（未被取代）
+- 批量跑 49 视频，对比光流调制前后分数，重点看变化 >5 分的
+- 同期验证并行优化的输出一致性（JSON/MD 与优化前对比）
 
 ## Important Files
 
+### 深度研究（2026-06-05）
+- `outputs/research/2026-06-05-pose-estimation-accuracy-deep-research.md` — 完整研究报告（7 发现 + 4 开放问题 + 5 建议）
+- 关键来源: [3DPCNet](https://arxiv.org/html/2509.23455) / [透视误差](https://cir.nii.ac.jp/crid/1390001204309690752) / [时序精度](https://pubmed.ncbi.nlm.nih.gov/38984681/) / [Apple Vision 文档](https://developer.apple.com/documentation/Vision/detecting-human-body-poses-in-images) / [滑雪专项微调](https://ciss-journal.org/article/view/11530)
+- 工作流 run ID: `wf_64680db7-fce`，104 agents，~300 万 token
+
+### iOS UI
 - `docs/superpowers/specs/2026-05-25-ios-ui-ice-sport-technology-design.md` — iOS UI redesign approved design spec
 - `docs/superpowers/plans/2026-05-25-ios-ui-ice-sport-technology.md` — iOS UI redesign implementation plan
 - `SkiAnaylze/SkiAnaylze/AppTheme.swift` — UI redesign theme/component entry point
@@ -133,6 +194,11 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 - `SkiAnaylze/SkiAnaylze/Views/AnalysisProgressView.swift` — redesigned analysis progress target
 - `SkiAnaylze/SkiAnaylze/Views/HistoryView.swift` — redesigned training records target
 - `SkiAnaylze/SkiAnaylze/Views/ReportDetailView.swift` — redesigned report/detail/share target
+- `SkiAnaylze/SkiAnaylze/Views/SplashView.swift` — 开屏动画视图（新增）
+- `SkiAnaylze/SkiAnaylze/Views/RootView.swift` — 根视图状态管理（新增）
+- `SkiAnaylze/SkiAnaylze/Services/AdProvider.swift` — 广告接口协议 + 默认实现（新增）
+
+### FallLineCore / CLI
 - `Sources/FallLineCore/VideoAnalyzer.swift` — 管线编排（含批次并行 + 帧缓存降采样）
 - `Sources/FallLineCore/FlowMetricsCalculator.swift` — Phase 1 光流
 - `Sources/FallLineCLI/main.swift` — CLI 入口（含 async let 并发后处理 + --output-video 分支）
@@ -141,6 +207,8 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 - `Sources/FallLineCore/ReportGenerator.swift` — 报告生成
 - `Sources/FallLineCore/BoardDirectionAnalyzer.swift` — 板身判断
 - `Tests/FallLineCoreTests/FlowMetricsCalculatorTests.swift` — 19 tests
+
+### 文档与产物
 - `docs/superpowers/specs/2026-05-11-optical-flow-scoring-enhancement-design.md`
 - `docs/superpowers/specs/2026-05-17-output-video-overlay-design.md`
 - `docs/superpowers/plans/2026-05-11-optical-flow-scoring-enhancement.md`
