@@ -1,5 +1,6 @@
 .build/
 .DS_Store
+UserInterfaceState.xcuserstate
 .superpowers/
 *.json
 !**/*.appiconset/Contents.json

@@ -1,6 +1,6 @@
 # FallLine 文件清单
 
-最后更新：2026-05-25
+最后更新：2026-05-28
 
 本文档是项目文件索引，用来帮助快速判断“应该读哪个文件、改哪个文件、哪些目录只是样本或生成产物”。源码文件逐个列出；视频、日志、调试图这类大目录按用途归类，不逐个枚举每个媒体或输出文件。
 
@@ -94,8 +94,11 @@ SwiftUI iOS App。`SkiAnaylze/SkiAnaylze/Sources/` 下存在一份核心分析�
 | `SkiAnaylze/SkiAnaylze/Views/AnalysisProgressView.swift` | Ice Sport 扫描仪表式分析进度界面。 |
 | `SkiAnaylze/SkiAnaylze/Views/HistoryView.swift` | Ice Sport 训练记录列表、空状态和历史行。 |
 | `SkiAnaylze/SkiAnaylze/Views/ReportDetailView.swift` | Ice Sport 报告展示、视频 HUD、关键时刻、指标区和分享卡图片生成。 |
+| `SkiAnaylze/SkiAnaylze/Views/SplashView.swift` | 启动开屏动画视图（山峰显现 + 刻滑轨迹 + Logo 渐入 + 倒计时环 + 跳过按钮 + 广告位）。 |
+| `SkiAnaylze/SkiAnaylze/Views/RootView.swift` | 应用根视图，管理开屏 → 主页面状态切换与过渡动画。 |
 | `SkiAnaylze/SkiAnaylze/Sources/DemoData.swift` | 模拟器测试用默认演示 AnalysisOutput（基于 testvideo/3.MP4 数据）。 |
 | `SkiAnaylze/SkiAnaylze/Sources/` | 重复的分析核心子集：`Models`、`VideoAnalyzer`、`VisionFrameAnalyzer`、`PoseMetrics`、`PoseScorer`、`SkiMetricsCalculator`、`KeyMomentDetector`、`ReportGenerator`。 |
+| `SkiAnaylze/SkiAnaylze/Services/AdProvider.swift` | 广告提供者协议、默认空实现和 SwiftUI 环境变量注入键。 |
 
 ## 文档和标定
 
@@ -110,6 +113,10 @@ SwiftUI iOS App。`SkiAnaylze/SkiAnaylze/Sources/` 下存在一份核心分析�
 | `docs/superpowers/plans/2026-05-11-optical-flow-scoring-enhancement.md` | 光流增强实现计划。 |
 | `docs/superpowers/plans/2026-05-17-output-video-overlay-plan.md` | --output-video 输出标注视频实现计划。 |
 | `docs/superpowers/plans/2026-05-25-ios-ui-ice-sport-technology.md` | iOS App UI 重设计实现计划。 |
+| `openspec/changes/ios-splash-screen/proposal.md` | iOS 开屏页面变更提案。 |
+| `openspec/changes/ios-splash-screen/design.md` | iOS 开屏页面技术设计。 |
+| `openspec/changes/ios-splash-screen/specs/splash-screen/spec.md` | iOS 开屏页面需求规格。 |
+| `openspec/changes/ios-splash-screen/tasks.md` | iOS 开屏页面实施任务清单。 |
 
 ## 脚本
 
