@@ -16,6 +16,16 @@ let package = Package(
         // - FallLineCore 依赖 3D pose 融合作为默认路径（PoseMetrics3DAdapter）
         // - SkiAnaylze iOS App 走 SPM 依赖此库时，Xcode 会按此声明对齐 deployment target
     ],
+    products: [
+        .library(
+            name: "FallLineCore",
+            targets: ["FallLineCore"]
+        ),
+        .executable(
+            name: "FallLineCLI",
+            targets: ["FallLineCLI"]
+        ),
+    ],
     dependencies: [],
     targets: [
         // MARK: - 核心库（同时供给 CLI 和 iOS App 使用）

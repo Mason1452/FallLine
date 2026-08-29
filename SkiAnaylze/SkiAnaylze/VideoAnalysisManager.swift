@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 import AVFoundation
-//import FallLineCore
+import FallLineCore
 // MARK: - 分析步骤
 
 enum AnalysisStep: Int, CaseIterable {
@@ -40,6 +40,8 @@ enum AnalysisState {
 class VideoAnalysisManager: ObservableObject {
     @Published var state: AnalysisState = .idle
     @Published var historyURLs: [URL] = []
+
+    let trendStore = TrendStore()
 
     private var allAnalysisOutputs: [URL: AnalysisOutput] = [:]
     private var isCancelled = false
@@ -124,7 +126,7 @@ class VideoAnalysisManager: ObservableObject {
         updateProgress(step: .reading, progress: 0.1)
         try Task.checkCancellation()
 
-        let analyzer = try VideoAnalyzer(videoPath: videoURL.path)
+        let analyzer = VideoAnalyzer(videoURL: videoURL)
         let duration = try await analyzer.asset.load(.duration)
         let totalSeconds = CMTimeGetSeconds(duration)
         try Task.checkCancellation()
@@ -144,7 +146,7 @@ class VideoAnalysisManager: ObservableObject {
         let results = try await analyzer.analyze()
         try Task.checkCancellation()
 
-        let summary = analyzer.generateSummary(from: results)
+        let summary = await analyzer.generateSummary(from: results)
         let stability = summary?.stabilityScore ?? 50
 
         let framesWithMetrics = results.map { frame -> DetectionResult in
@@ -185,6 +187,20 @@ class VideoAnalysisManager: ObservableObject {
 
         allAnalysisOutputs[videoURL] = output
         saveHistory(url: videoURL)
+
+        // 进步曲线埋点：记录本次分析，返回新解锁的里程碑并推送本地通知
+        let newMilestones = trendStore.record(
+            averageScore: output.summary.averageScore,
+            overallLevel: output.summary.overallLevel,
+            stabilityScore: output.summary.stabilityScore,
+            bestFrameScore: output.summary.bestFrame.score
+        )
+        if !newMilestones.isEmpty {
+            Task {
+                await TrendNotificationCenter.shared.scheduleMilestoneNotifications(newMilestones)
+            }
+        }
+
         state = .completed(output: output)
     }
 

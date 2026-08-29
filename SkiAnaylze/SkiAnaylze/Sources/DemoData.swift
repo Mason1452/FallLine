@@ -1,4 +1,5 @@
 import Foundation
+import FallLineCore
 
 /// Provides a default high-score AnalysisOutput for simulator testing,
 /// sourced from testvideo/3.MP4 analysis results.

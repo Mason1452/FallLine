@@ -1,5 +1,5 @@
 import SwiftUI
-//import FallLineCore
+import FallLineCore
 
 struct HistoryView: View {
     @EnvironmentObject var manager: VideoAnalysisManager

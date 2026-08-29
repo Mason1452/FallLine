@@ -1,7 +1,11 @@
 .build/
+.swiftpm/
 .DS_Store
 UserInterfaceState.xcuserstate
 .superpowers/
 *.json
 !**/*.appiconset/Contents.json
 !Package.resolved
+# 主线 B SPM 化产物：iOS 复制文件备份 + pbxproj 修改前快照
+.ios_migration_backup/
+*.pbxproj.bak_before_spm_link
