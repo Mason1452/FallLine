@@ -1,8 +1,42 @@
 # FallLine Work Log
 
-## Current State (2026-08-29 再续)
+## Current State (2026-08-29 收官)
 
-**主线 B（iOS SPM 化）Core 端就绪 + 进步曲线 c1/c2/c3 骨架已入库**。最新 3 个 commit 已推送到 `origin/main`：
+**主线 B（iOS SPM 化）+ 进步曲线全链路接入完成**。本轮 3 个 commit 已推送到 `origin/main`：
+
+```
+efd7843  feat(trend): 进步曲线接入主流程
+264a1b2  feat(core): AnalysisOutput 支持 Identifiable，兼容 SwiftUI sheet(item:)
+94ce905  feat(ios): 主线 B 完成 - iOS SPM 化，消除 8 个复制文件
+```
+
+本轮变更明细见 `delta_update.md` 的"2026-08-29 (收官)"条目。
+
+**当前项目定位**：
+- **iOS App = Core 唯一消费方**：iOS 通过 SwiftPM 本地依赖消费 `FallLineCore`，8 个复制文件全部删除（净减 -2384 行）；再也不用手动同步 Core 变更到 iOS。
+- **Core 对外契约就绪**：`Package.swift` 声明 `.library("FallLineCore")` + `.executable("FallLineCLI")`；`AnalysisOutput` 满足 `Identifiable`（id 计算属性，向后兼容序列化）。
+- **进步曲线闭环**：`VideoAnalysisManager` 分析成功 → `trendStore.record()` 埋点 → 新解锁 `Milestone` 通过 `TrendNotificationCenter.scheduleMilestoneNotifications` 投递本地推送 → 用户切"趋势"Tab 看 `TrendView` 折线图。
+- **iOS App 结构**：3 个 Tab —— 分析 / 记录 / 趋势。启动时通过 `SkiAnaylzeApp.task` 幂等请求通知权限。
+
+**验证状态**：
+- `swift build` PASS
+- `swift test` 88/0 全通过（用户本机验证：0.096s，2026-08-29 18:43）
+- Xcode 编译：SkiAnaylze target 已通过 `Missing package product 'FallLineCore'` → 3 处 API 断层修复 → `Instance method sheet(item:...) requires Identifiable` 三轮修复，剩下的编译验证由用户本机 Cmd+B/Cmd+R 完成
+- Core 侧 diagnostics 全空
+
+**下一步（用户本地）**：
+1. Xcode Cmd+B 最终确认无编译错
+2. Cmd+R 跑模拟器：切"趋势"Tab 应看到 [DemoData](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/Sources/DemoData.swift) 注入的 demo 一条数据，分析新视频后应触发"首次达到 XXX 级别"里程碑推送
+3. 如有编译错，把 Xcode 报错贴回来继续修
+
+**后续可优化方向（不阻塞）**：
+- 把 iOS `VideoAnalysisManager` 里的 `analyzer.analyze()` 切换到 `analyzer.analyzeWithResilience()`，用上熔断 + CPU 回退
+- 给 `TrendAnalytics` 补单元测试（当前 88 tests 不覆盖新增算法层）
+- travelAngle → sideslip → carvingConfidence → boardKinematicHighScoreCap 链路的低置信度误判决策（见 `AGENTS.md` 板身检测条目）
+
+## Previous State (2026-08-29 再续)
+
+**主线 B（iOS SPM 化）Core 端就绪 + 进步曲线 c1/c2/c3 骨架已入库**。3 个 commit 推送到 `origin/main`：
 
 ```
 b825c7f  feat(trend): c3 里程碑本地推送 - TrendNotificationCenter
@@ -10,28 +44,12 @@ b825c7f  feat(trend): c3 里程碑本地推送 - TrendNotificationCenter
 2c5ef8d  feat(core): 主线 B iOS SPM 化 - Core 端就绪
 ```
 
-本轮变更明细见 `delta_update.md` 的"2026-08-29 (再续)"条目。
+**本阶段完成的**：
+- Core 层 iOS 兼容改造（`Package.swift` iOS 17 平台，`VisionFrameAnalyzer.usesCPUOnly + warmUp`，`VideoAnalyzer.AnalysisError + analyzeWithResilience`）
+- 进步曲线骨架（`TrendAnalytics.swift` 220 行 + `TrendStore.swift` UserDefaults 持久化 + `TrendView.swift` Charts 折线图 + `TrendNotificationCenter.swift` UNUserNotificationCenter 推送）
+- `scripts/setup_ios_deps.sh` --dry / --yes / --rollback + 备份机制
 
-**当前项目定位**：
-- **Core 层**：iOS 兼容改造完成——`Package.swift` 加 iOS 17 平台支持；`VisionFrameAnalyzer` 加 `usesCPUOnly` 开关 + `warmUp()`；`VideoAnalyzer` 加 `AnalysisError` + `analyzeWithResilience()`。**CLI 调用链一行未动**，所有新能力走新入口。
-- **进步曲线**：Core 新建 `TrendAnalytics.swift`（220 行纯计算），iOS 新建 `TrendStore.swift` + `Views/TrendView.swift` + `TrendNotificationCenter.swift` 三个独立骨架文件。
-- **iOS App 接入点**：**尚未修改**（`VideoAnalysisManager` / `RootView` / `SkiAnaylzeApp` 零改动）。原因：`SkiAnaylze/SkiAnaylze/Sources/` 8 个复制文件仍在，iOS App 目前消费的是复制版类型；接入必须发生在 SPM 化完成、复制文件删除之后，否则会与 `import FallLineCore` 类型冲突。
-
-**验证状态**：
-- `swift build` PASS（5.26s）
-- `swift build --build-tests` 46 步全部编译通过
-- 4 个新文件 + 2 个修改文件 `GetDiagnostics` 均为空
-- `swift test`：**未运行**（沙箱限制），需用户本机跑 88 用例
-- Xcode 端未编译（等 SPM 化后再验证）
-
-**下一步（用户本地）**：
-1. `swift test 2>&1 | tail -5` 确认 88 用例回归
-2. `./scripts/setup_ios_deps.sh --dry` 干运行看会做什么
-3. `./scripts/setup_ios_deps.sh` 实执行 + Xcode 按提示完成 Add Package + 删复制文件
-4. SPM 完成后由我补 3 处轻量接入：
-   - `VideoAnalysisManager` 分析成功回调调 `trendStore.record(...)` + `TrendNotificationCenter.shared.scheduleMilestoneNotifications(...)`
-   - `RootView` 增加"趋势" Tab 挂 `TrendView`
-   - `SkiAnaylzeApp` 启动时调 `TrendNotificationCenter.shared.bootstrapIfNeeded()`
+**已由 2026-08-29 收官轮接管**：SPM 化真正落地、8 个复制文件删除、iOS App 接入 3 处。
 
 ## Previous State (2026-08-29 续)
 

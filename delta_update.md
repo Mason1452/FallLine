@@ -14,6 +14,82 @@
 
 ## 变更
 
+### 2026-08-29 (收官)：主线 B 真正落地 + 进步曲线主流程接入 + 三个 API 断层修复
+
+**本轮性质**：Xcode 端 SPM 化真正打通、8 个复制文件删除、Core `AnalysisOutput` 加 `Identifiable`、进步曲线接入 3 处入口，分 3 个 commit 推到 `origin/main`。用户 `swift test` 88/0 本地验证通过。
+
+**主要 commit**：
+- `94ce905` feat(ios): 主线 B 完成 - iOS SPM 化，消除 8 个复制文件
+- `264a1b2` feat(core): AnalysisOutput 支持 Identifiable
+- `efd7843` feat(trend): 进步曲线接入主流程
+
+**Xcode SPM 化落地（本轮才真正完成）**：
+- `scripts/setup_ios_deps.sh --yes` 执行成功：8 个复制文件（`Models.swift` / `VideoAnalyzer.swift` / `VisionFrameAnalyzer.swift` / `PoseMetrics.swift` / `PoseScorer.swift` / `SkiMetricsCalculator.swift` / `KeyMomentDetector.swift` / `ReportGenerator.swift`）从磁盘删除、备份到 `.ios_migration_backup/`。net -2384 行。
+- `SkiAnaylze/SkiAnaylze/Sources/` 仅剩 `DemoData.swift`（iOS-only）。
+- `SkiAnaylze.xcodeproj/project.pbxproj` 手工修改：
+  - **修 `XCLocalSwiftPackageReference.relativePath` 从错误值 `../../FallLine` → `..`**（原值指向不存在路径 `/Users/mingsen/Project/FallLine/FallLine`，是 SPM 化前 Xcode UI 默认拼错的路径）
+  - 新增 `PBXBuildFile AA00...A1 /* FallLineCore in Frameworks */`
+  - `PBXFrameworksBuildPhase.files` 追加 `AA00...A1`
+  - `PBXNativeTarget.packageProductDependencies` 追加 `AA00...A2`
+  - 新增 `XCSwiftPackageProductDependency AA00...A2 /* FallLineCore */`
+  - 备份原始文件到 `project.pbxproj.bak_before_spm_link`（进 `.gitignore` 不入库）
+- `Package.swift` 加 `products` 段（**未加就编译不过**，是 `Missing package product 'FallLineCore'` 报错的根因）：
+  ```swift
+  products: [
+      .library(name: "FallLineCore", targets: ["FallLineCore"]),
+      .executable(name: "FallLineCLI", targets: ["FallLineCLI"]),
+  ]
+  ```
+  注意 `PackageDescription` 参数顺序约束：`products` 必须在 `dependencies` 之前，我第一次放在后面 `swift build` 失败并给出提示。
+- 5 个 iOS UI 文件顶部补 `import FallLineCore`：`VideoAnalysisManager.swift` / `Views/HistoryView.swift` / `Views/HomeView.swift` / `Views/ReportDetailView.swift` / `Sources/DemoData.swift`。
+
+**Core 侧收敛（防止下游 SPM 消费者踩相同坑）**：
+- `Sources/FallLineCore/Models.swift`：`AnalysisOutput` 增加 `Codable, Identifiable`；`public var id: String { videoPath }` 计算属性。
+  - 计算属性不进 `CodingKeys`，历史 `analyses.json` 完全向后兼容。
+  - `videoPath` 天然唯一（App 用 `[URL: AnalysisOutput]` 字典去重）。
+  - 解锁 SwiftUI `sheet(item:)` 用法，`HistoryView` 已经能编译。
+
+**iOS 侧 API 断层修复（VideoAnalysisManager 3 处）**：
+- `VideoAnalyzer(videoPath: String)` → `VideoAnalyzer(videoURL: URL)`（Core 侧初始化不再 `throws`，去掉 `try`）
+- `analyzer.generateSummary(from:)` 加 `await`（Core 侧改为 `async`）
+- 分析成功回调 line 191-202 增加 4 行：
+  ```swift
+  let newMilestones = trendStore.record(
+      averageScore: output.summary.averageScore,
+      overallLevel: output.summary.overallLevel,
+      stabilityScore: output.summary.stabilityScore,
+      bestFrameScore: output.summary.bestFrame.score
+  )
+  if !newMilestones.isEmpty {
+      Task { await TrendNotificationCenter.shared.scheduleMilestoneNotifications(newMilestones) }
+  }
+  ```
+- `VideoAnalysisManager.trendStore = TrendStore()` 作为 class 属性单例。
+
+**iOS 端进步曲线接入（另外 2 处）**：
+- `SkiAnaylzeApp.swift`：`RootView().task { await TrendNotificationCenter.shared.bootstrapIfNeeded() }` 幂等请求通知权限。
+- `ContentView.swift`：新增第三个 Tab "趋势"（tag 2，图标 `chart.xyaxis.line`），挂载 `TrendView(store: manager.trendStore)`。
+
+**验证**：
+- `swift test 2>&1 | tail -5`：`Executed 88 tests, with 0 failures in 0.096 seconds` ✅（用户本机 2026-08-29 18:43）
+- `swift build`：PASS
+- `GetDiagnostics`：本轮所有改动均为空
+- Xcode 编译：走过三轮报错逐个修复
+  1. `Missing package product 'FallLineCore'` → `Package.swift` 加 products
+  2. `Missing argument 'videoURL'` + `Extra argument 'videoPath'` + `Cannot infer .duration` → VideoAnalyzer 初始化签名 + await generateSummary
+  3. `sheet(item:...) requires Identifiable` → `AnalysisOutput` 加 Identifiable
+- 剩余的 Cmd+B / Cmd+R 由用户本机执行
+
+**忽略清单更新**（`.gitignore`）：
+- `.swiftpm/`（Xcode SPM 缓存）
+- `.ios_migration_backup/`（脚本备份产物）
+- `*.pbxproj.bak_before_spm_link`（pbxproj 修改前手工备份）
+
+**后续待办（不阻塞）**：
+- iOS 切 `analyzer.analyze()` → `analyzer.analyzeWithResilience()` 用上熔断
+- `TrendAnalytics` 补单元测试
+- travelAngle 链路低置信度误判决策
+
 ### 2026-08-29 (再续)：主线 B iOS SPM 化 Core 端就绪 + 进步曲线 c1/c2/c3 落地
 
 **本轮性质**：Core 侧 iOS 兼容改造 + iOS 端骨架代码 + 分 3 个 commit 推送到远端。iOS Xcode 端**接入点未动**（VideoAnalysisManager / RootView / SkiAnaylzeApp 均零改动），等用户本地跑 `scripts/setup_ios_deps.sh` 完成 SPM 化后再补两处轻量接入。
