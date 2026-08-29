@@ -131,19 +131,37 @@ class VideoAnalysisManager: ObservableObject {
         let totalSeconds = CMTimeGetSeconds(duration)
         try Task.checkCancellation()
 
-        // Step 2: 抽取关键帧
+        // Step 2: 抽帧 + 姿态识别 + 指标计算合并到 analyzeWithResilience()
+        // 内部包含 Neural Engine warmUp、espresso 错误熔断、CPU 后备，以及真实的逐帧 progress
         updateProgress(step: .extracting, progress: 0.2)
         try Task.checkCancellation()
-        try await Task.sleep(nanoseconds: 500_000_000) // 模拟
 
-        // Step 3: 识别人体姿态
-        updateProgress(step: .poseDetection, progress: 0.4)
-        try Task.checkCancellation()
-        try await Task.sleep(nanoseconds: 500_000_000) // 模拟
+        let results: [DetectionResult]
+        do {
+            results = try await analyzer.analyzeWithResilience { [weak self] p in
+                // Core 抽帧+推理阶段占整体 0.2 → 0.75 的进度条
+                let mapped = 0.2 + p * 0.55
+                Task { @MainActor in
+                    self?.updateProgress(step: p < 0.5 ? .extracting : .poseDetection,
+                                         progress: mapped)
+                }
+            }
+        } catch AnalysisError.visionUnavailable(let consecutive, let underlying) {
+            throw NSError(
+                domain: "VideoAnalysisManager",
+                code: 100,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "Vision 神经网络初始化失败（连续 \(consecutive) 次）：\(underlying)"]
+            )
+        } catch AnalysisError.noReliableFrames {
+            throw NSError(
+                domain: "VideoAnalysisManager",
+                code: 101,
+                userInfo: [NSLocalizedDescriptionKey: "未从视频中提取到任何可用姿态帧，请检查画面是否清晰可见人体。"]
+            )
+        }
 
-        // Step 4: 计算指标
-        updateProgress(step: .calculating, progress: 0.6)
-        let results = try await analyzer.analyze()
+        updateProgress(step: .calculating, progress: 0.75)
         try Task.checkCancellation()
 
         let summary = await analyzer.generateSummary(from: results)

@@ -14,6 +14,29 @@
 
 ## 变更
 
+### 2026-08-29 (收官后 +1)：iOS 切换到 analyzeWithResilience，进度条真实化
+
+**本轮性质**：主线 B 收官后的第 1 个可选优化落地。单文件改动 [VideoAnalysisManager.swift](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/VideoAnalysisManager.swift#L134-L165) 一处，一并完成 r1（切熔断版）+ r2（真实 progress）。
+
+**改动明细**：
+- `analyzer.analyze()` → `analyzer.analyzeWithResilience(progressHandler:)`
+  - Vision espresso 上下文失败自动 CPU 回退（首次预热）
+  - 连续 3 帧失败熔断，抛 `AnalysisError.visionUnavailable`
+  - 0 可用帧抛 `AnalysisError.noReliableFrames`
+- `progressHandler` 把 Core 抽帧+推理阶段 0.0→1.0 映射到 App 进度条 0.2→0.75，`p<0.5` 阶段显示"抽取关键帧"，`p≥0.5` 阶段显示"识别人体姿态"，替代原先的两段 500ms 假 sleep
+- 两个 `AnalysisError` case 各自转成带中文文案的 `NSError`（code 100 / 101），沿现有错误弹窗链路展示
+- 移除：2 处 `try await Task.sleep(nanoseconds: 500_000_000) // 模拟` 假等待
+- Step 4 起点从 progress 0.6 抬到 0.75（因为抽帧阶段已用掉 0.2-0.75）
+
+**验证**：
+- `swift build`：PASS（0.19s，Core 契约未变）
+- `GetDiagnostics` 目标文件：空
+- 用户本机需 Xcode Cmd+B 复验 iOS target
+
+**未做/后续**：
+- `TrendAnalytics` 单元测试
+- travelAngle → sideslip → boardKinematicHighScoreCap 决策
+
 ### 2026-08-29 (收官)：主线 B 真正落地 + 进步曲线主流程接入 + 三个 API 断层修复
 
 **本轮性质**：Xcode 端 SPM 化真正打通、8 个复制文件删除、Core `AnalysisOutput` 加 `Identifiable`、进步曲线接入 3 处入口，分 3 个 commit 推到 `origin/main`。用户 `swift test` 88/0 本地验证通过。
