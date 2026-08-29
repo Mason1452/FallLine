@@ -67,6 +67,13 @@ public class VisionFrameAnalyzer {
     /// 控制执行哪些 Vision 请求（默认仅姿态检测）
     public let options: VisionAnalysisOptions
 
+    /// 是否强制在 CPU 上执行 Vision 请求。
+    ///
+    /// 当 Neural Engine 上下文创建失败（模拟器/沙箱/首次冷启动）时，
+    /// `VideoAnalyzer` 可以把这个开关切到 true 让整轮分析走 CPU 后备路径。
+    /// CPU 路径慢但可用性极高，作为最后的降级手段。默认 false，CLI 不受影响。
+    public var usesCPUOnly: Bool = false
+
     public init(
         recognitionLanguages: [String] = ["zh-Hans", "en-US"],
         options: VisionAnalysisOptions = .skiAnalysis
@@ -88,11 +95,11 @@ public class VisionFrameAnalyzer {
         // 仅当对应选项启用时才创建并添加请求
         let humanDetectionRequest = options.contains(.humanDetection)
             ? VNDetectHumanRectanglesRequest() : nil
-        if let r = humanDetectionRequest { requests.append(r) }
+        if let r = humanDetectionRequest { r.usesCPUOnly = usesCPUOnly; requests.append(r) }
 
         let faceDetectionRequest = options.contains(.faceDetection)
             ? VNDetectFaceRectanglesRequest() : nil
-        if let r = faceDetectionRequest { requests.append(r) }
+        if let r = faceDetectionRequest { r.usesCPUOnly = usesCPUOnly; requests.append(r) }
 
         let textRequest: VNRecognizeTextRequest? = {
             guard options.contains(.textRecognition) else { return nil }
@@ -101,15 +108,15 @@ public class VisionFrameAnalyzer {
             r.recognitionLanguages = recognitionLanguages
             return r
         }()
-        if let r = textRequest { requests.append(r) }
+        if let r = textRequest { r.usesCPUOnly = usesCPUOnly; requests.append(r) }
 
         let sceneRequest = options.contains(.sceneClassification)
             ? VNClassifyImageRequest() : nil
-        if let r = sceneRequest { requests.append(r) }
+        if let r = sceneRequest { r.usesCPUOnly = usesCPUOnly; requests.append(r) }
 
         let bodyPoseRequest = options.contains(.bodyPose)
             ? VNDetectHumanBodyPoseRequest() : nil
-        if let r = bodyPoseRequest { requests.append(r) }
+        if let r = bodyPoseRequest { r.usesCPUOnly = usesCPUOnly; requests.append(r) }
 
         // 3D 姿态请求（macOS 14+）。与 2D 并行发出，由同一个 VNImageRequestHandler 一次批量执行。
         let bodyPose3DRequest: VNDetectHumanBodyPose3DRequest? = {
@@ -120,7 +127,7 @@ public class VisionFrameAnalyzer {
                 return nil
             }
         }()
-        if let r = bodyPose3DRequest { requests.append(r) }
+        if let r = bodyPose3DRequest { r.usesCPUOnly = usesCPUOnly; requests.append(r) }
 
         if !requests.isEmpty {
             try requestHandler.perform(requests)
@@ -142,5 +149,38 @@ public class VisionFrameAnalyzer {
             bodyPoseObservation: bodyPoseRequest?.results?.first,
             bodyPose3DObservation: bodyPose3DObservation
         )
+    }
+
+    // MARK: - 预热
+
+    /// 用一张 1×1 的白色占位图跑一次核心 Vision 姿态请求，让 espresso 上下文提前初始化。
+    ///
+    /// - 目的：把 "Failed to create espresso context" 这类初始化错误在正式抽帧之前暴露出来，
+    ///   避免用户等 30 秒才被告知"分析失败"。
+    /// - 失败时会把原始错误抛给调用方（`VideoAnalyzer` 负责处理 CPU 回退与最终熔断）。
+    /// - 仅在 iOS/沙箱环境有意义；CLI 场景一般不需要调用。
+    public func warmUp() async throws {
+        guard let image = Self.makePlaceholderImage() else { return }
+        let handler = VNImageRequestHandler(cgImage: image, options: [:])
+        let bodyPoseRequest = VNDetectHumanBodyPoseRequest()
+        bodyPoseRequest.usesCPUOnly = usesCPUOnly
+        try handler.perform([bodyPoseRequest])
+    }
+
+    /// 构造一张 1×1 的白色 CGImage，仅用于预热，不参与业务。
+    private static func makePlaceholderImage() -> CGImage? {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bytesPerRow = 4
+        var pixel: [UInt8] = [255, 255, 255, 255]
+        guard let context = CGContext(
+            data: &pixel,
+            width: 1,
+            height: 1,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        return context.makeImage()
     }
 }
