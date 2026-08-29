@@ -7,6 +7,7 @@ struct CLIOptions {
     let debugOverlay: Bool
     let debugOverlayDirectory: String?
     let outputVideo: Bool
+    let use3D: Bool
 }
 
 func printUsage() {
@@ -15,6 +16,7 @@ func printUsage() {
     print("  调试覆盖图: swift run FallLineCLI --debug-overlay 1.MP4")
     print("  指定输出目录: swift run FallLineCLI --debug-overlay --debug-overlay-dir /tmp/debug_frames 1.MP4")
     print("  输出标注视频: swift run FallLineCLI --output-video 1.MP4")
+    print("  3D 姿态融合默认已开启；关闭方式: swift run FallLineCLI --no-3d 1.MP4")
 }
 
 func parseOptions(arguments: [String]) -> CLIOptions? {
@@ -22,6 +24,7 @@ func parseOptions(arguments: [String]) -> CLIOptions? {
     var debugOverlay = false
     var debugOverlayDirectory: String?
     var outputVideo = false
+    var use3D = true
 
     var index = 1
     while index < arguments.count {
@@ -38,6 +41,10 @@ func parseOptions(arguments: [String]) -> CLIOptions? {
             index = nextIndex
         case "--output-video":
             outputVideo = true
+        case "--use-3d":
+            use3D = true
+        case "--no-3d":
+            use3D = false
         default:
             guard !argument.hasPrefix("--"), videoPath == nil else { return nil }
             videoPath = argument
@@ -50,7 +57,8 @@ func parseOptions(arguments: [String]) -> CLIOptions? {
         videoPath: videoPath,
         debugOverlay: debugOverlay,
         debugOverlayDirectory: debugOverlayDirectory,
-        outputVideo: outputVideo
+        outputVideo: outputVideo,
+        use3D: use3D
     )
 }
 
@@ -75,7 +83,12 @@ do {
     let nominalFPS = try await videoTrack?.load(.nominalFrameRate)
     let nativeFPS = Double(nominalFPS ?? 30)
     let sampleInterval = options.outputVideo ? (1.0 / max(nativeFPS, 1.0)) : 0.2
-    let analyzer = VideoAnalyzer(videoURL: videoURL, sampleInterval: sampleInterval)
+    let visionOptions: VisionAnalysisOptions = options.use3D ? .skiAnalysis3D : .skiAnalysis
+    let analyzer = VideoAnalyzer(
+        videoURL: videoURL,
+        sampleInterval: sampleInterval,
+        visionOptions: visionOptions
+    )
     let duration = try await asset.load(.duration)
     let totalSeconds = CMTimeGetSeconds(duration)
     let results = try await analyzer.analyze()

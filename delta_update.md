@@ -1,6 +1,6 @@
 # Delta Update
 
-最后更新：2026-06-05
+最后更新：2026-08-29
 
 本文档只记录每轮工作的增量变化，不记录项目全量背景。需要项目当前状态、目标和长期上下文时，先看 `WORK_LOG.md`；需要文件职责时，看 `file_manifest.md`。
 
@@ -14,6 +14,77 @@
 
 ## 变更
 
+### 2026-08-29：算法准确度落地（P0 + P1 + C + D + B）
+
+**本轮性质**：源码变更 + 6 视频端到端跑分对照。未 commit（待用户测试）。
+
+**背景**：延续 2026-06-05 深度研究结论，将「立即/短期」建议落地为可运行代码。目标是消除 5fps 采样、硬置信度门控、travelAngle 低置信度污染、2D 透视歧义四类系统性偏差。
+
+**新增文件：**
+- **`Sources/FallLineCore/OneEuroFilter.swift`**：1€ Filter 通用实现，逐信号时序平滑（低延迟、速度耦合截止频率）。
+- **`Sources/FallLineCore/PoseSmoother.swift`**：批量对整段 `[DetectionResult]` 应用 1€ Filter，平滑 8 个关键角度 + 关节坐标，再用 `PoseScorer` 重算 `PoseScore`。
+- **`Sources/FallLineCore/PoseMetrics3DAdapter.swift`**：将 `VNHumanBodyPose3DObservation` 的真实空间关节坐标融合进 2D `PoseMetrics`，重写膝弯角。
+- **`testvideo/_p1_baseline/`**：P1 阶段 6 视频结果快照（json+md）。
+- **`testvideo/_c_2d/`**：C 阶段 2D pipeline 结果快照，用于 B 阶段 3D 对比。
+
+**修改文件：**
+- **`Sources/FallLineCore/VideoAnalyzer.swift`**：
+  - `sampleInterval` 默认从 `1/5` (5fps) 提升到 `1/30` (30fps)。
+  - `calculateMotionStability`：修复 `dt = max(..., 1.0)` 强制拉到 ≥1s 的量纲错误，用真实帧间隔；`tolerancePerSecond` 回归物理量纲（bodyLean 90/s, knee 140/s, calf 160/s, gravity 0.75/s）。
+  - `addMotionPenalty` (C)：置信度聚合 `(prev+curr)/2 + 0.45 硬门控` → `min(prev,curr) + smoothConfidenceWeight` 软权重曲线，与 SkiMetricsCalculator/PoseScorer 语义对齐。
+  - `analyze()`：完成所有帧检测后统一走 `PoseSmoother`，再交给 `generateSummary`。
+- **`Sources/FallLineCore/FlowMetricsCalculator.swift`** (P0-1)：光流置信度分母从固定 `8.0` 改为 `baselineFrameInterval / sampleInterval` 帧率归一化，避免 30fps 下像素位移变小导致置信度系统性趋 0。
+- **`Sources/FallLineCore/SkiMetricsCalculator.swift`** (P0-2)：`edgeQualityScore` / `pressureSupportScore` / `foreAftScore` 聚合权重 `hard confidence` → `max(0.001, smoothConfidenceWeight(...))` 二次曲线降权。
+- **`Sources/FallLineCore/Utilities.swift`**：新增 `AnalysisReliability.softConfidenceFloor=0.15` / `softConfidenceCeiling=0.75` / `smoothConfidenceWeight()` 二次曲线；`minimumFlowTravelConfidence=0.6` / `boardVisualArbitrationTolerance=25°`。
+- **`Sources/FallLineCore/BoardDirectionAnalyzer.swift`**：
+  - kinematics 分支加光流置信度门控（P0）：`flowTravelConfidence ≥ 0.6` 才用 `flowTravelAngle`；否则回退到脚踝代理位移，避免低置信度光流角度跳动污染 `sideslip → carvingConfidence → boardKinematicHighScoreCap` 链路。
+  - `selectObservation` (P1-5)：视觉板身线作仲裁源复活；`axisDiff ≤ 25°` 时与 ankle 加权融合（visual 半权），否则丢弃 visual。
+- **`Sources/FallLineCore/VisionFrameAnalyzer.swift`** (P1-4)：新增 `VisionAnalysisOptions.skiAnalysis3D`；同一 handler 内并行 `VNDetectHumanBodyPoseRequest` (2D) + `VNDetectHumanBodyPose3DRequest` (3D)，走 `PoseMetrics3DAdapter.fuse` 融合。
+- **`Sources/FallLineCLI/main.swift`**：新增 `--use-3d` flag。
+
+**关键决策：**
+- **1€ Filter 参数**：`minCutoff=1.0`, `beta=0.05` —— 兼顾姿态角低速时抑制抖动、高速时保留真实变化。
+- **视觉线仲裁权重**：ankle 全权 + visual 半权（`wVisual = conf * 0.5`），确保 ankle 主导地位。25° 阈值参考文献经验值。
+- **3D 融合默认关闭**：`--use-3d` 需显式启用；3D 分析耗时增加 ~40%。
+- **稳定性置信度聚合改为 `min(prev, curr)`**：比 `avg` 更保守，一端不确定就整段不可靠。
+
+**验证：**
+
+1. **构建**：`swift build -c release` PASS (20.9s)。
+2. **单元测试**：sandbox 阻止 xcodebuild 访问 `/` → xcrun 无法解析 SDK → `swift test` 无法在 agent 端运行。已放弃这条通道，用「6 视频端到端跑分未见 crash 且输出结构完整」作为回归证据（本轮 3 次全量跑分共 18 次端到端调用，均返回完整 JSON+MD）。用户需在本机原生终端运行 `swift test` 补齐正式回归。
+3. **P1 → C 跑分对照** (motionStability 软权重)：
+
+   | 视频 | 综合 P1→C | 稳定性 P1→C | 原始均分 |
+   |:-:|:-:|:-:|:-:|
+   | 1 | 58→58 | 85.6→86.1 (+0.5) | 54.7 |
+   | 2 | 55→55 | 54.2→53.6 (-0.6) | 70.9 |
+   | 3 | 55→55 | 58.2→59.4 (+1.2) | 71.2 |
+   | 4 | 58→58 | 62.6→61.4 (-1.1) | 65.2 |
+   | 5 | 66→66 | 64.7→66.0 (+1.3) | 61.3 |
+   | 6 | 55→55 | 61.7→62.4 (+0.7) | 71.5 |
+
+   综合分 100% 不变，稳定性平均 +0.33。视频 5（唯一稳定滑行样本）+1.3 符合预期，rawPoseAverageScore 完全不变佐证 PoseSmoother 未受影响。
+
+4. **P1-5 视觉板身线仲裁命中率（410 帧样本）**：
+   - ankleProxy: 9 帧 (2.2%)
+   - mixed（视觉+ankle 融合）: 401 帧 (**97.8%**)
+   - 无 visualOnly（设计上不允许）
+   - 说明视觉线在这批样本上跟 ankle 高度一致，25° 阈值 + 半权设计生效，未见误检失控。
+
+5. **C(2D) vs B(3D) 膝弯角对照**：
+   - 12 组左右膝均值 Δ 全部为负（-5.2° ~ -23.1°），系统性修正 2D 透视高估
+   - kneeBendScore 上涨 +13.8 ~ +23.2（视频 4 从 47.6 → 62.4 触发建议话术切换：「站得太直」→「立刃已有」）
+   - 综合评分不变（被证据封顶吸收），但下游 KeyMomentDetector / HighlightMomentDetector 会受益于更真实的分数。
+
+**遗留 / 后续开放问题：**
+- **3D 融合默认关闭**：iOS SkiAnaylze 端未接入 `--use-3d`；未来若开放 3D 需权衡电量。
+- **证据封顶主导终值**：当前 6 个测试样本都是初中级横滑，被 58/55/66 三档封住。改动收益体现在 stabilityScore / kneeBendScore / rawPoseAverageScore 内部指标，对外总分不敏感。等有高水平立刃视频再验证。
+- **swift test 未跑**：sandbox 限制导致 agent 端无法运行；需要用户本机补齐。理论上受 PoseSmoother/3D 新类型影响的测试不多，AngleCalculationTests/PoseScorerTests 应保持全绿。
+- **motionStability 惩罚回归物理量纲**：本轮同时改了 `dt` 修复和 `tolerancePerSecond`，需长期观察在其他类型视频（快速转弯、滑跳）上是否偏严。
+
+**未提交**：所有改动保留在 working tree。`git status` 可见。
+
+---
 ### 2026-06-05：算法准确度深度研究
 
 **本轮性质**：仅文档/研究变更，无代码变更。

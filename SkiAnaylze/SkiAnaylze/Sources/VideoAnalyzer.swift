@@ -3,6 +3,25 @@ import CoreMedia
 import CoreImage
 //import AppKit
 
+// MARK: - 分析错误
+
+enum AnalysisError: LocalizedError {
+    /// Vision 神经网络推理上下文创建失败（如 "Failed to create espresso context"），
+    /// 熍断阈值内连续失败达到 `consecutiveFailures` 帧
+    case visionUnavailable(consecutiveFailures: Int, underlying: String)
+    /// 视频完整分析结束但零可用帧
+    case noReliableFrames
+
+    var errorDescription: String? {
+        switch self {
+        case .visionUnavailable(let count, _):
+            return "视觉识别服务暂不可用（连续 \(count) 帧初始化失败）。请尝试重启 App 或设备后重试；如仍失败，请确认在 iOS 17+ 真机上运行。"
+        case .noReliableFrames:
+            return "未能从视频中提取到有效的姿态帧，请确认视频中人物清晰可见。"
+        }
+    }
+}
+
 // MARK: - 视频分析器
 
 /// 负责视频抽帧、组装分析流程、生成全视频总结
@@ -63,6 +82,43 @@ class VideoAnalyzer {
 
         print("🔍 开始分析视频...")
 
+        // 预热：在正式抽帧之前先跑一次 1×1 空白图，让 Neural Engine espresso 上下文尽早初始化。
+        //
+        // 三段式策略：
+        //   1) Neural Engine 直接预热成功 → 继续跑，性能最佳
+        //   2) NE 预热失败但错误属于 espresso/CSU/MPSGraph 类型 → 切换到 CPU 后备并再预热一次
+        //   3) CPU 预热仍失败 → 直接抛 visionUnavailable，不再浪费用户时间抽 30 秒视频
+        do {
+            try await frameAnalyzer.warmUp()
+            print("✅ Vision 预热成功（Neural Engine）")
+        } catch {
+            let warmUpError = error.localizedDescription
+            print("⚠️ Vision 预热失败: \(warmUpError)")
+            if isVisionInitFailure(warmUpError) {
+                print("↩️ 尝试切换到 CPU 后备模式重新预热...")
+                frameAnalyzer.usesCPUOnly = true
+                do {
+                    try await frameAnalyzer.warmUp()
+                    print("✅ Vision 预热成功（CPU 后备）")
+                } catch {
+                    // CPU 也起不来 → 立即熍断，避免抽帧 30s 后才告诉用户失败
+                    throw AnalysisError.visionUnavailable(
+                        consecutiveFailures: 1,
+                        underlying: error.localizedDescription
+                    )
+                }
+            } else {
+                // 非 espresso 类错误：让主循环按帧处理（比如某种偶发的一次性错误）
+            }
+        }
+
+        // 熍断：连续 Vision 初始化失败 >= 该阈值时抛出 visionUnavailable。
+        // 典型场景是模拟器上 espresso 上下文无法创建，每帧都会失败，
+        // 与其静默返回 0 帧让用户困惑，不如尽早告知。
+        let visionFailureCircuitBreaker = 3
+        var consecutiveVisionFailures = 0
+        var lastVisionFailureMessage = ""
+
         var currentTime: Double = 0.0
         while currentTime < totalSeconds {
             let time = CMTime(seconds: currentTime, preferredTimescale: 600)
@@ -71,9 +127,42 @@ class VideoAnalyzer {
                 let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
                 let result = try await analyzeFrame(cgImage: cgImage, at: time)
                 results.append(result)
+                consecutiveVisionFailures = 0
                 printResult(result)
             } catch {
-                print("  ⚠️ 时间 \(formatTime(seconds: currentTime)) 分析失败: \(error.localizedDescription)")
+                let message = error.localizedDescription
+                print("  ⚠️ 时间 \(formatTime(seconds: currentTime)) 分析失败: \(message)")
+
+                if isVisionInitFailure(message) {
+                    // 运行时首次遇到 espresso 错误 & 尚未切 CPU → 就地切换后重试当前帧一次
+                    if !frameAnalyzer.usesCPUOnly {
+                        print("↩️ 运行时切换到 CPU 后备并重试当前帧...")
+                        frameAnalyzer.usesCPUOnly = true
+                        do {
+                            let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
+                            let result = try await analyzeFrame(cgImage: cgImage, at: time)
+                            results.append(result)
+                            consecutiveVisionFailures = 0
+                            printResult(result)
+                        } catch {
+                            consecutiveVisionFailures += 1
+                            lastVisionFailureMessage = error.localizedDescription
+                            print("  ⚠️ CPU 后备重试仍失败: \(lastVisionFailureMessage)")
+                        }
+                    } else {
+                        consecutiveVisionFailures += 1
+                        lastVisionFailureMessage = message
+                    }
+
+                    if consecutiveVisionFailures >= visionFailureCircuitBreaker {
+                        throw AnalysisError.visionUnavailable(
+                            consecutiveFailures: consecutiveVisionFailures,
+                            underlying: lastVisionFailureMessage
+                        )
+                    }
+                } else {
+                    consecutiveVisionFailures = 0
+                }
             }
 
             currentTime += sampleInterval
@@ -82,7 +171,26 @@ class VideoAnalyzer {
         }
 
         print("\n✅ 分析完成！共分析 \(results.count) 帧")
+
+        // 视频完整跑完但零可用帧 → 明确告知
+        if results.isEmpty {
+            throw AnalysisError.noReliableFrames
+        }
+
         return results
+    }
+
+    /// 判断错误信息是否对应 Vision/Espresso 初始化失败。
+    ///
+    /// 已知模式：
+    /// - "Failed to create espresso context"（Neural Engine / CoreML 上下文初始化失败）
+    /// - "CSU exception"（Vision 内部子系统抛出，通常伴随 espresso 错误）
+    /// - "MPSGraph"（Metal Performance Shaders Graph 后备失败）
+    private func isVisionInitFailure(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("espresso")
+            || lower.contains("csu exception")
+            || lower.contains("mpsgraph")
     }
 
     // MARK: - 单帧分析

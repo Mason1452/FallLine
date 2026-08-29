@@ -39,7 +39,8 @@ public class VideoAnalyzer {
     /// - Parameters:
     ///   - videoURL: 视频文件的 URL
     ///   - pointConfidenceThreshold: 关键点检测置信度阈值（默认 0.3）
-    ///   - sampleInterval: 采样间隔秒数（默认 0.2）
+    ///   - sampleInterval: 采样间隔秒数（默认 1/30 秒 = 30fps；旧默认 0.2 秒 = 5fps 时序精度过低，
+    ///     20ms 事件偏差 → 20° 膝角误差，故升至 30fps）
     ///   - maxFrameSize: 最大帧分辨率，nil 使用视频原始尺寸（默认 1920x1080）
     ///   - visionOptions: Vision 请求选项（默认仅姿态检测）
     ///   - batchSize: 并行分析批次大小（默认 8）
@@ -47,7 +48,7 @@ public class VideoAnalyzer {
     public init(
         videoURL: URL,
         pointConfidenceThreshold: VNConfidence = 0.3,
-        sampleInterval: Double = 0.2,
+        sampleInterval: Double = 1.0 / 30.0,
         maxFrameSize: CGSize? = CGSize(width: 1920, height: 1080),
         visionOptions: VisionAnalysisOptions = .skiAnalysis,
         batchSize: Int = 8,
@@ -171,7 +172,10 @@ public class VideoAnalyzer {
             progressHandler?(min(currentTime / totalSeconds, 1.0))
         }
 
-        return results
+        // 时序平滑：对全部帧的姿态角度应用 1€ Filter，再重新计算评分
+        // 消除 Vision 逐帧检测抖动，避免 motionStability 惩罚被抖动放大
+        let smoothed = PoseSmoother.smooth(results, scorer: poseScorer)
+        return smoothed
     }
 
     // MARK: - 单帧分析
@@ -214,7 +218,13 @@ public class VideoAnalyzer {
         // Step 3: 姿态指标计算
         let bodyPose: BodyPoseData
         if let observation = raw.bodyPoseObservation {
-            bodyPose = metricsCalculator.compute(from: observation)
+            let pose2D = metricsCalculator.compute(from: observation)
+            // 若同帧有 3D 观测，融合膝弯角（其他角度暂保留 2D 以保持评分曲线稳定）
+            if #available(macOS 14.0, iOS 17.0, *) {
+                bodyPose = PoseMetrics3DAdapter.fuse(base2D: pose2D, with: raw.bodyPose3DObservation)
+            } else {
+                bodyPose = pose2D
+            }
         } else {
             bodyPose = BodyPoseData(
                 detected: false,
@@ -282,7 +292,7 @@ public class VideoAnalyzer {
 
         // 光流调制
         let flowMetrics = await computeFlowMetrics()
-        let flowCalculator = FlowMetricsCalculator()
+        let flowCalculator = FlowMetricsCalculator(sampleInterval: sampleInterval)
         let flowModulationFactor = flowMetrics.framePairsUsed >= 2
             ? flowCalculator.computeModulation(
                 coherence: flowMetrics.motionCoherence,
@@ -433,19 +443,26 @@ public class VideoAnalyzer {
         for index in 1..<samples.count {
             let previous = samples[index - 1]
             let current = samples[index]
-            let dt = max(current.time - previous.time, 1.0)
+            // 真实帧间时长 dt。此前使用 max(current.time - previous.time, 1.0) 将 dt 强制拉到 ≥1s，
+            // 会在 <1s 采样间隔（5fps=0.2s / 30fps=0.033s）下人为削弱速度惩罚，导致运动稳定性
+            // 系统性偏高。改用真实 dt，并加一个极小下限避免除零。
+            let dt = max(current.time - previous.time, 1.0 / 240.0)
 
-            addMotionPenalty(previous.bodyLean, current.bodyLean, dt: dt, tolerancePerSecond: 18, weight: 1.2,
+            // tolerancePerSecond 语义为「每秒可容忍的角度变化」。
+            // 之前因为 dt 被强制拉到 ≥1s，18/28/32 实际表征的是 5fps 下每帧（0.2s）容忍值，
+            // 隐含真实容忍度 ≈ 90/140/160°/s。这里回归物理量纲，保守取真实经验值：
+            // 滑雪常见关节角速度峰值 30–90°/s，重心（hipRatio）单位/秒变化多在 0.3–0.5。
+            addMotionPenalty(previous.bodyLean, current.bodyLean, dt: dt, tolerancePerSecond: 90, weight: 1.2,
                              weightedPenalty: &weightedPenalty, totalWeight: &totalWeight)
-            addMotionPenalty(previous.leftKnee, current.leftKnee, dt: dt, tolerancePerSecond: 28, weight: 1.0,
+            addMotionPenalty(previous.leftKnee, current.leftKnee, dt: dt, tolerancePerSecond: 140, weight: 1.0,
                              weightedPenalty: &weightedPenalty, totalWeight: &totalWeight)
-            addMotionPenalty(previous.rightKnee, current.rightKnee, dt: dt, tolerancePerSecond: 28, weight: 1.0,
+            addMotionPenalty(previous.rightKnee, current.rightKnee, dt: dt, tolerancePerSecond: 140, weight: 1.0,
                              weightedPenalty: &weightedPenalty, totalWeight: &totalWeight)
-            addMotionPenalty(previous.leftCalf, current.leftCalf, dt: dt, tolerancePerSecond: 32, weight: 0.8,
+            addMotionPenalty(previous.leftCalf, current.leftCalf, dt: dt, tolerancePerSecond: 160, weight: 0.8,
                              weightedPenalty: &weightedPenalty, totalWeight: &totalWeight)
-            addMotionPenalty(previous.rightCalf, current.rightCalf, dt: dt, tolerancePerSecond: 32, weight: 0.8,
+            addMotionPenalty(previous.rightCalf, current.rightCalf, dt: dt, tolerancePerSecond: 160, weight: 0.8,
                              weightedPenalty: &weightedPenalty, totalWeight: &totalWeight)
-            addMotionPenalty(previous.gravityLevel, current.gravityLevel, dt: dt, tolerancePerSecond: 0.15, weight: 1.1,
+            addMotionPenalty(previous.gravityLevel, current.gravityLevel, dt: dt, tolerancePerSecond: 0.75, weight: 1.1,
                              weightedPenalty: &weightedPenalty, totalWeight: &totalWeight)
         }
 
@@ -464,12 +481,18 @@ public class VideoAnalyzer {
         totalWeight: inout Double
     ) {
         guard let previous, let current else { return }
-        let confidence = (previous.confidence + current.confidence) / 2
-        guard confidence >= 0.45 else { return }
+        // 取相邻两帧置信度的较小值作为该段速度估计的置信度：一端不确定就整段不可靠。
+        // 之前使用平均值 + 0.45 硬门控，会把 0.4~0.5 徘徊的关节点整段丢弃。
+        // 现改用 smoothConfidenceWeight（softFloor 0.15 / softCeiling 0.75 二次曲线），
+        // 与 SkiMetricsCalculator / PoseScorer 的置信度语义保持一致，
+        // 让站姿视频的中低置信度段落也能按曲线加权贡献，避免因样本被丢弃而造成时间跨度变大导致的虚高速度。
+        let confidence = min(previous.confidence, current.confidence)
+        let confWeight = AnalysisReliability.smoothConfidenceWeight(confidence)
+        guard confWeight >= 0.01 else { return }
 
         let velocity = abs(current.value - previous.value) / dt
         let penalty = clamp(velocity / tolerancePerSecond, lower: 0, upper: 1) * 100
-        let effectiveWeight = weight * confidence
+        let effectiveWeight = weight * confWeight
         weightedPenalty += penalty * effectiveWeight
         totalWeight += effectiveWeight
     }
@@ -486,7 +509,7 @@ public class VideoAnalyzer {
     private func computeFlowMetrics() async -> FlowMetrics {
         guard frameCache.count >= 2 else { return .empty }
 
-        let calculator = FlowMetricsCalculator()
+        let calculator = FlowMetricsCalculator(sampleInterval: sampleInterval)
 
         var pairs: [(prevImage: CGImage, prevPose: BodyPoseData, nextImage: CGImage, nextPose: BodyPoseData)] = []
         for i in 0..<(frameCache.count - 1) {

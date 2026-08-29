@@ -96,9 +96,35 @@ private extension BoardDirectionAnalyzer {
             visual: BoardObservation?,
             ankle: BoardObservation?
         ) -> BoardObservation? {
-            // 图像候选线当前只作为调试层输出。真实样本显示它可能抓到雪面纹理、
-            // 因此暂不参与评分/横滑计算；等人工标定稳定后再提升为主证据。
-            return ankle
+            // 图像候选线易被雪面纹理误触发。策略：
+            // 1) ankle 主线，永远作为主证据；
+            // 2) 若 visual 存在且与 ankle 轴向差 ≤ arbitrationAxisTolerance，
+            //    则做加权融合作为“仲裁背书”提升整体置信度；
+            // 3) 若 visual 与 ankle 分歧显著（可能是雪面误检），忽略 visual。
+            guard let ankle = ankle else { return nil }
+            guard let visual = visual, visual.confidence > 0 else { return ankle }
+
+            let axisDiff = BoardDirectionAnalyzer.axisAngleDifference(visual.axisAngle, ankle.axisAngle)
+            guard axisDiff <= AnalysisReliability.boardVisualArbitrationTolerance else {
+                return ankle
+            }
+
+            // 一致：以置信度做加权平均，得到融合观测
+            let wAnkle = max(ankle.confidence, 0.001)
+            let wVisual = max(visual.confidence, 0.001) * 0.5   // visual 半权，防止其未验证的偏差主导
+            let wSum = wAnkle + wVisual
+            let fusedAngle = normalizeAngle(
+                (ankle.axisAngle * wAnkle + visual.axisAngle * wVisual) / wSum
+            )
+            let fusedConfidence = min(1.0, ankle.confidence + visual.confidence * 0.3)
+
+            return BoardObservation(
+                source: .mixed,
+                axisAngle: fusedAngle,
+                centerX: ankle.centerX,
+                centerY: ankle.centerY,
+                confidence: fusedConfidence
+            )
         }
     }
 
@@ -112,7 +138,13 @@ private extension BoardDirectionAnalyzer {
         let travelAngle: Double
         let travelConfidence: Double
 
-        if let flowAngle = flowTravelAngle, let flowConf = flowTravelConfidence {
+        // 门控：仅当光流置信度足够高时才采纳光流方向；否则回退到脚踝代理位移。
+        // 低置信度帧下光流角度会剧烈跳动（-4.7° ↔ 112.4°），若无脑采纳会污染 sideslipAngle
+        // → carvingConfidence → boardKinematicHighScoreCap（62 分封顶）整条链路。
+        let hasReliableFlow = flowTravelAngle != nil
+            && (flowTravelConfidence ?? 0) >= AnalysisReliability.minimumFlowTravelConfidence
+
+        if hasReliableFlow, let flowAngle = flowTravelAngle, let flowConf = flowTravelConfidence {
             travelAngle = flowAngle
             travelConfidence = flowConf
         } else {

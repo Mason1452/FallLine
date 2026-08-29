@@ -99,6 +99,25 @@ public enum AnalysisReliability {
     /// 低于该置信度的滑雪派生指标不参与“问题帧/最佳帧”判断。
     public static let minimumSkiMetricConfidence = 0.35
 
+    /// confidence-weighted 聚合的下限（低于此值贡献接近 0）
+    public static let softConfidenceFloor = 0.15
+    /// confidence-weighted 聚合的上限（高于此值满贡献）
+    public static let softConfidenceCeiling = 0.75
+
+    /// 平滑置信度权重函数（Anipose-inspired confidence-weighted 聚合）
+    ///
+    /// 将原本的硬门控（confidence < threshold ? 0 : 1）替换为平滑降权：
+    /// - conf <= 0.15 → 权重 0（几乎丢弃）
+    /// - conf in (0.15, 0.75) → 权重 = ((conf - 0.15) / 0.60)^2（二次曲线，中段权重≈0.25）
+    /// - conf >= 0.75 → 权重 1（满贡献）
+    ///
+    /// 二次映射比线性映射更保守，避免低置信度污染聚合结果。
+    public static func smoothConfidenceWeight(_ confidence: Double) -> Double {
+        let normalized = (confidence - softConfidenceFloor) / (softConfidenceCeiling - softConfidenceFloor)
+        let clamped = clamp(normalized, lower: 0, upper: 1)
+        return clamped * clamped
+    }
+
     /// 少于该时长的可靠片段不输出高光，避免高采样率下把短暂偶然高分包装成最佳片段。
     public static let minimumHighlightDuration = 8.0
 
@@ -112,10 +131,18 @@ public enum AnalysisReliability {
     public static let fullReliableScoreDuration = 12.0
 
     /// 板身/运动方向证据低于该置信度时，不能用姿态单帧把综合分或高光推高。
-    public static let minimumBoardKinematicConfidenceForHighScore = 0.15
+    ///
+    /// 历史值 0.15 过于宽松：踝代理板身在正面/背面视角下 boardSummary.confidence 常在 0.18~0.35，
+    /// 会把误估的 sideslip 直接触发 highScore 封顶（Video 2/4/6 都命中过 dominantSideslipScoreCap=58）。
+    /// 提升到 0.55 后，只有真正稳定的侧视/长片段（confidence≈0.58+）才会激活封顶，
+    /// 3D 融合修正后的 kneeBendScore 可以透传到综合分。
+    public static let minimumBoardKinematicConfidenceForHighScore = 0.55
 
     /// 高横滑封顶至少需要该持续时长的运动学证据，避免高采样率下的一小段误判。
-    public static let minimumBoardKinematicDurationForHighScore = 3.0
+    ///
+    /// 历史值 3.0s 在 30fps 下等价于 ~90 帧，短片段（4~6 秒）非常容易被误判。
+    /// 提升到 5.0s 让封顶只作用于有足够行进方向证据的中长片段。
+    public static let minimumBoardKinematicDurationForHighScore = 5.0
 
     /// 短片段的低板身置信度才触发保守封顶；长片段中脚踝代理可能因视角失效。
     public static let shortClipBoardEvidenceDuration = 10.0
@@ -142,7 +169,24 @@ public enum AnalysisReliability {
     public static let highSideslipScoreCap = 70.0
 
     /// 板身/滑行方向夹角很大时的保守综合分上限。
+    ///
+    /// 真横滑（夹角 ≥ 45° 且板身证据充分）意味着雪板几乎横过来搓雪，
+    /// 此时即使姿态好看也不能给出接近中级/高级的分数，保持 58 分强封顶。
+    /// 与之对应，`minimumBoardKinematicConfidenceForHighScore` 已从 0.15 提升到 0.55，
+    /// 只有真正稳定的板身/行进证据（例如 Video 3/5 的 0.58+）才会激活该封顶，
+    /// 低置信度场景（Video 2/4/6，boardConf ≤ 0.34）会直接放行 3D 修正后的姿态分。
     public static let dominantSideslipScoreCap = 58.0
+
+    /// 光流行进方向被采纳为 travelAngle 的最低置信度。
+    ///
+    /// FlowMetricsCalculator 中光流置信度 = clamp(pixelMagnitude/8, 0, 1)。低置信度帧下
+    /// 该角度会剧烈跳动（观察到 -4.7° ↔ 112.4°），无法可靠支撑 sideslipAngle → 62 分封顶。
+    /// 低于该阈值时改回退到脚踝代理位移方案。
+    public static let minimumFlowTravelConfidence = 0.6
+
+    /// BoardVisualLineDetector 视觉板身线与 ankle 代理板身线之间允许的最大轴向差（度）。
+    /// 差值在此范围内视为“两方一致”，视觉线可作为仲裁背书参与融合；超出则忽略视觉。
+    public static let boardVisualArbitrationTolerance = 25.0
 }
 
 /// 当前板身分析仍是脚踝代理；如果它连低置信的“板身-运动方向”关系都无法稳定给出，
@@ -266,7 +310,7 @@ public func averageEdgeEvidenceScore(from frames: [DetectionResult]) -> Double? 
               score.calfLeanConfidence >= AnalysisReliability.minimumPoseScoreConfidence else {
             return nil
         }
-        return (score.calfLeanScore, max(0.01, score.calfLeanConfidence))
+        return (score.calfLeanScore, max(0.001, AnalysisReliability.smoothConfidenceWeight(score.calfLeanConfidence)))
     }
     guard !values.isEmpty else { return nil }
     return weightedAverage(values)
@@ -283,7 +327,7 @@ public func stableCarvingBaseline(
 
     let entries = reliableFrames.compactMap { frame -> (frame: DetectionResult, score: Double, weight: Double)? in
         guard let poseScore = frame.poseScore else { return nil }
-        return (frame, poseScore.totalScore, max(0.01, poseScore.totalConfidence))
+        return (frame, poseScore.totalScore, max(0.001, AnalysisReliability.smoothConfidenceWeight(poseScore.totalConfidence)))
     }
     let totalDuration = sampledDuration(fromTimes: entries.map { $0.frame.time })
     guard totalDuration >= AnalysisReliability.minimumStableCarvingReliableDuration else { return nil }

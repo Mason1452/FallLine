@@ -68,7 +68,37 @@ public struct FlowMetricsCalculator {
     /// 方向稳定性调制仅在姿态分高于此阈值时扣减（避免已低分再被压低）
     public let stabilityPenaltyScoreFloor: Double = 75.0
 
-    public init() {}
+    /// 光流置信度分母（帧率归一化后的像素位移基准）。
+    ///
+    /// 原实现使用 `magnitude / 8.0`，其中 8.0 是在 5fps（sampleInterval=0.2s）下经验值。
+    /// 30fps（sampleInterval≈0.033s）下同样运动的相邻帧像素位移只有 5fps 的 1/6，导致
+    /// directionalStability / velocitySmoothness 系统性塌陷为 0。
+    ///
+    /// 归一化公式：magnitudeAtBaseline = magnitude × (baselineInterval / sampleInterval)，
+    /// 其中 baselineInterval = 0.2s。等价于把置信度定义在「等价 5fps 下的像素位移」上。
+    public let baselineFrameInterval: Double = 0.2
+    public let flowConfidenceReference: Double = 8.0
+
+    /// 采样间隔（秒），来自 VideoAnalyzer.sampleInterval。用于光流置信度分母的帧率归一化。
+    /// 默认 1/30 与新的 30fps 采样对齐。
+    public let sampleInterval: Double
+
+    public init(sampleInterval: Double = 1.0 / 30.0) {
+        self.sampleInterval = sampleInterval
+    }
+
+    /// 按当前帧率归一化的等价 5fps magnitude
+    @inline(__always)
+    private func normalizedMagnitude(_ magnitude: Double) -> Double {
+        let scale = baselineFrameInterval / max(sampleInterval, 1.0 / 240.0)
+        return magnitude * scale
+    }
+
+    /// 光流置信度：将像素位移归一化到基线帧率后再除以经验分母
+    @inline(__always)
+    private func flowConfidence(magnitude: Double) -> Double {
+        return clamp(normalizedMagnitude(magnitude) / flowConfidenceReference, lower: 0, upper: 1)
+    }
 
     // MARK: - 主入口
 
@@ -131,7 +161,7 @@ public struct FlowMetricsCalculator {
             let magnitude = sqrt(dx * dx + dy * dy)
             if magnitude > 0 {
                 let angle = normalizeAngle(atan2(dy, dx) * 180 / Double.pi)
-                let conf = clamp(magnitude / 8.0, lower: 0, upper: 1)
+                let conf = flowConfidence(magnitude: magnitude)
                 directions.append((angle: angle, confidence: conf))
             } else {
                 directions.append((angle: 0, confidence: 0))
@@ -248,7 +278,7 @@ public struct FlowMetricsCalculator {
             }
 
             let angle = normalizeAngle(atan2(dy, dx) * 180 / Double.pi)
-            let confidence = clamp(magnitude / 8.0, lower: 0, upper: 1)
+            let confidence = flowConfidence(magnitude: magnitude)
             directions.append((angle: angle, confidence: confidence))
         }
 

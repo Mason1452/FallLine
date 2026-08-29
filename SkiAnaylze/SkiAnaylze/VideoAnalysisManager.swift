@@ -83,8 +83,21 @@ class VideoAnalysisManager: ObservableObject {
         Task {
             do {
                 try await performAnalysis(videoURL: videoURL)
+            } catch is CancellationError {
+                // Task 取消不视为失败
+                return
+            } catch let analysisError as AnalysisError {
+                // 已本地化的分析错误：直接使用其中文描述
+                if !isCancelled {
+                    print("❌ 分析失败(AnalysisError): \(analysisError.errorDescription ?? "")")
+                    if case .visionUnavailable(_, let underlying) = analysisError {
+                        print("   原始错误: \(underlying)")
+                    }
+                    state = .failed(error: analysisError.errorDescription ?? "分析失败")
+                }
             } catch {
                 if !isCancelled {
+                    print("❌ 分析失败(unknown): \(error.localizedDescription)")
                     state = .failed(error: error.localizedDescription)
                 }
             }
