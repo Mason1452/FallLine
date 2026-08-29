@@ -1,46 +1,45 @@
 # FallLine Work Log
 
-## Current State (2026-08-29 收官后 +1)
+## Current State (2026-08-30)
+
+**TrendAnalytics 单元测试覆盖落地（+13 用例）** —— 主线 B 收官后清单里的第 2 项可选优化完成。仅新增 [TrendAnalyticsTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/TrendAnalyticsTests.swift) 1 个测试文件，无生产代码改动。
+
+**本轮变更概要**（详见 `delta_update.md` 的"2026-08-30"条目）：
+- 新增 13 个 XCTest 用例，覆盖 7 大能力域：空数据兜底 / 周汇总 / 4 类里程碑（`firstReached` / `newPersonalBest` / `weeklyImprovement` / `streak`）/ `previouslyUnlocked` 去重 / 综合报告字段 / `stableKey` 稳定性 / Codable 往返
+- 测试用固定时间锚 `2026-01-05 12:00 UTC`（ISO 周一）+ `session(offsetDays:score:level:)` helper，避免时区/DST 抖动导致 flaky
+- 每个用例都与 `TrendAnalytics.swift` 源码具体行号交叉核对（阈值 3.0 / 3 / `firstIndex >= 1` / bucket 0.5 等）
+
+**验证**：
+- `swift build --build-tests` PASS（5.76s，Linking FallLinePackageTests 成功）
+- `GetDiagnostics` 目标文件：空
+- 沙箱内 `swift test` 因 XCTest 临时目录限制无法运行，需用户本机跑 `swift test 2>&1 | tail -5` 预期 `Executed 101 tests, with 0 failures`
+
+**当前项目定位**（无变化）：
+- **iOS App = Core 唯一消费方**：SwiftPM 本地依赖，8 个复制文件已删除（净减 -2384 行）
+- **Core 对外契约就绪**：`Package.swift` 声明 library + executable；`AnalysisOutput: Identifiable`
+- **进步曲线闭环**：`VideoAnalysisManager` 分析成功 → `trendStore.record()` 埋点 → `Milestone` 本地推送 → "趋势"Tab 折线图
+- **iOS App 结构**：3 Tab（分析 / 记录 / 趋势）
+- **Vision 稳定性**：iOS 分析入口已用上 warmUp + espresso 熔断 + CPU 后备
+- **新算法层测试覆盖**：`TrendAnalytics` 关键路径 13 用例保护，未来重构有兜底
+
+**下一步（用户本地）**：
+1. `swift test` 本机复验 101 用例全通过
+2. Xcode Cmd+B / Cmd+R 走完主线 B 收官后 +1 的模拟器验证（若上轮尚未做）
+3. 决策 travelAngle 链路方向后再进入第 3 项优化
+
+**后续可优化方向（不阻塞）**：
+- travelAngle → sideslip → carvingConfidence → boardKinematicHighScoreCap 链路的低置信度误判决策（见 `AGENTS.md` 板身检测条目）
+  - 候选方案：(A) 加置信度门控直接屏蔽低置信度帧的 travelAngle；(B) 引入 IMU 融合（依赖手机端埋点）；(C) 完全弃用 travelAngle，回退到 hipCenter 2D 位移
+  - 建议先量化：从现有 corpus 里统计"高 carving cap 触发但主观判断误判"的样本比例
+
+## Previous State (2026-08-29 收官后 +1)
 
 **iOS 已切换到 `analyzeWithResilience()`** —— 主线 B 收官后清单里的第 1 项可选优化已落地。单文件改动 [VideoAnalysisManager.swift](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/VideoAnalysisManager.swift#L134-L165)。
 
-**本轮变更概要**（详见 `delta_update.md` 的"2026-08-29 (收官后 +1)"条目）：
+**当轮变更概要**（详见 `delta_update.md` 的"2026-08-29 (收官后 +1)"条目）：
 - `analyzer.analyze()` → `analyzer.analyzeWithResilience(progressHandler:)`：接入 Vision espresso 上下文预热 + CPU 后备 + 连续 3 帧失败熔断
 - 用 `progressHandler` 把 Core 抽帧真实进度映射到 App 进度条 0.2→0.75 区间，替代原两段 500ms 假 sleep
 - `AnalysisError.visionUnavailable` / `.noReliableFrames` 各自转 `NSError` 沿现有错误弹窗链路展示
-
-**验证**：
-- `swift build` PASS（0.19s）
-- `GetDiagnostics` 目标文件：空
-- Xcode 复验待用户本机 Cmd+B
-
-**主线 B 收官前 3 个 commit（仍在 `origin/main` 上）**：
-```
-efd7843  feat(trend): 进步曲线接入主流程
-264a1b2  feat(core): AnalysisOutput 支持 Identifiable，兼容 SwiftUI sheet(item:)
-94ce905  feat(ios): 主线 B 完成 - iOS SPM 化，消除 8 个复制文件
-```
-
-**当前项目定位**：
-- **iOS App = Core 唯一消费方**：iOS 通过 SwiftPM 本地依赖消费 `FallLineCore`，8 个复制文件已全部删除（净减 -2384 行）
-- **Core 对外契约就绪**：`Package.swift` 声明 `.library("FallLineCore")` + `.executable("FallLineCLI")`；`AnalysisOutput` 满足 `Identifiable`
-- **进步曲线闭环**：`VideoAnalysisManager` 分析成功 → `trendStore.record()` 埋点 → `Milestone` 触发本地推送 → "趋势"Tab 折线图
-- **iOS App 结构**：3 个 Tab —— 分析 / 记录 / 趋势。启动时幂等请求通知权限
-- **Vision 稳定性**：iOS 分析入口已用上 warmUp + espresso 熔断 + CPU 后备
-
-**验证状态**：
-- `swift build` PASS
-- `swift test` 88/0 全通过（用户本机验证：0.096s，2026-08-29 18:43）
-- Xcode 编译：SkiAnaylze target 已过三轮修复（Missing package product / 3 处 API 断层 / Identifiable），本轮切熔断版后需再复验一次
-
-**下一步（用户本地）**：
-1. Xcode Cmd+B 最终确认切熔断版后仍能编译
-2. Cmd+R 跑模拟器：切"趋势"Tab 应看到 [DemoData](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/Sources/DemoData.swift) 注入的 demo；分析新视频进度条应从 0.2 平滑爬到 0.75
-3. 若视频抽帧过程中报 Vision 错误，现在会看到中文提示"Vision 神经网络初始化失败..."或"未从视频中提取到任何可用姿态帧..."
-
-**后续可优化方向（不阻塞）**：
-- 给 `TrendAnalytics` 补单元测试（当前 88 tests 不覆盖新增算法层）
-- travelAngle → sideslip → carvingConfidence → boardKinematicHighScoreCap 链路的低置信度误判决策（见 `AGENTS.md` 板身检测条目）
 
 ## Previous State (2026-08-29 收官)
 

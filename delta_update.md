@@ -14,6 +14,45 @@
 
 ## 变更
 
+### 2026-08-30：TrendAnalytics 单元测试覆盖 (+13 用例)
+
+**本轮性质**：补齐"88 tests 不覆盖新增算法层"这个已知空档。仅新增测试文件 1 个，不改 Core / iOS 生产代码。
+
+**新增**：
+- [TrendAnalyticsTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/TrendAnalyticsTests.swift) —— 13 个用例覆盖 7 大能力域：
+  1. 空数据兜底：`analyze([])` 报告字段全 `nil/empty`；`weeklySummaries([])` 返回空数组
+  2. 周汇总单周聚合：3 次分析同周 → `sessionCount=3` / `avg=70` / `best=80` / `worst=60`
+  3. 周汇总跨周排序：3 个 offset 0/7/14 天 → 3 个桶按 `weekStart` 升序
+  4. 里程碑 - 首次达到：初级不上报（源码 `firstIndex >= 1` 门控），中级/高级各一次
+  5. 里程碑 - 刷新最高：首个 session 不算基线，之后每次超越前值上报
+  6. 里程碑 - 周提升：+5 触发 / +2 低于阈值 3 不触发
+  7. 里程碑 - 连续活跃：3 周连续触发 `streak(3)`；中间断一周只剩 2 不触发
+  8. `previouslyUnlocked` 去重：`firstReached:中级` 已解锁 → newMilestones 只剩 `高级`
+  9. 综合报告字段：`personalBest` / `last7DaysAverage` / `last30DaysAverage` 窗口边界
+  10. `highestLevelReached` 按 `levelOrder` 反向匹配最高层级
+  11. `Milestone.stableKey` 稳定性：`personalBest` 四舍五入到整数、`weeklyImprovement` 精确到 0.5
+  12. `SessionEntry` Codable 往返
+
+**测试基础设施**：
+- 时间锚点 `2026-01-05 12:00 UTC`（确定为 ISO 周一，避开 DST 抖动）
+- `session(offsetDays:score:level:)` helper，用 `anchor + offsetDays × 86400` 生成确定性时间戳
+- `now` 参数显式注入，`last7 / last30` 窗口测试不受"当前时间"影响
+
+**验证**：
+- `swift build --build-tests`：`Linking FallLinePackageTests` + `Build complete! (5.76s)` ✅
+- `GetDiagnostics` 目标文件：空 ✅
+- 沙箱内 `swift test` 因 XCTest 临时目录访问限制无法运行，需用户本机复验 `swift test 2>&1 | tail -5` 预期 `Executed 101 tests, with 0 failures`
+
+**API 断层核对**（源码 vs 测试断言）：
+- `firstReached` 门控：源码 line 220 `firstIndex(of:) ?? 0 >= 1` → 测试断言初级过滤、中级/高级上报 ✅
+- `newPersonalBest` 跳首：源码 line 230 `sorted.first?.timestamp != session.timestamp` → 测试首个 session 不算刷新 ✅
+- `weeklyImprovement` 阈值：源码 line 238 `>= weeklyImprovementThreshold(3.0)` → 测试 +5 通过、+2 不通过 ✅
+- `streak` 阈值：源码 line 245 `>= 3` → 测试 3 通过、2 不通过 ✅
+- `stableKey` bucket：源码 line 318 `(delta*2).rounded()/2` → 测试 5.24→5.0、5.26→5.5 ✅
+
+**未做/后续**：
+- travelAngle → sideslip → boardKinematicHighScoreCap 链路的低置信度误判决策（需先讨论方向）
+
 ### 2026-08-29 (收官后 +1)：iOS 切换到 analyzeWithResilience，进度条真实化
 
 **本轮性质**：主线 B 收官后的第 1 个可选优化落地。单文件改动 [VideoAnalysisManager.swift](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/VideoAnalysisManager.swift#L134-L165) 一处，一并完成 r1（切熔断版）+ r2（真实 progress）。
