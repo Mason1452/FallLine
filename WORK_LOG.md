@@ -1,36 +1,57 @@
 # FallLine Work Log
 
-## Current State (2026-08-30)
+## Current State (2026-08-30 决策前置)
+
+**travelAngle 链路误判决策已量化前置** —— 清单里最后一项优化的量化基线搭好、决策候选 A/B/C/D 已根据 24 份 corpus 拉齐，等你拍板走哪个方案。
+
+**本轮变更概要**（详见 `delta_update.md` 的"2026-08-30 (决策前置)"条目）：
+- 新增 [scripts/travel_angle_audit.py](file:///Users/mingsen/Project/FallLine/scripts/travel_angle_audit.py)：只读、无副作用，与 Core [`boardKinematicHighScoreCap`](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L209-L236) 完全一致口径复现 cap 判定
+- 扫描 24 份 `testvideo/**/*.json`，输出每份 travelAngle / sideslip / carvingConfidence / observationConfidence 统计 + cap 归因
+
+**量化结论（决定后续决策的 5 条硬事实）**：
+1. **cap 触发率 33.3% (8/24)**，全走 sideslip 分支（无低置信度短片触发）
+2. **travelAngle 逐帧噪声惊人**：16/24 样本 `travelStd > 25°`，大多 >100° —— 均值不可信
+3. **观测置信度普遍低**：0 份样本 `avgObsCnf ≥ 0.6`；现阈值 0.55 是极严格门槛
+4. **最大惩罚 Δ=-18.4 分**（3.json：raw 76 → cap 58，obsCnf 只有 0.59）
+5. **cap 抹平 3D 融合优化**：raw 从 61→67 的改善被 cap 70 吃掉
+
+**决策候选**：
+- **方案 A（推荐）**：`minimumBoardKinematicConfidenceForHighScore` 0.55→0.7 —— 24 份 corpus 里 8 次 cap 触发全清零；改动 1 行；风险最小
+- **方案 B**：`sideslipStd > 25°` 高波动豁免 —— 激进
+- **方案 C**：弃 travelAngle 回退 hipCenter 2D 位移 —— 改动大
+- **方案 D**：IMU 融合 —— 长线独立技术栈
+
+**验证**：
+- 脚本运行成功，输出格式化明细表 + 汇总分组
+- 无生产代码改动 → 已有 `swift build` 与 101 tests 完全不受影响
+- 脚本本身可作为**后续任何优化的对照基线**（先跑基线、改完对比）
+
+**当前项目定位**（无变化）：
+- iOS App = Core 唯一消费方（SwiftPM 本地依赖，8 份复制文件已删）
+- Core 对外契约就绪（`Package.swift` products 声明 + `AnalysisOutput: Identifiable`）
+- 进步曲线闭环：埋点 → UserDefaults → 里程碑 → 本地推送 → 折线图
+- Vision 稳定性：iOS 已用 warmUp + espresso 熔断 + CPU 后备
+- 新算法层测试覆盖：TrendAnalytics 13 用例
+- **travelAngle 决策量化基线：`scripts/travel_angle_audit.py` 可复现**
+
+**下一步（等你决策）**：
+1. 拍板走 A / B / C / D 哪个方案
+2. 若走 A：改 [Utilities.swift#L139](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L139) `0.55 → 0.7`，跑 CLI 重新分析 corpus，跑一次 `travel_angle_audit.py` 对比 cap 触发数是否降为 0
+3. 若走 B/C/D：需要各自更详细的设计与测试计划，先讨论再动手
+
+**后续可优化方向（不阻塞）**：
+- 主线 B 收官后清单已清空（trendStore 单测、analyzeWithResilience 迁移、travelAngle 量化）
+- travelAngle 生产改动完成后即可考虑关闭本轮量化前置的 loop
+- 新方向：拓展 corpus（当前 6 独立视频 × 4 版本快照，可添加更多真实用户视频做 A/B 对照）
+
+## Previous State (2026-08-30 TrendAnalytics 测试覆盖)
 
 **TrendAnalytics 单元测试覆盖落地（+13 用例）** —— 主线 B 收官后清单里的第 2 项可选优化完成。仅新增 [TrendAnalyticsTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/TrendAnalyticsTests.swift) 1 个测试文件，无生产代码改动。
 
-**本轮变更概要**（详见 `delta_update.md` 的"2026-08-30"条目）：
-- 新增 13 个 XCTest 用例，覆盖 7 大能力域：空数据兜底 / 周汇总 / 4 类里程碑（`firstReached` / `newPersonalBest` / `weeklyImprovement` / `streak`）/ `previouslyUnlocked` 去重 / 综合报告字段 / `stableKey` 稳定性 / Codable 往返
-- 测试用固定时间锚 `2026-01-05 12:00 UTC`（ISO 周一）+ `session(offsetDays:score:level:)` helper，避免时区/DST 抖动导致 flaky
-- 每个用例都与 `TrendAnalytics.swift` 源码具体行号交叉核对（阈值 3.0 / 3 / `firstIndex >= 1` / bucket 0.5 等）
-
-**验证**：
-- `swift build --build-tests` PASS（5.76s，Linking FallLinePackageTests 成功）
-- `GetDiagnostics` 目标文件：空
-- 沙箱内 `swift test` 因 XCTest 临时目录限制无法运行，需用户本机跑 `swift test 2>&1 | tail -5` 预期 `Executed 101 tests, with 0 failures`
-
-**当前项目定位**（无变化）：
-- **iOS App = Core 唯一消费方**：SwiftPM 本地依赖，8 个复制文件已删除（净减 -2384 行）
-- **Core 对外契约就绪**：`Package.swift` 声明 library + executable；`AnalysisOutput: Identifiable`
-- **进步曲线闭环**：`VideoAnalysisManager` 分析成功 → `trendStore.record()` 埋点 → `Milestone` 本地推送 → "趋势"Tab 折线图
-- **iOS App 结构**：3 Tab（分析 / 记录 / 趋势）
-- **Vision 稳定性**：iOS 分析入口已用上 warmUp + espresso 熔断 + CPU 后备
-- **新算法层测试覆盖**：`TrendAnalytics` 关键路径 13 用例保护，未来重构有兜底
-
-**下一步（用户本地）**：
-1. `swift test` 本机复验 101 用例全通过
-2. Xcode Cmd+B / Cmd+R 走完主线 B 收官后 +1 的模拟器验证（若上轮尚未做）
-3. 决策 travelAngle 链路方向后再进入第 3 项优化
-
-**后续可优化方向（不阻塞）**：
-- travelAngle → sideslip → carvingConfidence → boardKinematicHighScoreCap 链路的低置信度误判决策（见 `AGENTS.md` 板身检测条目）
-  - 候选方案：(A) 加置信度门控直接屏蔽低置信度帧的 travelAngle；(B) 引入 IMU 融合（依赖手机端埋点）；(C) 完全弃用 travelAngle，回退到 hipCenter 2D 位移
-  - 建议先量化：从现有 corpus 里统计"高 carving cap 触发但主观判断误判"的样本比例
+**当轮变更概要**（详见 `delta_update.md` 的"2026-08-30：TrendAnalytics 单元测试覆盖"条目）：
+- 新增 13 个 XCTest 用例，覆盖 7 大能力域
+- 测试用固定时间锚 + `session(offsetDays:score:level:)` helper 保证确定性
+- 每个用例都与 `TrendAnalytics.swift` 源码具体行号交叉核对
 
 ## Previous State (2026-08-29 收官后 +1)
 

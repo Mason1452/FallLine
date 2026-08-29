@@ -14,6 +14,46 @@
 
 ## 变更
 
+### 2026-08-30 (决策前置)：travelAngle 链路量化审计脚本 + corpus 定量结论
+
+**本轮性质**：主线 B 收官清单里剩余 travelAngle 决策的**只读量化前置**。新增审计脚本 1 个 + 24 份 JSON 的定量结果。**不改任何生产代码**。
+
+**新增**：
+- [scripts/travel_angle_audit.py](file:///Users/mingsen/Project/FallLine/scripts/travel_angle_audit.py) —— 纯 stdlib Python 脚本，只读扫描 `testvideo/**/*.json`，用与 Core [`boardKinematicHighScoreCap`](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L209-L236) 完全一致口径复现 cap 判定，输出每份 JSON 的 travelAngle / sideslipAngle / carvingConfidence / observationConfidence 统计与 cap 归因。
+
+**量化结论（24 份 corpus）**：
+
+1. **cap 触发率 33.3%（8/24）** —— 全部走的是 sideslip 分支：3.json 类样本 (sideslip 51°, cap 58) + 5.json 类样本 (sideslip 42°, cap 70)。低置信度短片分支（62 cap）在本 corpus **零命中**。
+
+2. **travelAngle 极度不稳定**：16/24（66.7%）样本 `travelStd > 25°`，其中大多数 `travelStd > 100°`。这直接量化了 [AGENTS.md 板身检测条目](file:///Users/mingsen/Project/FallLine/AGENTS.md) 说的"低置信度帧角度跳动大，画面 2D 像素运动 ≠ 雪板实际行进方向"。**travelStd 100° 意味着 travelAngle 均值本身就是被噪声主导的随机变量，不能作为决策依据**。
+
+3. **观测置信度整体偏低**：全 24 份没有一份 avgObservationConfidence ≥ 0.6。均值大多在 0.3-0.6 之间。现阈值 0.55 已经是极严格的门槛，corpus 中只有 3 号和 5 号（obsCnf 0.58-0.59）勉强越过——它们**全部触发 cap**。
+
+4. **cap 惩罚幅度最大 18.4 分**：3.json / _b_3d_baseline/3.json 两份 rawPoseAverageScore=76 被 cap 到 58，Δ=-18.4 分。这类样本 obsCnf 只有 0.59（勉强越阈值），却因 sideslip 均值 51° 直接判定为横滑。**若阈值收紧到 0.7，这些样本会走 no_cap 分支，raw 76 保留下来**。
+
+5. **cap 会吞掉 3D 融合的改善**：对齐同一视频 5.json 的四个版本（主 / _b_3d_baseline / _c_2d / _p1_baseline），3D 融合把 raw 从 61 拉到 67，但 cap 之后所有版本 capped 都是 70、avg 都是 66。**cap 一旦触发就抹平所有优化**。
+
+**决策候选（供后续拍板）**：
+
+- **方案 A（保守收敛）**：把 `minimumBoardKinematicConfidenceForHighScore` 从 0.55 抬到 0.7。预期：24 份 corpus 里 8 次 cap 触发降到 0 次；3.json 类样本恢复到 raw 76 附近；不影响低置信度短片的 62 cap 保护。**风险最小、改动最小**、可立即上线。
+
+- **方案 B（分层门控）**：新增"高波动豁免"—— `sideslipStd > 25°` 时不 cap（角度均值不可信）。预期：24 份里 8 次 cap 降到 0（因为 16/24 都是高波动）。**过于激进**，可能让真横滑逃逸。
+
+- **方案 C（弃用 travelAngle，回退 hipCenter 2D 位移）**：需重写 [BoardDirectionAnalyzer](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardDirectionAnalyzer.swift) 且需要重新校准阈值。**改动大**、需要新一轮验证。
+
+- **方案 D（引入 IMU 融合）**：需 iOS 端埋点 CoreMotion，独立技术栈。**长线**方案，不作为本轮候选。
+
+**推荐先走方案 A**（成本 1 行常量改动 + 一次 corpus 回归），若 A 后仍有误 cap 再上方案 B。**均需先量化再决策**：`python3 scripts/travel_angle_audit.py` 已经成为可复现基线，任何生产改动都应先跑一次基线、改完再跑一次对比。
+
+**验证**：
+- `python3 scripts/travel_angle_audit.py`：成功输出 24 行明细 + 汇总（含"潜在误判候选"与"sideslip 波动过大候选"两个专项分组）
+- 脚本无副作用（不写文件，只 stdout）
+- Core / iOS 生产代码零改动 → `swift build` 与已有 101 tests 完全不受影响
+
+**未做/后续**：
+- 走通方案 A 需要一次生产改动（[AnalysisReliability](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L139) 常量 0.55→0.7）+ 回归 corpus + 更新 AGENTS.md
+- 方案 A 需要新用例覆盖"高置信度真横滑仍能触发 cap"以防阈值漂移
+
 ### 2026-08-30：TrendAnalytics 单元测试覆盖 (+13 用例)
 
 **本轮性质**：补齐"88 tests 不覆盖新增算法层"这个已知空档。仅新增测试文件 1 个，不改 Core / iOS 生产代码。
