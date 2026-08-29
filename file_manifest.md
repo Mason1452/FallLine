@@ -124,6 +124,7 @@ SwiftUI iOS App。`SkiAnaylze/SkiAnaylze/Sources/` 下存在一份核心分析�
 | --- | --- |
 | `scripts/setup_ios_deps.sh` | iOS 依赖设置辅助脚本。 |
 | `scripts/generate_fallline_app_icon.swift` | 生成 `AppIcon.appiconset` 中的 Alpine scan-reticle PNG 资产。 |
+| `scripts/travel_angle_audit.py` | 只读扫描 `testvideo/**/*.json`，量化 travelAngle 链路（sideslip / carvingConfidence / observationConfidence）并复现 boardKinematicHighScoreCap 判定，供决策前置。 |
 
 ## 视频、输出和复核产物
 
