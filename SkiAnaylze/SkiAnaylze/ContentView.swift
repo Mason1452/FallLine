@@ -21,6 +21,13 @@ struct ContentView: View {
                     Text("记录")
                 }
                 .tag(1)
+
+            TrendView(store: manager.trendStore)
+                .tabItem {
+                    Image(systemName: "chart.xyaxis.line")
+                    Text("趋势")
+                }
+                .tag(2)
         }
         .preferredColorScheme(.dark)
         .tint(.themePrimary)
