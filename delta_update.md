@@ -14,6 +14,62 @@
 
 ## 变更
 
+### 2026-08-29 (再续)：主线 B iOS SPM 化 Core 端就绪 + 进步曲线 c1/c2/c3 落地
+
+**本轮性质**：Core 侧 iOS 兼容改造 + iOS 端骨架代码 + 分 3 个 commit 推送到远端。iOS Xcode 端**接入点未动**（VideoAnalysisManager / RootView / SkiAnaylzeApp 均零改动），等用户本地跑 `scripts/setup_ios_deps.sh` 完成 SPM 化后再补两处轻量接入。
+
+**Core 侧新增能力（`Package.swift` + 2 文件，对 CLI 零侵入）**：
+- `Package.swift`：`platforms` 追加 `.iOS(.v17)`，为 iOS 通过 SPM 依赖核心库铺路。
+- `Sources/FallLineCore/VisionFrameAnalyzer.swift`：
+  - 新增 `public var usesCPUOnly: Bool = false`；5+1 处 Vision 请求（`VNDetectHumanRectanglesRequest` / `VNDetectHumanBodyPoseRequest` 2D+3D / `VNGenerateOpticalFlowRequest` 等）派发前统一应用。
+  - 新增 `public func warmUp() async throws`：用 1×1 占位 CGImage 触发一次 body pose 请求，预热 espresso 上下文，让 Neural Engine 初始化失败提前暴露。
+- `Sources/FallLineCore/VideoAnalyzer.swift`：
+  - 新增 `public enum AnalysisError: LocalizedError`：`visionUnavailable(consecutiveFailures:underlying:)` / `noReliableFrames`。
+  - 新增 `public func analyzeWithResilience(progressHandler:) async throws -> [DetectionResult]`：三段式预热策略（NE 预热 → 失败切 CPU 回退 → 仍失败抛熔断）。**未修改现有 `analyze()`**，CLI 调用链一行未动。
+  - 新增 `public static func isVisionInitFailure(_:) -> Bool`：判断 Vision 初始化失败特征字符串。
+- Core `TrendAnalytics.swift` 新建 220 行纯计算模块：
+  - `SessionEntry`（时间戳/均分/级别/稳定性/最佳帧分）、`WeeklySummary`（ISO 周首日固定周一，跨年/DST 容错 ±6h）、`Milestone`（4 类：`firstReached` / `weeklyImprovement` / `newPersonalBest` / `streak`）、`TrendReport`。
+  - `Milestone.displayTitle` 中文话术；`Milestone.stableKey` 用于持久化去重（`weeklyImprovement` bucket 到 0.5 分避免浮点噪声）。
+  - `TrendAnalytics.analyze(sessions:previouslyUnlocked:)` 主入口：一次输出折线图 + 新解锁里程碑 + 关键统计。
+
+**iOS 侧新增 3 个独立文件（不侵入现有代码，SPM 未完成前是"孤岛"，Xcode 编译需 SPM 完成后才能过）**：
+- `SkiAnaylze/SkiAnaylze/TrendStore.swift`：`@MainActor ObservableObject`，UserDefaults 持久化（键 `fallline.trend.sessions.v1` + `fallline.trend.unlockedMilestones.v1`）。单一 `record(...)` API 返回本次新解锁里程碑；`refreshReport()` 供 View 用。
+- `SkiAnaylze/SkiAnaylze/Views/TrendView.swift`：Ice Sport Technology 主题，三段布局（统计卡 → Charts 折线图 → 里程碑徽章）；iOS 16+ 原生 Charts 框架，AreaMark 渐变填充，Y 轴 0-100。
+- `SkiAnaylze/SkiAnaylze/TrendNotificationCenter.swift`：@MainActor 单例封装 UNUserNotificationCenter。`bootstrapIfNeeded()` 幂等首次请求权限；`scheduleMilestoneNotifications([Milestone])` 批量投递，identifier = `milestone.<stableKey>` 与 TrendStore 去重集合完美对齐；每类里程碑独立 emoji 文案（🎿/📈/🏆/🔥）。
+
+**辅助脚本升级**：
+- `scripts/setup_ios_deps.sh`：新增 `--dry` / `--yes` / `--rollback` 三种模式，删除前自动备份到 `.ios_migration_backup/`，并在末尾输出 Xcode Add Package 手动操作 7 步说明书。
+
+**iOS SkiAnaylze 接入未做（等 SPM 化后再补）**：
+- `VideoAnalysisManager` 分析成功回调调 `trendStore.record(...)` + `TrendNotificationCenter.shared.scheduleMilestoneNotifications(...)` —— **未改**。
+- `RootView` 增加"趋势" Tab 挂 TrendView —— **未改**。
+- App 生命周期入口调 `TrendNotificationCenter.shared.bootstrapIfNeeded()` —— **未改**。
+- 原因：`SkiAnaylze/SkiAnaylze/Sources/` 8 个复制文件仍在，iOS App 现在消费的是复制版类型；若在既有接入点写 `import FallLineCore`，Xcode 会因类型冲突红字。等用户跑 setup 脚本 + Xcode Add Package + 删复制文件后再统一接入。
+
+**验证**：
+- `swift build` PASS（5.26s）。
+- `swift build --build-tests` 46 步全部编译通过，11 个测试文件语法完整。
+- 4 个新文件（TrendAnalytics/TrendStore/TrendView/TrendNotificationCenter）+ 2 个修改文件（VideoAnalyzer/VisionFrameAnalyzer）`GetDiagnostics` 均返回空。
+- **`swift test` 未跑**（沙箱限制）；用户本机需要跑 `swift test 2>&1 | tail -5` 补齐 88 个用例回归。
+- Xcode 端未编译（iOS 需 SPM 完成后才能编）。
+
+**提交与推送**：
+```
+b825c7f  feat(trend): c3 里程碑本地推送 - TrendNotificationCenter          (1 file, +90)
+18436c0  feat(trend): 进步曲线 - Core 算法层 + iOS 骨架                       (3 files, +641)
+2c5ef8d  feat(core): 主线 B iOS SPM 化 - Core 端就绪                          (4 files, +258 / -23)
+```
+分 3 个 commit 而非 1 个"一坨"的用意：Core / 进步曲线 / 推送模块独立，将来任何一个功能需要 revert 都可精确回滚。已全部 push 到 `origin/main`。
+
+**已知警告（可忽略）**：
+- 6 处 `usesCPUOnly` deprecated 警告：macOS 14+ 的 Vision 已弃用该 API，但 iOS 端仍能使用，且是 iOS SkiAnaylze 原本就在使用的语义，保留以确保跨端行为一致。将来 iOS 也弃用后再替换成 `VNRequest.perform(on:)` 的显式设备指定 API。
+
+**遗留 / 下一步**：
+- 用户本机跑：① `swift test 2>&1 | tail -5` 确认 88 用例；② `./scripts/setup_ios_deps.sh --dry` 干运行；③ `./scripts/setup_ios_deps.sh` 实执行 + Xcode 按提示 Add Package 完成 SPM 化。
+- SPM 完成后我再补 3 处轻量接入：VideoAnalysisManager record + RootView Tab + App 启动 bootstrapIfNeeded。
+
+---
+
 ### 2026-08-29 (续)：iOS 熔断 + 3D 默认开启 + 提交入库
 
 **本轮性质**：iOS 补齐 + 硬约束升级 + commit + push。
