@@ -99,9 +99,9 @@ public struct SkiMetricsCalculator {
         let frameMetrics = valid.map {
             compute(from: $0, stability: stability, stabilityConfidence: stabilityConfidence)
         }
-        let avgEdge = weightedAverage(frameMetrics.map { ($0.edgeQualityScore, max(0.01, $0.edgeQualityConfidence)) })
-        let avgPressure = weightedAverage(frameMetrics.map { ($0.pressureSupportScore, max(0.01, $0.pressureSupportConfidence)) })
-        let avgForeAft = weightedAverage(frameMetrics.map { ($0.foreAftSupportScore, max(0.01, $0.foreAftSupportConfidence)) })
+        let avgEdge = weightedAverage(frameMetrics.map { ($0.edgeQualityScore, max(0.001, AnalysisReliability.smoothConfidenceWeight($0.edgeQualityConfidence))) })
+        let avgPressure = weightedAverage(frameMetrics.map { ($0.pressureSupportScore, max(0.001, AnalysisReliability.smoothConfidenceWeight($0.pressureSupportConfidence))) })
+        let avgForeAft = weightedAverage(frameMetrics.map { ($0.foreAftSupportScore, max(0.001, AnalysisReliability.smoothConfidenceWeight($0.foreAftSupportConfidence))) })
 
         return SkiDerivedMetrics(
             edgeQualityScore:        clamp(avgEdge),

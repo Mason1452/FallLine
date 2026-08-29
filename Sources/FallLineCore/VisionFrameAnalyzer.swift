@@ -16,13 +16,17 @@ public struct VisionAnalysisOptions: OptionSet, Sendable {
     public static let textRecognition      = VisionAnalysisOptions(rawValue: 1 << 2)
     public static let sceneClassification  = VisionAnalysisOptions(rawValue: 1 << 3)
     public static let bodyPose             = VisionAnalysisOptions(rawValue: 1 << 4)
+    /// 3D 姿态检测（macOS 14+）。启用后与 2D 双路并行执行，3D 可用时优先。
+    public static let bodyPose3D           = VisionAnalysisOptions(rawValue: 1 << 5)
 
-    /// 滑雪分析默认：仅姿态检测（性能最优）
+    /// 滑雪分析默认：仅 2D 姿态检测（性能最优）
     public static let skiAnalysis: VisionAnalysisOptions = [.bodyPose]
+    /// 滑雪 3D 增强：2D + 3D 双路，可解决透视歧义
+    public static let skiAnalysis3D: VisionAnalysisOptions = [.bodyPose, .bodyPose3D]
     /// 全部请求
     public static let all: VisionAnalysisOptions = [
         .humanDetection, .faceDetection, .textRecognition,
-        .sceneClassification, .bodyPose
+        .sceneClassification, .bodyPose, .bodyPose3D
     ]
 }
 
@@ -35,13 +39,16 @@ public struct RawVisionResult {
     public let textObservations: [VNRecognizedTextObservation]
     public let sceneClassifications: [VNClassificationObservation]
     public let bodyPoseObservation: VNHumanBodyPoseObservation?
+    /// 可选的 3D 姿态观测（macOS 14+）。为 nil 表示未启用或本帧检测失败。
+    public let bodyPose3DObservation: VNHumanBodyPose3DObservation?
 
-    public init(humanDetections: [VNDetectedObjectObservation], faceDetections: [VNFaceObservation], textObservations: [VNRecognizedTextObservation], sceneClassifications: [VNClassificationObservation], bodyPoseObservation: VNHumanBodyPoseObservation?) {
+    public init(humanDetections: [VNDetectedObjectObservation], faceDetections: [VNFaceObservation], textObservations: [VNRecognizedTextObservation], sceneClassifications: [VNClassificationObservation], bodyPoseObservation: VNHumanBodyPoseObservation?, bodyPose3DObservation: VNHumanBodyPose3DObservation? = nil) {
         self.humanDetections = humanDetections
         self.faceDetections = faceDetections
         self.textObservations = textObservations
         self.sceneClassifications = sceneClassifications
         self.bodyPoseObservation = bodyPoseObservation
+        self.bodyPose3DObservation = bodyPose3DObservation
     }
 }
 
@@ -104,16 +111,36 @@ public class VisionFrameAnalyzer {
             ? VNDetectHumanBodyPoseRequest() : nil
         if let r = bodyPoseRequest { requests.append(r) }
 
+        // 3D 姿态请求（macOS 14+）。与 2D 并行发出，由同一个 VNImageRequestHandler 一次批量执行。
+        let bodyPose3DRequest: VNDetectHumanBodyPose3DRequest? = {
+            guard options.contains(.bodyPose3D) else { return nil }
+            if #available(macOS 14.0, iOS 17.0, *) {
+                return VNDetectHumanBodyPose3DRequest()
+            } else {
+                return nil
+            }
+        }()
+        if let r = bodyPose3DRequest { requests.append(r) }
+
         if !requests.isEmpty {
             try requestHandler.perform(requests)
         }
+
+        let bodyPose3DObservation: VNHumanBodyPose3DObservation? = {
+            if #available(macOS 14.0, iOS 17.0, *) {
+                return bodyPose3DRequest?.results?.first
+            } else {
+                return nil
+            }
+        }()
 
         return RawVisionResult(
             humanDetections: humanDetectionRequest?.results ?? [],
             faceDetections: faceDetectionRequest?.results ?? [],
             textObservations: textRequest?.results ?? [],
             sceneClassifications: sceneRequest?.results ?? [],
-            bodyPoseObservation: bodyPoseRequest?.results?.first
+            bodyPoseObservation: bodyPoseRequest?.results?.first,
+            bodyPose3DObservation: bodyPose3DObservation
         )
     }
 }

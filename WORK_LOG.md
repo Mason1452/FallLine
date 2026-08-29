@@ -1,6 +1,41 @@
 # FallLine Work Log
 
-## Current State (2026-06-05)
+## Current State (2026-08-29)
+
+**算法准确度改进 P0/P1 已落地**：延续 2026-06-05 深度研究结论，完成 5 项源码变更 + 3 组端到端对照验证。所有改动**未提交**（用户要求先测试）。
+
+**新增文件**（Sources/FallLineCore/）：
+- `OneEuroFilter.swift` — 1€ Filter 通用时序平滑
+- `PoseSmoother.swift` — 批量对 `[DetectionResult]` 应用平滑并重算评分
+- `PoseMetrics3DAdapter.swift` — 用 `VNHumanBodyPose3DObservation` 融合修正膝弯角
+
+**关键改动**：
+- **采样率** 5fps → 30fps (`VideoAnalyzer.sampleInterval` 默认值)
+- **光流置信度** 分母固定 8.0 → 帧率归一化（`FlowMetricsCalculator`）
+- **软置信度权重** `AnalysisReliability.smoothConfidenceWeight`（Utilities.swift）铺到 `SkiMetricsCalculator` 三项聚合 + `VideoAnalyzer.addMotionPenalty`
+- **motionStability** 修复 `dt = max(..., 1.0)` 量纲错误；`tolerancePerSecond` 回归物理量纲
+- **BoardDirectionAnalyzer**：光流 travelAngle 加 `≥ 0.6` 置信度门控；视觉板身线作仲裁源复活，`axisDiff ≤ 25°` 半权融合
+- **VisionFrameAnalyzer**：新增 `.skiAnalysis3D` flag，`--use-3d` CLI 参数
+
+**验证结果**（6 视频端到端）：
+- **构建**：`swift build -c release` PASS
+- **单元测试**：sandbox 阻止 xcodebuild → agent 端无法运行 `swift test`；需用户本机补齐
+- **P1 → C 稳定性改动**：综合分 100% 不变（±0），稳定性平均 +0.33，视频 5 稳定性 +1.3（最积极信号）
+- **视觉板身线仲裁**：410 帧样本 97.8% 走 mixed 融合，说明视觉线跟 ankle 高度一致
+- **C(2D) vs B(3D)**：3D 膝弯角系统下调 5°~23°；kneeBendScore 全部上涨 +13.8~+23.2；因证据封顶综合分不变但下游 Highlight/KeyMoment 会受益
+
+**已知遗留**：
+- 3D 融合默认关闭（`--use-3d` 需显式启用），iOS SkiAnaylze 端未接入
+- 6 个测试样本都被证据封顶卡在 58/55/66 三档，改动收益主要体现在内部指标
+- `swift test` 未跑，需用户本机验证
+- P1 快照备份在 `testvideo/_p1_baseline/`，C 快照在 `testvideo/_c_2d/`
+
+**下一步建议**：
+1. 用户本机跑 `swift test` 确认 88 个用例
+2. 若测试全绿，可 commit 本轮改动
+3. 收集高水平立刃视频样本，验证 3D 融合在非封顶区间的收益
+
+## Previous State (2026-06-05)
 
 **仓库清理**：`.gitignore` 已加入 `UserInterfaceState.xcuserstate`，用于忽略 Xcode 用户界面状态文件。注意：该文件当前已在 Git 索引中且处于未合并状态，ignore 规则不会自动解除跟踪或解决冲突。
 

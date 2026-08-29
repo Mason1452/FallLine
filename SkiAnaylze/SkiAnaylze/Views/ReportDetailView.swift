@@ -334,7 +334,7 @@ struct ReportDetailView: View {
     private var skiMetricsSection: some View {
         GlassPanel {
             VStack(alignment: .leading, spacing: 12) {
-                Label("滑雪维度", systemImage: "figure.skiing")
+                Label("滑雪维度", systemImage: "figure.skiing.downhill")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.themePrimary)
 
