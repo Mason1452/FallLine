@@ -3,6 +3,28 @@ import CoreMedia
 import CoreImage
 import Vision
 
+// MARK: - 分析错误
+
+/// 视频分析过程中可能产生的高层错误。
+///
+/// CLI 路径通常不会遇到（NE 环境稳定），主要供 iOS/沙箱环境使用。
+public enum AnalysisError: LocalizedError {
+    /// Vision 神经网络推理上下文创建失败（如 "Failed to create espresso context"），
+    /// 熔断阈值内连续失败达到 `consecutiveFailures` 帧
+    case visionUnavailable(consecutiveFailures: Int, underlying: String)
+    /// 视频完整分析结束但零可用帧
+    case noReliableFrames
+
+    public var errorDescription: String? {
+        switch self {
+        case .visionUnavailable(let count, _):
+            return "视觉识别服务暂不可用（连续 \(count) 帧初始化失败）。请尝试重启 App 或设备后重试；如仍失败，请确认在 iOS 17+ 真机上运行。"
+        case .noReliableFrames:
+            return "未能从视频中提取到有效的姿态帧，请确认视频中人物清晰可见。"
+        }
+    }
+}
+
 // MARK: - 视频分析器（纯库版本，无控制台输出）
 
 /// 负责视频抽帧、组装分析流程、生成全视频总结
@@ -66,6 +88,57 @@ public class VideoAnalyzer {
     }
 
     // MARK: - 主分析流程
+
+    /// iOS/沙箱友好的分析入口：包裹 `analyze()`，附带 Vision 预热 + CPU 回退 + 熔断。
+    ///
+    /// 与 `analyze()` 的区别：
+    /// - 分析前先跑一次 `warmUp()`。若失败且错误属于 espresso/CSU/MPSGraph 类，则自动切换到 CPU 后备并再预热一次；仍失败则抛 `AnalysisError.visionUnavailable`。
+    /// - 分析结束后若产出 0 帧，抛 `AnalysisError.noReliableFrames`。
+    /// - 熔断/CPU 回退全部在 `warmUp` 阶段完成；主循环内部（`analyze()` 已使用并行 taskGroup）保持原容错逻辑。
+    ///
+    /// CLI 路径可继续调用 `analyze()`；iOS 建议调用此方法。
+    public func analyzeWithResilience(progressHandler: ((Double) -> Void)? = nil) async throws -> [DetectionResult] {
+        // 三段式预热：
+        //   1) Neural Engine 直接成功 → 继续
+        //   2) NE 失败但属 espresso 类 → 切 CPU 再预热
+        //   3) CPU 也失败 → 立即熔断
+        do {
+            try await frameAnalyzer.warmUp()
+        } catch {
+            let message = error.localizedDescription
+            if Self.isVisionInitFailure(message) {
+                frameAnalyzer.usesCPUOnly = true
+                do {
+                    try await frameAnalyzer.warmUp()
+                } catch {
+                    throw AnalysisError.visionUnavailable(
+                        consecutiveFailures: 1,
+                        underlying: error.localizedDescription
+                    )
+                }
+            }
+            // 非 espresso 类错误：交给主循环按帧处理（可能是一次性偶发错误）
+        }
+
+        let results = try await analyze(progressHandler: progressHandler)
+        if results.isEmpty {
+            throw AnalysisError.noReliableFrames
+        }
+        return results
+    }
+
+    /// 判断错误信息是否对应 Vision/Espresso 初始化失败。
+    ///
+    /// 已知模式：
+    /// - "Failed to create espresso context"（Neural Engine / CoreML 上下文初始化失败）
+    /// - "CSU exception"（Vision 内部子系统抛出，通常伴随 espresso 错误）
+    /// - "MPSGraph"（Metal Performance Shaders Graph 后备失败）
+    public static func isVisionInitFailure(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("espresso")
+            || lower.contains("csu exception")
+            || lower.contains("mpsgraph")
+    }
 
     /// 分析视频，按 `sampleInterval` 抽帧
     /// - Parameter progressHandler: 进度回调（0.0~1.0），可选
