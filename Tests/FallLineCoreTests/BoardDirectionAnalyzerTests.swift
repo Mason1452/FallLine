@@ -134,9 +134,76 @@ final class BoardDirectionAnalyzerTests: XCTestCase {
         XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 90, accuracy: 0.1)
     }
 
+    // MARK: - 2026-08-30 travelAngle 决策：阈值 0.55 → 0.7 边界回归
+
+    /// 高置信度（obsCnf ≥ 0.7）+ 真横滑（sideslip 60°）+ 长时长（30 帧×0.2s=6s） → 仍应触发 58 分强封顶
+    ///
+    /// 保护"真横滑必须被 cap"这条主线，防止阈值漂移把真横滑也放过去。
+    func test_highConfidenceTrueSideslipStillTriggersDominantCap() {
+        var frames: [DetectionResult] = []
+        for i in 0..<30 {
+            frames.append(makeFrame(
+                time: Double(i) * 0.2,
+                boardAngle: 60,
+                boardConfidence: 0.9,
+                centerX: 0.1 + Double(i) * 0.02,
+                centerY: 0.5
+            ))
+        }
+
+        let analysis = BoardDirectionAnalyzer.analyze(frames: frames)
+        XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 60, accuracy: 0.1)
+        XCTAssertGreaterThanOrEqual(analysis.summary?.confidence ?? 0, 0.7)
+
+        XCTAssertEqual(
+            boardKinematicHighScoreCap(from: frames) ?? -1,
+            AnalysisReliability.dominantSideslipScoreCap,
+            accuracy: 0.001,
+            "obsCnf 0.9 且 sideslip 60° 是真横滑证据，必须触发 dominantSideslipScoreCap=58"
+        )
+    }
+
+    /// 中等置信度（obsCnf 0.65，位于旧阈值 0.55 与新阈值 0.7 之间）+ 高 sideslip → 新阈值下不再走 sideslip 分支 cap
+    ///
+    /// 复现 corpus 里 3.json / 5.json 的场景（obsCnf 0.58~0.59 被误 cap 到 sideslip 分支）。
+    /// 阈值抬到 0.7 后：obsCnf 0.65 < 0.7 走"低置信度"分支，只在短片段（<10s reliable pose）里走
+    /// lowBoardEvidenceScoreCap=62；长片段直接放行。此处 poseScore=nil → reliablePoseDuration=0，
+    /// 走 62 分支，**关键是不再触发 dominantSideslipScoreCap=58**（那才是 corpus 里的误 cap 类型）。
+    func test_midConfidenceHighSideslipNoLongerHitsSideslipCap() {
+        var frames: [DetectionResult] = []
+        for i in 0..<30 {
+            frames.append(makeFrame(
+                time: Double(i) * 0.2,
+                boardAngle: 60,
+                boardConfidence: 0.65,
+                centerX: 0.1 + Double(i) * 0.02,
+                centerY: 0.5
+            ))
+        }
+
+        let analysis = BoardDirectionAnalyzer.analyze(frames: frames)
+        XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 60, accuracy: 0.1)
+        XCTAssertLessThan(analysis.summary?.confidence ?? 1, AnalysisReliability.minimumBoardKinematicConfidenceForHighScore)
+
+        let cap = boardKinematicHighScoreCap(from: frames)
+        XCTAssertNotEqual(
+            cap ?? -1,
+            AnalysisReliability.dominantSideslipScoreCap,
+            accuracy: 0.001,
+            "obsCnf 0.65 已在新阈值 0.7 之下，不允许走 sideslip 分支的 58 分强封顶"
+        )
+        XCTAssertNotEqual(
+            cap ?? -1,
+            AnalysisReliability.highSideslipScoreCap,
+            accuracy: 0.001,
+            "同理，也不允许走 sideslip 分支的 70 分封顶"
+        )
+    }
+
     private func makeFrame(
         time: Double,
         boardAngle: Double?,
+        boardConfidence: Double = 1,
         centerX: Double,
         centerY: Double,
         visual: BoardObservation? = nil
@@ -164,7 +231,7 @@ final class BoardDirectionAnalyzerTests: XCTestCase {
                 hipCenterY: MetricWithConfidence(value: centerY + 0.2, confidence: 1),
                 ankleCenterY: MetricWithConfidence(value: centerY, confidence: 1),
                 bodyCenterY: MetricWithConfidence(value: centerY, confidence: 1),
-                ankleProxyBoardAngle: boardAngle.map { MetricWithConfidence(value: $0, confidence: 1) }
+                ankleProxyBoardAngle: boardAngle.map { MetricWithConfidence(value: $0, confidence: boardConfidence) }
             ),
             poseScore: nil,
             visualBoardObservation: visual

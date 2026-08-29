@@ -134,9 +134,14 @@ public enum AnalysisReliability {
     ///
     /// 历史值 0.15 过于宽松：踝代理板身在正面/背面视角下 boardSummary.confidence 常在 0.18~0.35，
     /// 会把误估的 sideslip 直接触发 highScore 封顶（Video 2/4/6 都命中过 dominantSideslipScoreCap=58）。
-    /// 提升到 0.55 后，只有真正稳定的侧视/长片段（confidence≈0.58+）才会激活封顶，
+    /// 2026-05 提升到 0.55 后，只有稳定侧视/长片段（confidence≈0.58+）才会激活封顶。
+    ///
+    /// 2026-08-30 再度收紧到 0.7：`scripts/travel_angle_audit.py` 对 24 份 corpus 的量化显示，
+    /// 阈值 0.55 下仍有 3.json / 5.json 类样本（obsCnf 0.58~0.59，勉强越过 0.55）被误 cap，
+    /// 最大惩罚 Δ=-18.4 分；且 travelAngle 逐帧噪声 travelStd 大多 >100°，导致 sideslip 均值
+    /// 本身被噪声主导。抬到 0.7 后，24 份 corpus 里 sideslip 分支的 cap 触发预期从 8 → 0，
     /// 3D 融合修正后的 kneeBendScore 可以透传到综合分。
-    public static let minimumBoardKinematicConfidenceForHighScore = 0.55
+    public static let minimumBoardKinematicConfidenceForHighScore = 0.7
 
     /// 高横滑封顶至少需要该持续时长的运动学证据，避免高采样率下的一小段误判。
     ///
@@ -172,9 +177,9 @@ public enum AnalysisReliability {
     ///
     /// 真横滑（夹角 ≥ 45° 且板身证据充分）意味着雪板几乎横过来搓雪，
     /// 此时即使姿态好看也不能给出接近中级/高级的分数，保持 58 分强封顶。
-    /// 与之对应，`minimumBoardKinematicConfidenceForHighScore` 已从 0.15 提升到 0.55，
-    /// 只有真正稳定的板身/行进证据（例如 Video 3/5 的 0.58+）才会激活该封顶，
-    /// 低置信度场景（Video 2/4/6，boardConf ≤ 0.34）会直接放行 3D 修正后的姿态分。
+    /// 与之对应，`minimumBoardKinematicConfidenceForHighScore` 经过两轮迭代（0.15 → 0.55 → 0.7），
+    /// 只有真正高置信度的板身/行进证据（obsCnf ≥ 0.7）才会激活该封顶。
+    /// 详细依据参见 `scripts/travel_angle_audit.py` 对 24 份 corpus 的量化输出。
     public static let dominantSideslipScoreCap = 58.0
 
     /// 光流行进方向被采纳为 travelAngle 的最低置信度。
