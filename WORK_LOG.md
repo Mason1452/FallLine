@@ -1,24 +1,46 @@
 # FallLine Work Log
 
-## Current State (2026-08-29)
+## Current State (2026-08-29 再续)
 
-**算法准确度改进 P0/P1/P2 + iOS 熔断已提交入库**。commit `45dad57` 已推送到 `origin/main`。核心引擎按 2026-06-05 深度研究结论完成采样率、软置信度、travelAngle 门控、板身线仲裁与 3D 融合五处改动；iOS 端补齐 Vision 熔断与错误 UI。本轮变更明细见 `delta_update.md`。
+**主线 B（iOS SPM 化）Core 端就绪 + 进步曲线 c1/c2/c3 骨架已入库**。最新 3 个 commit 已推送到 `origin/main`：
+
+```
+b825c7f  feat(trend): c3 里程碑本地推送 - TrendNotificationCenter
+18436c0  feat(trend): 进步曲线 - Core 算法层 + iOS 骨架
+2c5ef8d  feat(core): 主线 B iOS SPM 化 - Core 端就绪
+```
+
+本轮变更明细见 `delta_update.md` 的"2026-08-29 (再续)"条目。
 
 **当前项目定位**：
-- 核心引擎已进入「3D 融合默认开启」阶段，硬约束见 `project_memory` 与 `AGENTS.md` 关键设计决策。
-- iOS SkiAnaylze 与核心引擎逻辑对齐（含 warmUp / CPU 回退 / 熔断），但仍存在源码复制债，未走 SPM 依赖。
-- 6 个测试样本被证据封顶卡在 58/55/66 三档，改动收益体现在内部指标（stabilityScore、kneeBendScore、rawPoseAverageScore）。
+- **Core 层**：iOS 兼容改造完成——`Package.swift` 加 iOS 17 平台支持；`VisionFrameAnalyzer` 加 `usesCPUOnly` 开关 + `warmUp()`；`VideoAnalyzer` 加 `AnalysisError` + `analyzeWithResilience()`。**CLI 调用链一行未动**，所有新能力走新入口。
+- **进步曲线**：Core 新建 `TrendAnalytics.swift`（220 行纯计算），iOS 新建 `TrendStore.swift` + `Views/TrendView.swift` + `TrendNotificationCenter.swift` 三个独立骨架文件。
+- **iOS App 接入点**：**尚未修改**（`VideoAnalysisManager` / `RootView` / `SkiAnaylzeApp` 零改动）。原因：`SkiAnaylze/SkiAnaylze/Sources/` 8 个复制文件仍在，iOS App 目前消费的是复制版类型；接入必须发生在 SPM 化完成、复制文件删除之后，否则会与 `import FallLineCore` 类型冲突。
 
 **验证状态**：
-- `swift build -c release` PASS
-- `swift test`：**未运行**，sandbox 限制导致 agent 端无法执行；需用户本机补齐 88 个用例
-- Xcode 编译（SkiAnaylze）需用户本机 Terminal 或 Cmd+B 验证
-- 三阶段对照快照保留：`testvideo/_p1_baseline/`、`testvideo/_c_2d/`、`testvideo/_b_3d_baseline/`
+- `swift build` PASS（5.26s）
+- `swift build --build-tests` 46 步全部编译通过
+- 4 个新文件 + 2 个修改文件 `GetDiagnostics` 均为空
+- `swift test`：**未运行**（沙箱限制），需用户本机跑 88 用例
+- Xcode 端未编译（等 SPM 化后再验证）
 
-**下一步建议**：
-1. 用户本机跑 `swift test` 确认 88 个用例
-2. Xcode 编译 SkiAnaylze，在模拟器上验证熔断/错误 UI 行为
-3. 收集高水平立刃视频样本，验证 3D 融合在非封顶区间的收益
+**下一步（用户本地）**：
+1. `swift test 2>&1 | tail -5` 确认 88 用例回归
+2. `./scripts/setup_ios_deps.sh --dry` 干运行看会做什么
+3. `./scripts/setup_ios_deps.sh` 实执行 + Xcode 按提示完成 Add Package + 删复制文件
+4. SPM 完成后由我补 3 处轻量接入：
+   - `VideoAnalysisManager` 分析成功回调调 `trendStore.record(...)` + `TrendNotificationCenter.shared.scheduleMilestoneNotifications(...)`
+   - `RootView` 增加"趋势" Tab 挂 `TrendView`
+   - `SkiAnaylzeApp` 启动时调 `TrendNotificationCenter.shared.bootstrapIfNeeded()`
+
+## Previous State (2026-08-29 续)
+
+**算法准确度 P0/P1/P2 + iOS 熔断已入库**（commit `45dad57`，已推送 `origin/main`）。核心引擎按 2026-06-05 深度研究结论完成采样率、软置信度、travelAngle 门控、板身线仲裁、3D 融合五处改动；iOS 端补齐 Vision warmUp/CPU 回退/熔断与错误 UI。详细变更见 `delta_update.md` 的"2026-08-29 (续)"条目。
+
+**验证状态（当轮）**：
+- `swift build -c release` PASS；`swift test` 沙箱限制未跑
+- 6 个测试样本被证据封顶卡在 58/55/66 三档，收益体现在内部指标（stabilityScore、kneeBendScore、rawPoseAverageScore）
+- 三阶段对照快照保留：`testvideo/_p1_baseline/`、`testvideo/_c_2d/`、`testvideo/_b_3d_baseline/`
 
 ## Previous State (2026-06-05)
 
@@ -198,6 +220,13 @@ Phase 1 光流增强：Apple Vision `VNGenerateOpticalFlowRequest` 产出三个�
 - 同期验证并行优化的输出一致性（JSON/MD 与优化前对比）
 
 ## Important Files
+
+### 进步曲线（2026-08-29 再续）
+- `Sources/FallLineCore/TrendAnalytics.swift` — Core 纯计算模块（SessionEntry / WeeklySummary / Milestone / TrendReport / TrendAnalytics）
+- `SkiAnaylze/SkiAnaylze/TrendStore.swift` — iOS UserDefaults 持久化 + record/refreshReport 单一 API
+- `SkiAnaylze/SkiAnaylze/Views/TrendView.swift` — Charts 折线图 UI（三段：统计卡 → 折线图 → 里程碑徽章）
+- `SkiAnaylze/SkiAnaylze/TrendNotificationCenter.swift` — UNUserNotificationCenter 里程碑推送封装
+- `scripts/setup_ios_deps.sh` — iOS SPM 化辅助脚本（--dry / --yes / --rollback + 备份 + Xcode 7 步说明）
 
 ### 深度研究（2026-06-05）
 - `outputs/research/2026-06-05-pose-estimation-accuracy-deep-research.md` — 完整研究报告（7 发现 + 4 开放问题 + 5 建议）
