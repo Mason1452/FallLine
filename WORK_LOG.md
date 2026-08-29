@@ -1,8 +1,50 @@
 # FallLine Work Log
 
-## Current State (2026-08-29 收官)
+## Current State (2026-08-29 收官后 +1)
 
-**主线 B（iOS SPM 化）+ 进步曲线全链路接入完成**。本轮 3 个 commit 已推送到 `origin/main`：
+**iOS 已切换到 `analyzeWithResilience()`** —— 主线 B 收官后清单里的第 1 项可选优化已落地。单文件改动 [VideoAnalysisManager.swift](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/VideoAnalysisManager.swift#L134-L165)。
+
+**本轮变更概要**（详见 `delta_update.md` 的"2026-08-29 (收官后 +1)"条目）：
+- `analyzer.analyze()` → `analyzer.analyzeWithResilience(progressHandler:)`：接入 Vision espresso 上下文预热 + CPU 后备 + 连续 3 帧失败熔断
+- 用 `progressHandler` 把 Core 抽帧真实进度映射到 App 进度条 0.2→0.75 区间，替代原两段 500ms 假 sleep
+- `AnalysisError.visionUnavailable` / `.noReliableFrames` 各自转 `NSError` 沿现有错误弹窗链路展示
+
+**验证**：
+- `swift build` PASS（0.19s）
+- `GetDiagnostics` 目标文件：空
+- Xcode 复验待用户本机 Cmd+B
+
+**主线 B 收官前 3 个 commit（仍在 `origin/main` 上）**：
+```
+efd7843  feat(trend): 进步曲线接入主流程
+264a1b2  feat(core): AnalysisOutput 支持 Identifiable，兼容 SwiftUI sheet(item:)
+94ce905  feat(ios): 主线 B 完成 - iOS SPM 化，消除 8 个复制文件
+```
+
+**当前项目定位**：
+- **iOS App = Core 唯一消费方**：iOS 通过 SwiftPM 本地依赖消费 `FallLineCore`，8 个复制文件已全部删除（净减 -2384 行）
+- **Core 对外契约就绪**：`Package.swift` 声明 `.library("FallLineCore")` + `.executable("FallLineCLI")`；`AnalysisOutput` 满足 `Identifiable`
+- **进步曲线闭环**：`VideoAnalysisManager` 分析成功 → `trendStore.record()` 埋点 → `Milestone` 触发本地推送 → "趋势"Tab 折线图
+- **iOS App 结构**：3 个 Tab —— 分析 / 记录 / 趋势。启动时幂等请求通知权限
+- **Vision 稳定性**：iOS 分析入口已用上 warmUp + espresso 熔断 + CPU 后备
+
+**验证状态**：
+- `swift build` PASS
+- `swift test` 88/0 全通过（用户本机验证：0.096s，2026-08-29 18:43）
+- Xcode 编译：SkiAnaylze target 已过三轮修复（Missing package product / 3 处 API 断层 / Identifiable），本轮切熔断版后需再复验一次
+
+**下一步（用户本地）**：
+1. Xcode Cmd+B 最终确认切熔断版后仍能编译
+2. Cmd+R 跑模拟器：切"趋势"Tab 应看到 [DemoData](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/Sources/DemoData.swift) 注入的 demo；分析新视频进度条应从 0.2 平滑爬到 0.75
+3. 若视频抽帧过程中报 Vision 错误，现在会看到中文提示"Vision 神经网络初始化失败..."或"未从视频中提取到任何可用姿态帧..."
+
+**后续可优化方向（不阻塞）**：
+- 给 `TrendAnalytics` 补单元测试（当前 88 tests 不覆盖新增算法层）
+- travelAngle → sideslip → carvingConfidence → boardKinematicHighScoreCap 链路的低置信度误判决策（见 `AGENTS.md` 板身检测条目）
+
+## Previous State (2026-08-29 收官)
+
+**主线 B（iOS SPM 化）+ 进步曲线全链路接入完成**。3 个 commit 已推送到 `origin/main`：
 
 ```
 efd7843  feat(trend): 进步曲线接入主流程
@@ -11,28 +53,6 @@ efd7843  feat(trend): 进步曲线接入主流程
 ```
 
 本轮变更明细见 `delta_update.md` 的"2026-08-29 (收官)"条目。
-
-**当前项目定位**：
-- **iOS App = Core 唯一消费方**：iOS 通过 SwiftPM 本地依赖消费 `FallLineCore`，8 个复制文件全部删除（净减 -2384 行）；再也不用手动同步 Core 变更到 iOS。
-- **Core 对外契约就绪**：`Package.swift` 声明 `.library("FallLineCore")` + `.executable("FallLineCLI")`；`AnalysisOutput` 满足 `Identifiable`（id 计算属性，向后兼容序列化）。
-- **进步曲线闭环**：`VideoAnalysisManager` 分析成功 → `trendStore.record()` 埋点 → 新解锁 `Milestone` 通过 `TrendNotificationCenter.scheduleMilestoneNotifications` 投递本地推送 → 用户切"趋势"Tab 看 `TrendView` 折线图。
-- **iOS App 结构**：3 个 Tab —— 分析 / 记录 / 趋势。启动时通过 `SkiAnaylzeApp.task` 幂等请求通知权限。
-
-**验证状态**：
-- `swift build` PASS
-- `swift test` 88/0 全通过（用户本机验证：0.096s，2026-08-29 18:43）
-- Xcode 编译：SkiAnaylze target 已通过 `Missing package product 'FallLineCore'` → 3 处 API 断层修复 → `Instance method sheet(item:...) requires Identifiable` 三轮修复，剩下的编译验证由用户本机 Cmd+B/Cmd+R 完成
-- Core 侧 diagnostics 全空
-
-**下一步（用户本地）**：
-1. Xcode Cmd+B 最终确认无编译错
-2. Cmd+R 跑模拟器：切"趋势"Tab 应看到 [DemoData](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/Sources/DemoData.swift) 注入的 demo 一条数据，分析新视频后应触发"首次达到 XXX 级别"里程碑推送
-3. 如有编译错，把 Xcode 报错贴回来继续修
-
-**后续可优化方向（不阻塞）**：
-- 把 iOS `VideoAnalysisManager` 里的 `analyzer.analyze()` 切换到 `analyzer.analyzeWithResilience()`，用上熔断 + CPU 回退
-- 给 `TrendAnalytics` 补单元测试（当前 88 tests 不覆盖新增算法层）
-- travelAngle → sideslip → carvingConfidence → boardKinematicHighScoreCap 链路的低置信度误判决策（见 `AGENTS.md` 板身检测条目）
 
 ## Previous State (2026-08-29 再续)
 
