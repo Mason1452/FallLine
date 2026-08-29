@@ -2,7 +2,8 @@ import SwiftUI
 import AVFoundation
 import PhotosUI
 import UniformTypeIdentifiers
-//import FallLineCore
+import FallLineCore
+
 struct HomeView: View {
     @EnvironmentObject var manager: VideoAnalysisManager
     @State private var showPicker = false

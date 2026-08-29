@@ -1,6 +1,6 @@
 import SwiftUI
 import AVKit
-//import FallLineCore
+import FallLineCore
 
 struct ReportDetailView: View {
     let output: AnalysisOutput

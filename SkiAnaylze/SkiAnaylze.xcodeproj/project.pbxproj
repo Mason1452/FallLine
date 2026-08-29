@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		AA00000000000000000000A1 /* FallLineCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000A2 /* FallLineCore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		50C571DC2F9E2264006FAAA3 /* SkiAnaylze.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SkiAnaylze.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA00000000000000000000A1 /* FallLineCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = SkiAnaylze;
 			packageProductDependencies = (
+				AA00000000000000000000A2 /* FallLineCore */,
 			);
 			productName = SkiAnaylze;
 			productReference = 50C571DC2F9E2264006FAAA3 /* SkiAnaylze.app */;
@@ -94,6 +100,9 @@
 			);
 			mainGroup = 50C571D32F9E2264006FAAA3;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				50781F143042F1920039795F /* XCLocalSwiftPackageReference "../../FallLine" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 50C571DD2F9E2264006FAAA3 /* Products */;
 			projectDirPath = "";
@@ -324,6 +333,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		50781F143042F1920039795F /* XCLocalSwiftPackageReference ".." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ..;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AA00000000000000000000A2 /* FallLineCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = FallLineCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 50C571D42F9E2264006FAAA3 /* Project object */;
 }
