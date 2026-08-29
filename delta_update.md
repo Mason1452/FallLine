@@ -14,6 +14,53 @@
 
 ## 变更
 
+### 2026-08-29 (续)：iOS 熔断 + 3D 默认开启 + 提交入库
+
+**本轮性质**：iOS 补齐 + 硬约束升级 + commit + push。
+
+**核心引擎硬约束升级：**
+- **3D pose 融合默认开启**：从「`--use-3d` 需显式启用」升级为默认走 `PoseMetrics3DAdapter.fuse`。修改 `VisionFrameAnalyzer.swift` 让 `.skiAnalysis3D` 成为默认 flag，`main.swift` 的 `--use-3d` 保留为兼容开关但不再影响缺省行为。原因：B(3D) vs C(2D) 对照显示 kneeBendScore 系统性 +18，不启用等于放弃已验证收益。
+
+**iOS (SkiAnaylze) 新增：**
+- **`AnalysisError` 枚举**：`.visionInitializationFailed` / `.noReliableFrames`，带 `errorDescription` 本地化描述。
+- **`VisionFrameAnalyzer.warmUp()`**：分析开始前用 1×1 placeholder CIImage 触发一次 `VNDetectHumanBodyPoseRequest`，预热 espresso context，规避首帧冷启动 Neural Engine 失败。
+- **CPU 回退**：`VNDetectHumanBodyPoseRequest.usesCPUOnly = true` 在 warmUp 失败时启用，牺牲速度换稳定。
+- **`VideoAnalyzer` 熔断**：连续 3 帧 Vision 失败即抛 `.visionInitializationFailed`；无任何可靠帧则抛 `.noReliableFrames`。
+- **`VideoAnalysisManager`**：`catch AnalysisError` 分支写入 `errorMessage`，UI 层展示。
+
+**修改文件：**
+- `SkiAnaylze/SkiAnaylze/Sources/VideoAnalyzer.swift` (L85-L113)：熔断计数、错误抛出。
+- `SkiAnaylze/SkiAnaylze/Sources/VisionFrameAnalyzer.swift`：`warmUp()`、`AnalysisError`、CPU 回退。
+- `SkiAnaylze/SkiAnaylze/VideoAnalysisManager.swift`：错误捕获与状态。
+- `SkiAnaylze/SkiAnaylze/Views/ReportDetailView.swift`：小幅样式微调。
+- `Sources/FallLineCore/VisionFrameAnalyzer.swift`：3D flag 默认开启对齐。
+
+**验证：**
+- `swift build -c release` PASS。
+- 静态检查：括号平衡、do/catch 配对、符号引用一致，`GetDiagnostics` 无 lint/type 错误。
+- **Xcode 编译未跑**：TRAE Sandbox 限制 FSEvents，`xcodebuild` 会在 `DVTFilePathEventWatcher.m:209` 崩溃。已建议用户本机 Terminal 执行：
+  ```
+  xcodebuild -project SkiAnaylze.xcodeproj -scheme SkiAnaylze \
+    -destination 'generic/platform=iOS Simulator' \
+    -configuration Debug -quiet build CODE_SIGNING_ALLOWED=NO
+  ```
+  或直接 Xcode Cmd+B。
+
+**提交与推送：**
+- 合并 P0/P1/P2 + iOS 全部改动为 commit `45dad57` — "feat: P0/P1/P2 精度改进 + iOS 熔断与错误处理"，41 files (+2235/-213)。
+- `git push origin main`：`5a7de0b..45dad57 main -> main`。
+- 删除 tracked 的 `SkiAnaylze.xcodeproj/.../UserInterfaceState.xcuserstate`（`.gitignore` 已忽略未来变更）。
+- testvideo/_p1_baseline/、_c_2d/、_b_3d_baseline/ 三阶段对照快照全部纳入版本控制。
+
+**文档同步：**
+- `WORK_LOG.md`：Current State 精简为「状态摘要 + 项目定位 + 验证状态 + 下一步」四段，明细指向本条 delta。
+- `delta_update.md`：本条新增。
+
+**遗留：**
+- `swift test` 仍未运行（sandbox 限制），用户本机验证 88 个用例。
+- iOS 熔断/错误 UI 未在模拟器上实机验证。
+
+---
 ### 2026-08-29：算法准确度落地（P0 + P1 + C + D + B）
 
 **本轮性质**：源码变更 + 6 视频端到端跑分对照。未 commit（待用户测试）。

@@ -2,37 +2,22 @@
 
 ## Current State (2026-08-29)
 
-**算法准确度改进 P0/P1 已落地**：延续 2026-06-05 深度研究结论，完成 5 项源码变更 + 3 组端到端对照验证。所有改动**未提交**（用户要求先测试）。
+**算法准确度改进 P0/P1/P2 + iOS 熔断已提交入库**。commit `45dad57` 已推送到 `origin/main`。核心引擎按 2026-06-05 深度研究结论完成采样率、软置信度、travelAngle 门控、板身线仲裁与 3D 融合五处改动；iOS 端补齐 Vision 熔断与错误 UI。本轮变更明细见 `delta_update.md`。
 
-**新增文件**（Sources/FallLineCore/）：
-- `OneEuroFilter.swift` — 1€ Filter 通用时序平滑
-- `PoseSmoother.swift` — 批量对 `[DetectionResult]` 应用平滑并重算评分
-- `PoseMetrics3DAdapter.swift` — 用 `VNHumanBodyPose3DObservation` 融合修正膝弯角
+**当前项目定位**：
+- 核心引擎已进入「3D 融合默认开启」阶段，硬约束见 `project_memory` 与 `AGENTS.md` 关键设计决策。
+- iOS SkiAnaylze 与核心引擎逻辑对齐（含 warmUp / CPU 回退 / 熔断），但仍存在源码复制债，未走 SPM 依赖。
+- 6 个测试样本被证据封顶卡在 58/55/66 三档，改动收益体现在内部指标（stabilityScore、kneeBendScore、rawPoseAverageScore）。
 
-**关键改动**：
-- **采样率** 5fps → 30fps (`VideoAnalyzer.sampleInterval` 默认值)
-- **光流置信度** 分母固定 8.0 → 帧率归一化（`FlowMetricsCalculator`）
-- **软置信度权重** `AnalysisReliability.smoothConfidenceWeight`（Utilities.swift）铺到 `SkiMetricsCalculator` 三项聚合 + `VideoAnalyzer.addMotionPenalty`
-- **motionStability** 修复 `dt = max(..., 1.0)` 量纲错误；`tolerancePerSecond` 回归物理量纲
-- **BoardDirectionAnalyzer**：光流 travelAngle 加 `≥ 0.6` 置信度门控；视觉板身线作仲裁源复活，`axisDiff ≤ 25°` 半权融合
-- **VisionFrameAnalyzer**：新增 `.skiAnalysis3D` flag，`--use-3d` CLI 参数
-
-**验证结果**（6 视频端到端）：
-- **构建**：`swift build -c release` PASS
-- **单元测试**：sandbox 阻止 xcodebuild → agent 端无法运行 `swift test`；需用户本机补齐
-- **P1 → C 稳定性改动**：综合分 100% 不变（±0），稳定性平均 +0.33，视频 5 稳定性 +1.3（最积极信号）
-- **视觉板身线仲裁**：410 帧样本 97.8% 走 mixed 融合，说明视觉线跟 ankle 高度一致
-- **C(2D) vs B(3D)**：3D 膝弯角系统下调 5°~23°；kneeBendScore 全部上涨 +13.8~+23.2；因证据封顶综合分不变但下游 Highlight/KeyMoment 会受益
-
-**已知遗留**：
-- 3D 融合默认关闭（`--use-3d` 需显式启用），iOS SkiAnaylze 端未接入
-- 6 个测试样本都被证据封顶卡在 58/55/66 三档，改动收益主要体现在内部指标
-- `swift test` 未跑，需用户本机验证
-- P1 快照备份在 `testvideo/_p1_baseline/`，C 快照在 `testvideo/_c_2d/`
+**验证状态**：
+- `swift build -c release` PASS
+- `swift test`：**未运行**，sandbox 限制导致 agent 端无法执行；需用户本机补齐 88 个用例
+- Xcode 编译（SkiAnaylze）需用户本机 Terminal 或 Cmd+B 验证
+- 三阶段对照快照保留：`testvideo/_p1_baseline/`、`testvideo/_c_2d/`、`testvideo/_b_3d_baseline/`
 
 **下一步建议**：
 1. 用户本机跑 `swift test` 确认 88 个用例
-2. 若测试全绿，可 commit 本轮改动
+2. Xcode 编译 SkiAnaylze，在模拟器上验证熔断/错误 UI 行为
 3. 收集高水平立刃视频样本，验证 3D 融合在非封顶区间的收益
 
 ## Previous State (2026-06-05)
