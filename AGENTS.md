@@ -58,7 +58,7 @@ Post-processing in generateSummary():
 - **VideoSeed**: DJB2 hash of filename for deterministic output.
 - **Git hygiene**: Ignore Xcode user interface state file `UserInterfaceState.xcuserstate`. If already tracked, remove it from the index separately; `.gitignore` does not untrack existing files.
 - **Board detection**: ankle-proxy is primary; visual line detector is debug-only (near_board_false_positive issue).
-- **Travel direction**: 光流 (`computeWithDirections`) 采样髋+踝位置的像素运动向量作为行进方向，替代了 hipCenter 2D 位移。已知问题：低置信度帧角度跳动大，画面 2D 像素运动 ≠ 雪板实际行进方向。travelAngle → sideslip → carvingConfidence → boardKinematicHighScoreCap (62分封顶) 链路可能误判，待决策。
+- **Travel direction**: 光流 (`computeWithDirections`) 采样髋+踝位置的像素运动向量作为行进方向，替代了 hipCenter 2D 位移。已知问题：低置信度帧角度跳动大，画面 2D 像素运动 ≠ 雪板实际行进方向。**2026-08-30 决策方案 A 落地**：`scripts/travel_angle_audit.py` 对 24 份 corpus 的量化表明，阈值 0.55 会把 obsCnf 0.58~0.59 的样本误 cap（最大 Δ=-18.4 分），已把 `minimumBoardKinematicConfidenceForHighScore` 从 0.55 → 0.7，corpus 里 sideslip 分支 cap 触发数 8 → 0。真横滑（高置信度）仍会正常 cap，由 `BoardDirectionAnalyzerTests` 的两条边界用例保护。
 
 ## Code duplication
 

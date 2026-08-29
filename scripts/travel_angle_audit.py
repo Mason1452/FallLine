@@ -17,7 +17,7 @@ travel_angle_audit.py
       - travelAngle / sideslipAngle 均值与分布
       - carvingConfidence 均值 + 高置信度帧占比
       - observation.confidence 均值（板身检测置信度）
-      - 是否满足 cap 判定门槛：avgConfidence ≥ 0.55 && kinematicDuration ≥ 5.0s
+      - 是否满足 cap 判定门槛：avgConfidence ≥ 0.7 && kinematicDuration ≥ 5.0s
       - 推断 cap: none / 70(sideslip≥30) / 58(sideslip≥45) / 62(低置信度短片)
       - summary.rawPoseAverageScore vs evidenceCappedScore 的实际差值
 
@@ -42,7 +42,7 @@ from typing import Any
 
 
 # 与 Core Utilities.swift 严格保持一致的阈值
-CONF_THRESHOLD_FOR_HIGH_SCORE = 0.55
+CONF_THRESHOLD_FOR_HIGH_SCORE = 0.7
 MIN_KINEMATIC_DURATION = 5.0
 SHORT_CLIP_DURATION = 10.0
 HIGH_SIDESLIP_ANGLE = 30.0
@@ -243,10 +243,10 @@ def summarize(rows: list[dict[str, Any]]) -> None:
                 f"实际 avg={_fmt(r['averageScore'],5,0)}  raw={_fmt(r['rawPoseAverageScore'],5,0)}"
             )
 
-    # 潜在误判候选：置信度<0.55 但被 cap 到 62 的低质量证据
-    suspects = [r for r in capped if (r["avgObservationConfidence"] or 0) < 0.55]
+    # 潜在误判候选：置信度低于当前 cap 阈值但仍被 cap 到某个值
+    suspects = [r for r in capped if (r["avgObservationConfidence"] or 0) < CONF_THRESHOLD_FOR_HIGH_SCORE]
     if suspects:
-        print(f"\n== 潜在误判候选（obsCnf<0.55 而 cap 生效）: {len(suspects)} ==")
+        print(f"\n== 潜在误判候选（obsCnf<{CONF_THRESHOLD_FOR_HIGH_SCORE} 而 cap 生效）: {len(suspects)} ==")
         for r in suspects:
             print(f"    {r['file']} obsCnf={r['avgObservationConfidence']:.2f} sideslip={r['avgSideslipAngle']:.1f}°")
 

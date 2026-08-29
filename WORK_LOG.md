@@ -1,48 +1,55 @@
 # FallLine Work Log
 
-## Current State (2026-08-30 决策前置)
+## Current State (2026-08-30 方案 A 落地)
 
-**travelAngle 链路误判决策已量化前置** —— 清单里最后一项优化的量化基线搭好、决策候选 A/B/C/D 已根据 24 份 corpus 拉齐，等你拍板走哪个方案。
+**travelAngle 阈值决策方案 A 已落地** —— 从"决策前置"进入"生产落地"。改动最小（1 行常量 + 边界回归 2 用例 + 3 处文档同步），由测试守护"真横滑仍会 cap"这条主线。
 
-**本轮变更概要**（详见 `delta_update.md` 的"2026-08-30 (决策前置)"条目）：
-- 新增 [scripts/travel_angle_audit.py](file:///Users/mingsen/Project/FallLine/scripts/travel_angle_audit.py)：只读、无副作用，与 Core [`boardKinematicHighScoreCap`](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L209-L236) 完全一致口径复现 cap 判定
-- 扫描 24 份 `testvideo/**/*.json`，输出每份 travelAngle / sideslip / carvingConfidence / observationConfidence 统计 + cap 归因
-
-**量化结论（决定后续决策的 5 条硬事实）**：
-1. **cap 触发率 33.3% (8/24)**，全走 sideslip 分支（无低置信度短片触发）
-2. **travelAngle 逐帧噪声惊人**：16/24 样本 `travelStd > 25°`，大多 >100° —— 均值不可信
-3. **观测置信度普遍低**：0 份样本 `avgObsCnf ≥ 0.6`；现阈值 0.55 是极严格门槛
-4. **最大惩罚 Δ=-18.4 分**（3.json：raw 76 → cap 58，obsCnf 只有 0.59）
-5. **cap 抹平 3D 融合优化**：raw 从 61→67 的改善被 cap 70 吃掉
-
-**决策候选**：
-- **方案 A（推荐）**：`minimumBoardKinematicConfidenceForHighScore` 0.55→0.7 —— 24 份 corpus 里 8 次 cap 触发全清零；改动 1 行；风险最小
-- **方案 B**：`sideslipStd > 25°` 高波动豁免 —— 激进
-- **方案 C**：弃 travelAngle 回退 hipCenter 2D 位移 —— 改动大
-- **方案 D**：IMU 融合 —— 长线独立技术栈
+**本轮变更概要**（详见 `delta_update.md` 的"2026-08-30（方案 A 落地）"条目）：
+- [Utilities.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L144) `minimumBoardKinematicConfidenceForHighScore`: `0.55 → 0.7`
+- [BoardDirectionAnalyzerTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/BoardDirectionAnalyzerTests.swift#L137-L201)：新增 2 条边界回归用例
+- [scripts/travel_angle_audit.py](file:///Users/mingsen/Project/FallLine/scripts/travel_angle_audit.py#L45)：`CONF_THRESHOLD_FOR_HIGH_SCORE` 与 Core 同步（含头部文档 + 潜在误判候选分组阈值）
+- [AGENTS.md](file:///Users/mingsen/Project/FallLine/AGENTS.md#L61) Travel direction 条目：从"待决策"更新为"方案 A 落地"
 
 **验证**：
-- 脚本运行成功，输出格式化明细表 + 汇总分组
-- 无生产代码改动 → 已有 `swift build` 与 101 tests 完全不受影响
-- 脚本本身可作为**后续任何优化的对照基线**（先跑基线、改完对比）
+- `swift build --build-tests` PASS（5.88s）
+- `GetDiagnostics` on Utilities.swift + BoardDirectionAnalyzerTests.swift：**空**
+- `python3 scripts/travel_angle_audit.py` 复跑：**cap 触发数 8 → 0**（24 份 corpus，符合预期）
+- 沙箱 `swift test` 无法运行，需本机跑 `swift test 2>&1 | tail -5` 期望 `Executed 103 tests, with 0 failures`（原 101 + 新增 2）
 
-**当前项目定位**（无变化）：
-- iOS App = Core 唯一消费方（SwiftPM 本地依赖，8 份复制文件已删）
-- Core 对外契约就绪（`Package.swift` products 声明 + `AnalysisOutput: Identifiable`）
+**量化影响预估**：
+- 24 份 corpus 里 8 次 sideslip 分支 cap 触发全部消失
+- 3.json 类样本（raw 76 → cap 58，Δ=-18.4 分）现在 raw 76 可以透传
+- **不影响**低置信度短片 62 cap 保护
+- **不影响**真横滑（obsCnf ≥ 0.7 + sideslip ≥ 30°）—— 用例守护
+
+**当前项目定位**（本轮起有变化）：
+- iOS App = Core 唯一消费方（SwiftPM 本地依赖）
+- Core 对外契约就绪（Package.swift products + AnalysisOutput: Identifiable）
 - 进步曲线闭环：埋点 → UserDefaults → 里程碑 → 本地推送 → 折线图
 - Vision 稳定性：iOS 已用 warmUp + espresso 熔断 + CPU 后备
-- 新算法层测试覆盖：TrendAnalytics 13 用例
-- **travelAngle 决策量化基线：`scripts/travel_angle_audit.py` 可复现**
+- 算法层测试覆盖：TrendAnalytics 13 用例 + BoardDirectionAnalyzer 边界 2 用例
+- **travelAngle 阈值方案 A 已上线**：0.55 → 0.7，audit 脚本作为持续对照基线
 
-**下一步（等你决策）**：
-1. 拍板走 A / B / C / D 哪个方案
-2. 若走 A：改 [Utilities.swift#L139](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L139) `0.55 → 0.7`，跑 CLI 重新分析 corpus，跑一次 `travel_angle_audit.py` 对比 cap 触发数是否降为 0
-3. 若走 B/C/D：需要各自更详细的设计与测试计划，先讨论再动手
+**下一步（用户本地）**：
+1. `swift test` 本机复验 103 用例全通过
+2. `swift run FallLineCLI <video>` 重跑 corpus，生成新一批 JSON 产物
+3. `python3 scripts/travel_angle_audit.py` 对新产物再跑一次，确认实际 averageScore 变化符合预期
+4. 若变化符合预期 → 主线 B 收官清单完全清空
 
 **后续可优化方向（不阻塞）**：
-- 主线 B 收官后清单已清空（trendStore 单测、analyzeWithResilience 迁移、travelAngle 量化）
-- travelAngle 生产改动完成后即可考虑关闭本轮量化前置的 loop
-- 新方向：拓展 corpus（当前 6 独立视频 × 4 版本快照，可添加更多真实用户视频做 A/B 对照）
+- 方案 B（`sideslipStd > 25°` 高波动豁免）暂搁置，等 A 上线跑通后视 corpus 表现决定是否叠加
+- 方案 C（弃用 travelAngle）：需要先复原旧 hipCenter 2D 位移代码跑 audit 对比才好决策
+- 方案 D（IMU 融合）：长线独立技术栈
+- 拓展 corpus：添加更多真实用户视频做 A/B 对照
+
+## Previous State (2026-08-30 决策前置)
+
+**travelAngle 链路误判决策已量化前置** —— 清单里最后一项优化的量化基线搭好、决策候选 A/B/C/D 已根据 24 份 corpus 拉齐。
+
+**变更概要**（详见 `delta_update.md` 的"2026-08-30 (决策前置)"条目）：
+- 新增 [scripts/travel_angle_audit.py](file:///Users/mingsen/Project/FallLine/scripts/travel_angle_audit.py)：只读扫描 24 份 corpus，与 Core `boardKinematicHighScoreCap` 完全一致口径复现 cap 判定
+- 量化结论 5 条硬事实：cap 触发率 33.3%、travelStd 大多 >100°、无样本 avgObsCnf ≥ 0.6、最大惩罚 Δ=-18.4 分、cap 抹平 3D 融合优化
+- 决策候选 A/B/C/D 拉齐，推荐方案 A（本轮已落地）
 
 ## Previous State (2026-08-30 TrendAnalytics 测试覆盖)
 

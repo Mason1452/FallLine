@@ -14,6 +14,39 @@
 
 ## 变更
 
+### 2026-08-30（方案 A 落地）：travelAngle 阈值 0.55 → 0.7 + 边界回归 2 用例
+
+**本轮性质**：主线 B 收官清单里 travelAngle 决策的**生产落地**。基于上一轮 audit 量化，采纳方案 A 收紧板身置信度阈值。改动最小、由测试保护。
+
+**改动**：
+- [Utilities.swift#L144](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L144)：`minimumBoardKinematicConfidenceForHighScore` `0.55 → 0.7`
+- [Utilities.swift#L133-L143](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L133-L143)：注释块加入 2026-08-30 变更依据（引用 audit 脚本）
+- [Utilities.swift#L176-L183](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L176-L183)：`dominantSideslipScoreCap` 注释同步（0.15 → 0.55 → 0.7 迁移轨迹）
+- [BoardDirectionAnalyzerTests.swift#L137-L201](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/BoardDirectionAnalyzerTests.swift#L137-L201)：新增 2 条边界回归用例：
+  - `test_highConfidenceTrueSideslipStillTriggersDominantCap`：obsCnf 0.9 + sideslip 60° + 6s 仍触发 58 分 cap（保护"真横滑必须 cap"主线）
+  - `test_midConfidenceHighSideslipNoLongerHitsSideslipCap`：obsCnf 0.65（旧阈值下会 cap，新阈值下不会）明确禁止走 sideslip 分支
+- [BoardDirectionAnalyzerTests.swift#L192-L228](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/BoardDirectionAnalyzerTests.swift#L192-L228)：`makeFrame` helper 新增 `boardConfidence: Double = 1` 参数，向后兼容
+- [scripts/travel_angle_audit.py#L45](file:///Users/mingsen/Project/FallLine/scripts/travel_angle_audit.py#L45)：`CONF_THRESHOLD_FOR_HIGH_SCORE` `0.55 → 0.7` 与 Core 保持一致（脚本头部文档也一并更新）；"潜在误判候选"分组阈值改用常量引用避免硬编码漂移
+- [AGENTS.md#L61](file:///Users/mingsen/Project/FallLine/AGENTS.md#L61)：Travel direction 条目从"待决策"更新为"方案 A 落地"，标注 audit 脚本与边界用例的保护关系
+
+**验证**：
+- `swift build --build-tests` PASS（5.88s，Linking FallLinePackageTests / FallLineCLI 成功）
+- `GetDiagnostics` 目标文件 (Utilities.swift + BoardDirectionAnalyzerTests.swift)：全空
+- `python3 scripts/travel_angle_audit.py` 复跑：**cap 触发数从 8 → 0**（24 份 corpus，符合预期）
+- 沙箱内 `swift test` 因 XCTest 临时目录限制无法运行，需用户本机跑 `swift test 2>&1 | tail -5` 期望 `Executed 103 tests, with 0 failures`（原 101 + 新增 2）
+
+**量化影响预估**（24 份 corpus 视角）：
+- 8 次 sideslip 分支 cap 全部消失
+- 3.json / _b_3d_baseline/3.json / _c_2d/3.json / _p1_baseline/3.json（4 份）：rawPoseAverageScore ~76 分不再被 cap 到 58；实际 averageScore 会随之上抬（具体值需重跑 CLI 分析）
+- 5.json 类样本（4 份）：cap 70 消失，会走 no_cap 分支
+- **不影响**：低置信度短片的 62 cap 保护（那条链路走 `reliablePoseDuration < 10s` 判定，与置信度阈值独立）
+- **不影响**：真横滑（obsCnf ≥ 0.7 且 sideslip ≥ 30°）——由 `test_highConfidenceTrueSideslipStillTriggersDominantCap` 用例守护
+
+**未做/后续**：
+- 需要用户本机跑一次 `swift run FallLineCLI` 重新分析 corpus，生成新一批 JSON 产物，验证实际 averageScore 变化
+- 建议保留 `testvideo/_b_3d_baseline/*.json` 与 `testvideo/_c_2d/*.json` 作为历史 baseline；新产物覆盖 `testvideo/*.json` 时对比 audit 输出
+- 方案 B（高波动豁免）暂搁置，等 A 上线跑通后再看 corpus 是否仍有边界误 cap
+
 ### 2026-08-30 (决策前置)：travelAngle 链路量化审计脚本 + corpus 定量结论
 
 **本轮性质**：主线 B 收官清单里剩余 travelAngle 决策的**只读量化前置**。新增审计脚本 1 个 + 24 份 JSON 的定量结果。**不改任何生产代码**。
