@@ -774,7 +774,8 @@ public struct FrameScore: Codable {
 
 // MARK: - 最终输出结构
 
-public struct AnalysisOutput: Codable {
+public struct AnalysisOutput: Codable, Identifiable {
+    public var id: String { videoPath }
     public let videoPath: String
     public let duration: Double
     public let totalFrames: Int
