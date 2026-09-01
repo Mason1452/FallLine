@@ -1,17 +1,36 @@
 # FallLine Work Log
 
-## Current State (2026-09-01 补 TrendAnalytics 边界用例)
+## Current State (2026-09-01 CLI 复核方案 A)
 
-**hotfix 后续 nice-to-have**：补齐 `weekly.count == 1` 真空区回归。仅测试文件改动，无生产代码变化。
+**方案 A 生产数据复核**：用 [FallLineCLI](file:///Users/mingsen/Project/FallLine/Sources/FallLineCLI) 重跑 6 份主 corpus 视频，坐实 audit 预测。仅报告文本改动，无生产代码变化。
 
-**本轮变更概要**（详见 `delta_update.md` 的"2026-09-01（补边界用例）"条目）：
-- [TrendAnalyticsTests.swift#L180-L219](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/TrendAnalyticsTests.swift#L180-L219) 新增 `test_detectMilestones_singleWeek_noWeeklyImprovementNoStreakNoCrash`
-- 覆盖点：3 次 session 同周聚合 → 断言 `weeklyImprovement` / `streak` 均不触发、`firstReached` / `newPersonalBest` 仍正常上报、不崩溃
-- 守护上一轮 hotfix 的 `if weekly.count >= 2` guard，防退回崩溃
+**本轮变更概要**（详见 `delta_update.md` 的"2026-09-01（CLI 复核方案 A）"条目）：
+- 逐份跑 `swift run -c release FallLineCLI testvideo/N.MP4` × 6
+- Python 对照 pre/post 的 `averageScore` / `evidenceCappedScore` / `boardKinematicHighScoreCap` / `flowModulationFactor`
+- 3.json：**averageScore 55.10 → 73.91，Δ=+18.81**（与 audit 预测 Δ=18.4 高度吻合，微差来自 flowMod 抖动）
+- 其他 5 份：0 变化（4 份 obsCnf<0.55 pre 就不 cap，1 份 evidence-cap 与 boardCap 巧合等价）
+- 均值：66.34 → 69.47（+3.13）
+
+**用户可见变化**（[testvideo/3.md](file:///Users/mingsen/Project/FallLine/testvideo/3.md)）：
+- 综合评分 **55/100 → 74/100**
+- 阶段判断"基础控速阶段" → **"刻滑雏形阶段"**
+- ⚠️ "板身/滑行方向夹角偏大"警告：**消失**
+- 高光时刻：无 → 2 段
+
+**改动文件**：
+- [testvideo/1.md](file:///Users/mingsen/Project/FallLine/testvideo/1.md) / [3.md](file:///Users/mingsen/Project/FallLine/testvideo/3.md) / [4.md](file:///Users/mingsen/Project/FallLine/testvideo/4.md) / [5.md](file:///Users/mingsen/Project/FallLine/testvideo/5.md)（21 行 diff）
+- JSON 是 [.gitignore](file:///Users/mingsen/Project/FallLine/.gitignore) 排除的，只在本地存在
 
 **验证**：
-- **`swift test 2>&1`：Executed 106 tests, with 0 failures in 0.107s**（TrendAnalytics suite 从 15 → 16）
-- `GetDiagnostics` TrendAnalyticsTests.swift：空
+- 用户本地已确认方案 A 效果
+- 未跑 `swift test`（本轮无代码改动，测试跑分保持上一轮的 106 tests 全绿）
+
+## Previous State (2026-09-01 补 TrendAnalytics 边界用例)
+
+**hotfix 后续 nice-to-have**：补齐 `weekly.count == 1` 真空区回归。仅测试文件改动，无生产代码变化。详见 `delta_update.md` 的"2026-09-01（补边界用例）"条目。
+
+- [TrendAnalyticsTests.swift#L180-L219](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/TrendAnalyticsTests.swift#L180-L219) 新增 `test_detectMilestones_singleWeek_noWeeklyImprovementNoStreakNoCrash`
+- `swift test`：Executed 106 tests, with 0 failures
 
 ## Previous State (2026-09-01 hotfix：TrendAnalytics 空 weekly 崩溃兜底)
 
