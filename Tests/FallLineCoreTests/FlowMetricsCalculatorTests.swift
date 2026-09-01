@@ -53,11 +53,13 @@ final class FlowMetricsCalculatorTests: XCTestCase {
     }
 
     func testModulation_clampedToLowerBound() {
-        // 3-param min: smoothness penalty (-0.05) = 0.95, no stability component
+        // 3-param: coherence=0/stability=0/smoothness=0
+        // 新语义（2026-09-01 flow 塌陷熔断）：smoothness=0 触发 > 0 守卫 →
+        // 不再触发 -0.05 penalty，最终 modulation = 1.0
         let mod = calculator.computeModulation(
             coherence: 0, stability: 0, smoothness: 0
         )
-        XCTAssertEqual(mod, 0.95, accuracy: 0.001)
+        XCTAssertEqual(mod, 1.0, accuracy: 0.001)
     }
 
     // MARK: - computeModulation (4-param — with poseScore, stability thresholds active)
@@ -139,14 +141,54 @@ final class FlowMetricsCalculatorTests: XCTestCase {
         XCTAssertEqual(result, 99.75, accuracy: 0.01)
     }
 
-    func testApplyModulation_lowStabilityHighPose_penalized() {
+    func testApplyModulation_collapsedFlow_meltdownFusesModulation() {
+        // 2026-09-01 flow 塌陷熔断（P2 稳定性收敛）：
+        // stability=0 且 smoothness=0 视为 FlowMetricsCalculator 内部降级信号
+        // （computeCircularStability 的 count>=2 门 + velocitySmoothness 空样本回落），
+        // applyModulation 早退返回原始 poseScore，不再产生 -13% 的错误惩罚。
+        // 24/24 corpus 命中此模式，脚本 scripts/stability_audit.py 为量化基线。
         let metrics = FlowMetrics(
             motionCoherence: 0, directionalStability: 0,
             velocitySmoothness: 0, framePairsUsed: 10
         )
         let result = calculator.applyModulation(poseScore: 80, metrics: metrics)
-        // coherence=0 (no boost), stability 0 (<30) + poseScore 80 (>75) → -0.08
-        // smoothness 0 (<40) → -0.05, modulation = 0.87, 80 × 0.87 = 69.6
+        XCTAssertEqual(result, 80, accuracy: 0.01)
+    }
+
+    func testApplyModulation_stabilityZeroSmoothnessNormal_penaltyGuarded() {
+        // stability=0 单独出现（smoothness>0）：塌陷双 0 熔断不触发，
+        // 但 stabilityPenalty 分支的 > 0 守卫仍会阻止"stability=0 且 poseScore>75 → -0.08"
+        // 这条错误逻辑。coherence 也是 0，所以 modulation 稳定在 1.0。
+        let metrics = FlowMetrics(
+            motionCoherence: 0, directionalStability: 0,
+            velocitySmoothness: 60, framePairsUsed: 10
+        )
+        let result = calculator.applyModulation(poseScore: 80, metrics: metrics)
+        XCTAssertEqual(result, 80, accuracy: 0.01)
+    }
+
+    func testApplyModulation_smoothnessZeroStabilityNormal_penaltyGuarded() {
+        // 对称情形：smoothness=0 单独出现（stability>0）时，塌陷双 0 熔断不触发，
+        // smoothness penalty 的 > 0 守卫阻止"smoothness=0 → -0.05"错误逻辑。
+        // stability=50 落在 [30, 70] 中间区间不触发 boost/penalty。
+        let metrics = FlowMetrics(
+            motionCoherence: 0, directionalStability: 50,
+            velocitySmoothness: 0, framePairsUsed: 10
+        )
+        let result = calculator.applyModulation(poseScore: 80, metrics: metrics)
+        XCTAssertEqual(result, 80, accuracy: 0.01)
+    }
+
+    func testApplyModulation_lowStabilityHighPose_stillPenalizedWhenNotCollapsed() {
+        // 真正的低 stability（非塌陷，例如 stability=15）+ poseScore>75 时，
+        // stabilityPenalty 分支的 > 0 守卫允许通过，-0.08 生效；smoothness=25>0
+        // 也走 penalty，-0.05；净 modulation = 0.87，80 × 0.87 = 69.6。
+        // 说明熔断只对"双 0"塌陷起作用，不误伤真实低质量样本。
+        let metrics = FlowMetrics(
+            motionCoherence: 0, directionalStability: 15,
+            velocitySmoothness: 25, framePairsUsed: 10
+        )
+        let result = calculator.applyModulation(poseScore: 80, metrics: metrics)
         XCTAssertEqual(result, 69.6, accuracy: 0.01)
     }
 

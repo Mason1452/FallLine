@@ -195,8 +195,17 @@ public struct FlowMetricsCalculator {
 
     /// 应用光流调制到原始姿态评分。
     /// 内部调用带 poseScore 上下文的 computeModulation，确保稳定性阈值判断正确。
+    ///
+    /// 塌陷熔断（2026-09-01 稳定性收敛，配合 scripts/stability_audit.py 量化基线）：
+    /// 当 directionalStability 与 velocitySmoothness 同时为 0 时视为
+    /// FlowMetricsCalculator 内部降级信号（见 computeCircularStability 的
+    /// count>=2 门以及 velocitySmoothness 空样本回落），不参与调制。
+    /// 单个指标为 0 由 computeModulation 内部的 > 0 守卫处理。
     public func applyModulation(poseScore: Double, metrics: FlowMetrics) -> Double {
         guard metrics.framePairsUsed >= 2 else { return poseScore }
+        if metrics.directionalStability == 0 && metrics.velocitySmoothness == 0 {
+            return poseScore
+        }
         let factor = computeModulation(
             coherence: metrics.motionCoherence,
             stability: metrics.directionalStability,
@@ -217,7 +226,7 @@ public struct FlowMetricsCalculator {
         if coherence > coherenceBoostThreshold {
             modulation += coherenceBoostAmount
         }
-        if smoothness < smoothnessPenaltyThreshold {
+        if smoothness > 0 && smoothness < smoothnessPenaltyThreshold {
             modulation -= smoothnessPenaltyAmount
         }
         return clamp(modulation, lower: 0.87, upper: 1.13)
@@ -225,6 +234,10 @@ public struct FlowMetricsCalculator {
 
     /// 带姿态分上下文的完整调制系数（生产环境使用此版本）。
     /// stability 阈值仅在 poseScore 满足条件时触发 boost/penalty。
+    ///
+    /// stability / smoothness = 0 视为塌陷降级信号：penalty 分支加 > 0 守卫，
+    /// 避免"工具坏了所以扣分"的错误逻辑。boost 分支保留以便未来 stability 修复
+    /// 后自动恢复。塌陷双 0 由 applyModulation 早退熔断兜底。
     public func computeModulation(
         coherence: Double,
         stability: Double,
@@ -238,10 +251,10 @@ public struct FlowMetricsCalculator {
         if stability > stabilityBoostThreshold && poseScore < stabilityBoostScoreCap {
             modulation += stabilityBoostAmount
         }
-        if stability < stabilityPenaltyThreshold && poseScore > stabilityPenaltyScoreFloor {
+        if stability > 0 && stability < stabilityPenaltyThreshold && poseScore > stabilityPenaltyScoreFloor {
             modulation -= stabilityPenaltyAmount
         }
-        if smoothness < smoothnessPenaltyThreshold {
+        if smoothness > 0 && smoothness < smoothnessPenaltyThreshold {
             modulation -= smoothnessPenaltyAmount
         }
         return clamp(modulation, lower: 0.87, upper: 1.13)
