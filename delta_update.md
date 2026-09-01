@@ -14,6 +14,52 @@
 
 ## 变更
 
+### 2026-09-01（CLI 复核方案 A）：主 corpus 重跑 + 实际分数对照
+
+**本轮性质**：方案 A 落地后的**生产数据复核**。用 [FallLineCLI](file:///Users/mingsen/Project/FallLine/Sources/FallLineCLI) 重跑 6 份主 corpus 视频（[testvideo/1.MP4 - 6.MP4](file:///Users/mingsen/Project/FallLine/testvideo)），把方案 A 前后的 `summary.averageScore` 做逐份对照，坐实 audit 脚本预测。
+
+**做了什么**：
+- 备份 6 份主目录 JSON+MD 到临时 `_pre_planA/`（对照 baseline）
+- 逐份跑 `swift run -c release FallLineCLI testvideo/N.MP4` 生成新产物
+- Python 脚本对照 pre/post 的 `averageScore` / `evidenceCappedScore` / `boardKinematicHighScoreCap` / `flowModulationFactor`
+- 删除 `_pre_planA/` 备份（历史 baseline 已有 [_p1_baseline/](file:///Users/mingsen/Project/FallLine/testvideo/_p1_baseline) / [_b_3d_baseline/](file:///Users/mingsen/Project/FallLine/testvideo/_b_3d_baseline) / [_c_2d/](file:///Users/mingsen/Project/FallLine/testvideo/_c_2d)，git 历史也可回溯）
+
+**逐份对照结果**：
+
+| 样本 | obsCnf | pre avg | post avg | Δ | 解释 |
+|---|---|---|---|---|---|
+| 1.json | 0.30 | 58.00 | 58.00 | 0 | obsCnf<0.55，pre 就不触发 cap |
+| 2.json | 0.34 | 72.43 | 72.43 | 0 | 同上 |
+| **3.json** | **0.59** | **55.10** | **73.91** | **+18.81** | **pre 触发 cap→58，post 阈值 0.7 拒绝→cap=nil，evidence 直通 84.95** |
+| 4.json | 0.18 | 70.00 | 70.00 | 0 | obsCnf<0.55，pre 就不触发 cap |
+| 5.json | 0.58 | 66.50 | 66.50 | 0 | pre 触发但 boardCap 值 70 与 evidence-cap 巧合等价，视觉无差 |
+| 6.json | 0.33 | 75.99 | 75.99 | 0 | obsCnf<0.55，pre 就不触发 cap |
+| **均值** | — | 66.34 | 69.47 | **+3.13** | — |
+
+**核心洞察**：
+- **audit 脚本预测 8 次 cap 触发** vs **CLI 实际只有 3.json + 5.json 属于 0.55-0.7 阈值区间**——脚本预测偏乐观，是因为它只判定"cap 输入条件"，未过滤"cap 值 > raw 时 [min](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L470-L477) 不生效"和"cap 值与 evidence-cap 巧合等价"这两种情况
+- **实际生效的样本**：**3.json 一份**，改善 +18.81 分（与 audit 预测 Δ=18.4 高度吻合，微差来自 flowMod 抖动）
+- **未受影响的样本（4 份）**：obsCnf < 0.55，pre 已经不 cap，方案 A 天然不生效
+- **潜在受影响但视觉无差（1 份）**：5.json 的 evidence 与 cap 值巧合等价 70
+- **上一轮"方案 A 预期修 3.json 类样本"完全兑现**：主线目标达成
+
+**用户可见变化**（3.md）：
+- 综合评分：55/100 → **74/100**
+- 阶段判断：基础控速阶段 → **刻滑雏形阶段**
+- ⚠️ "板身/滑行方向夹角偏大"警告：**消失**
+- ✨ 高光时刻：无 → 2 段（74/100 越过高光阈值）
+- 教练观察：从否定式改口为"部分弯已经有走刃倾向"
+
+**改动文件**：
+- [testvideo/1.md](file:///Users/mingsen/Project/FallLine/testvideo/1.md) / [3.md](file:///Users/mingsen/Project/FallLine/testvideo/3.md) / [4.md](file:///Users/mingsen/Project/FallLine/testvideo/4.md) / [5.md](file:///Users/mingsen/Project/FallLine/testvideo/5.md)：报告文本随 CLI 重跑更新（21 行 diff，3.md 是主变化）
+- 2.md / 6.md 完全未变（Vision 本次输出稳定，与上一次跑完全一致）
+- 6 份 JSON 是 [.gitignore](file:///Users/mingsen/Project/FallLine/.gitignore) 排除的（`*.json` 全局排除），只在本地存在，不进本次 commit
+
+**验证**：
+- 用户本地已确认方案 A 效果
+- Δ_3.json = +18.81 与 audit 预测 Δ=18.4 匹配（差异来自 flowMod 从 0.95→0.87 自然抖动）
+- 未跑 `swift test`（本轮无代码改动，只是重跑 CLI）
+
 ### 2026-09-01（补边界用例）：TrendAnalytics weekly.count == 1 真空区
 
 **本轮性质**：hotfix 后续 nice-to-have，补齐"仅 1 周 sessions"边界回归。仅测试文件改动，无生产代码变化。
