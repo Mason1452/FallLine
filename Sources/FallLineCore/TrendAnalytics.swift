@@ -233,10 +233,12 @@ public struct TrendAnalytics {
         }
 
         // 3. 相比上周提升 N 分
-        for i in 1..<weekly.count {
-            let delta = weekly[i].averageScore - weekly[i - 1].averageScore
-            if delta >= Self.weeklyImprovementThreshold {
-                results.append(.weeklyImprovement(delta: delta))
+        if weekly.count >= 2 {
+            for i in 1..<weekly.count {
+                let delta = weekly[i].averageScore - weekly[i - 1].averageScore
+                if delta >= Self.weeklyImprovementThreshold {
+                    results.append(.weeklyImprovement(delta: delta))
+                }
             }
         }
 

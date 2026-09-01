@@ -14,6 +14,37 @@
 
 ## 变更
 
+### 2026-09-01（hotfix）：TrendAnalytics.detectMilestones 空 weekly 崩溃兜底
+
+**本轮性质**：运行时崩溃 hotfix。上一轮方案 A 落地后本机首次跑 `swift test` 触发。
+
+**问题现象**：
+- `Test Case '-[FallLineCoreTests.TrendAnalyticsTests test_analyze_emptySessions_returnsAllEmptyOrNil]' started.` 之后 xctest 进程 SIGABRT，报 `Swift/arm64e-apple-macos.swiftinterface:18197: Fatal error: Range requires lowerBound <= upperBound`。
+- 崩溃在 [TrendAnalytics.swift#L236](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/TrendAnalytics.swift#L236) 的 `for i in 1..<weekly.count`：当 `weekly.count == 0`（空 sessions 输入）时构造非法 Range `1..<0`。
+- 用户影响：iOS App 首次打开"进步"Tab、`TrendStore` 里还没有任何 session 时，[VideoAnalysisManager](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/VideoAnalysisManager.swift) → `TrendAnalytics.detectMilestones(sorted: [], weekly: [])` 直接崩溃。
+
+**根因**：
+- Swift 的 `..<` 操作符要求 `lowerBound <= upperBound`，`1..<0` 触发 `precondition` 崩溃（不是编译期错误，`swift build` 看不到）
+- 上一轮 [TrendAnalyticsTests](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/TrendAnalyticsTests.swift#L45-L54) 里就有 `test_analyze_emptySessions_returnsAllEmptyOrNil` 用例，但当时沙箱 XCTest 阻塞 → 只跑了 `swift build --build-tests` 没跑运行时。**这是"仅编译不跑测试"的直接教训**。
+
+**改动**：
+- [TrendAnalytics.swift#L235-L243](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/TrendAnalytics.swift#L235-L243)：在 loop 前加 `if weekly.count >= 2` 兜底，与 `longestActiveWeekStreak` 的 `guard !weekly.isEmpty` 保持一致的空值保护风格。
+
+**同类隐患审查**（顺便清查所有 `1..<...` 模式）：
+- [VideoAnalyzer.swift#L515](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L515)：前有 `guard samples.count >= 2 else { return 0 }` 兜底，**安全**
+- [TurnPhaseDetector.swift#L106](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/TurnPhaseDetector.swift#L106)：前有 `guard signals.count >= 2 else { return indices }` 兜底，**安全**
+- [TrendAnalytics.swift#L288](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/TrendAnalytics.swift#L288)：前有 `guard !weekly.isEmpty else { return 0 }` 兜底，**安全**
+- [TrendAnalytics.swift#L236](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/TrendAnalytics.swift#L236)：**唯一漏网**，本轮修复
+
+**验证**：
+- `swift test 2>&1`：**Executed 105 tests, with 0 failures in 0.118s**（Package 内 12 个 test suite 全绿）
+- 各 suite 数量：AngleCalculation 7 / BoardDirectionAnalyzer 12 / BoardVisualLineDetector 2 / CenterOfMassFitCalculator 4 / EdgeCase 12 / FlowMetricsCalculator 19 / HighlightMomentDetector 7 / PoseScorer 11 / SkiMetricsCalculator 2 / StableCarvingBaseline 7 / TrendAnalytics 15 / TurnPhaseDetector 7
+- `GetDiagnostics` TrendAnalytics.swift：空
+- 修正上一轮 delta_update 的计数误差：TrendAnalyticsTests 实际是 15 用例（上一轮误记 13），BoardDirectionAnalyzerTests 从 10 → 12。总数 105（原 103 = 88 + 15 TrendAnalytics + 12 BoardDirectionAnalyzer — 10 原 BoardDirectionAnalyzer 重复计算导致的差异待事后校对）
+
+**未做/后续**：
+- 建议给 [TrendAnalytics](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/TrendAnalytics.swift) 加一个"仅 1 周 sessions"边界用例（`weekly.count == 1`，只有 `1..<1` 空 range，不崩但也需覆盖）——现有测试已覆盖 0 与 ≥2，这个真空区可作为下一轮 nice-to-have
+
 ### 2026-08-30（方案 A 落地）：travelAngle 阈值 0.55 → 0.7 + 边界回归 2 用例
 
 **本轮性质**：主线 B 收官清单里 travelAngle 决策的**生产落地**。基于上一轮 audit 量化，采纳方案 A 收紧板身置信度阈值。改动最小、由测试保护。

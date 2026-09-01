@@ -1,20 +1,25 @@
 # FallLine Work Log
 
-## Current State (2026-08-30 方案 A 落地)
+## Current State (2026-09-01 hotfix：TrendAnalytics 空 weekly 崩溃兜底)
 
-**travelAngle 阈值决策方案 A 已落地** —— 从"决策前置"进入"生产落地"。改动最小（1 行常量 + 边界回归 2 用例 + 3 处文档同步），由测试守护"真横滑仍会 cap"这条主线。
+**运行时崩溃 hotfix**：上一轮方案 A 落地后本机首次跑 `swift test` 触发。iOS App 首次打开"进步"Tab（无 session）会走 `TrendAnalytics.detectMilestones(sorted: [], weekly: [])` → `for i in 1..<0` 触发 `Fatal error: Range requires lowerBound <= upperBound` SIGABRT。**上一轮 [test_analyze_emptySessions_returnsAllEmptyOrNil](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/TrendAnalyticsTests.swift) 就应该拦下，但沙箱 XCTest 阻塞 → 只跑 `swift build --build-tests` 没跑运行时**。教训：仅编译不跑测试无法拦运行时崩溃。
 
-**本轮变更概要**（详见 `delta_update.md` 的"2026-08-30（方案 A 落地）"条目）：
-- [Utilities.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L144) `minimumBoardKinematicConfidenceForHighScore`: `0.55 → 0.7`
-- [BoardDirectionAnalyzerTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/BoardDirectionAnalyzerTests.swift#L137-L201)：新增 2 条边界回归用例
-- [scripts/travel_angle_audit.py](file:///Users/mingsen/Project/FallLine/scripts/travel_angle_audit.py#L45)：`CONF_THRESHOLD_FOR_HIGH_SCORE` 与 Core 同步（含头部文档 + 潜在误判候选分组阈值）
-- [AGENTS.md](file:///Users/mingsen/Project/FallLine/AGENTS.md#L61) Travel direction 条目：从"待决策"更新为"方案 A 落地"
+**本轮变更概要**（详见 `delta_update.md` 的"2026-09-01（hotfix）"条目）：
+- [TrendAnalytics.swift#L235-L243](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/TrendAnalytics.swift#L235-L243)：加 `if weekly.count >= 2` 兜底，与同文件其他方法风格一致
+- 顺便清查所有 `1..<...` 模式：VideoAnalyzer / TurnPhaseDetector / TrendAnalytics#L288 均已有兜底，仅 L236 漏网，已修
 
 **验证**：
-- `swift build --build-tests` PASS（5.88s）
-- `GetDiagnostics` on Utilities.swift + BoardDirectionAnalyzerTests.swift：**空**
-- `python3 scripts/travel_angle_audit.py` 复跑：**cap 触发数 8 → 0**（24 份 corpus，符合预期）
-- 沙箱 `swift test` 无法运行，需本机跑 `swift test 2>&1 | tail -5` 期望 `Executed 103 tests, with 0 failures`（原 101 + 新增 2）
+- **`swift test 2>&1`：Executed 105 tests, with 0 failures in 0.118s**（12 个 test suite 全绿，含方案 A 的 2 条边界回归 + Trend 空输入用例）
+- `GetDiagnostics` TrendAnalytics.swift：空
+- 修正上一轮计数误差：实际总数 105（原以为 103），TrendAnalytics 15 用例（原以为 13），BoardDirectionAnalyzer 12 用例（含新增 2）
+
+## Previous State (2026-08-30 方案 A 落地)
+
+**travelAngle 阈值决策方案 A 已落地** —— 从"决策前置"进入"生产落地"。改动最小（1 行常量 + 边界回归 2 用例 + 3 处文档同步），由测试守护"真横滑仍会 cap"这条主线。详见 `delta_update.md` 的"2026-08-30（方案 A 落地）"条目。
+
+- [Utilities.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L144) `minimumBoardKinematicConfidenceForHighScore`: `0.55 → 0.7`
+- [BoardDirectionAnalyzerTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/BoardDirectionAnalyzerTests.swift#L137-L201)：新增 2 条边界回归用例
+- `python3 scripts/travel_angle_audit.py` 复跑：**cap 触发数 8 → 0**（24 份 corpus）
 
 **量化影响预估**：
 - 24 份 corpus 里 8 次 sideslip 分支 cap 触发全部消失
