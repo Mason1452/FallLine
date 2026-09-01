@@ -177,6 +177,47 @@ final class TrendAnalyticsTests: XCTestCase {
         XCTAssertEqual(streaks, [3])
     }
 
+    func test_detectMilestones_singleWeek_noWeeklyImprovementNoStreakNoCrash() {
+        // 覆盖 weekly.count == 1 真空区：
+        // 之前只覆盖了 0（emptySessions）与 ≥2（跨周），
+        // 这里补齐"多 session 但都在同一周"的边界，
+        // 守护 detectMilestones L236 的 `if weekly.count >= 2` guard。
+        let sessions = [
+            session(offsetDays: 0, score: 60, level: "初级"),
+            session(offsetDays: 1, score: 68, level: "中级"),
+            session(offsetDays: 2, score: 82, level: "高级")
+        ]
+        let weekly = analytics.weeklySummaries(from: sessions)
+        XCTAssertEqual(weekly.count, 1, "3 次 session 应汇聚到同一周")
+
+        let milestones = analytics.detectMilestones(sorted: sessions, weekly: weekly)
+
+        // 1. weeklyImprovement 必须为空（只有 1 周，无上周可比）
+        let hasImprovement = milestones.contains {
+            if case .weeklyImprovement = $0 { return true }
+            return false
+        }
+        XCTAssertFalse(hasImprovement, "只有 1 周数据不应触发 weeklyImprovement")
+
+        // 2. streak 必须为空（1 周 < 阈值 3）
+        let hasStreak = milestones.contains {
+            if case .streak = $0 { return true }
+            return false
+        }
+        XCTAssertFalse(hasStreak, "只有 1 周数据不应触发 streak")
+
+        // 3. firstReached 和 newPersonalBest 仍应正常上报（独立于 weekly 判定）
+        let firstReached = milestones.compactMap { m -> String? in
+            if case .firstReached(let level) = m { return level } else { return nil }
+        }
+        XCTAssertEqual(firstReached, ["中级", "高级"], "同周内的等级提升仍应正常检测")
+
+        let bests = milestones.compactMap { m -> Double? in
+            if case .newPersonalBest(let s) = m { return s } else { return nil }
+        }
+        XCTAssertEqual(bests, [68, 82], "同周内连续刷新最高分仍应正常检测")
+    }
+
     func test_detectMilestones_streak_gapBreaksChain() {
         // 中间断一周（offset 0 / 7 / 21）→ 最长连续只有 2
         let sessions = [

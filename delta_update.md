@@ -14,6 +14,27 @@
 
 ## 变更
 
+### 2026-09-01（补边界用例）：TrendAnalytics weekly.count == 1 真空区
+
+**本轮性质**：hotfix 后续 nice-to-have，补齐"仅 1 周 sessions"边界回归。仅测试文件改动，无生产代码变化。
+
+**做了什么**：
+- [TrendAnalyticsTests.swift#L180-L219](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/TrendAnalyticsTests.swift#L180-L219) 新增 [test_detectMilestones_singleWeek_noWeeklyImprovementNoStreakNoCrash](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/TrendAnalyticsTests.swift#L180-L219)
+- 构造 3 次 offset 0/1/2 天的 session（同周内），断言：
+    - `weeklyImprovement` 不触发（本次守护上一轮 hotfix 的 `if weekly.count >= 2` guard，防阈值漂移退回崩溃）
+    - `streak` 不触发（1 周 < 阈值 3）
+    - `firstReached` 仍能上报"中级""高级"（独立于 weekly 判定）
+    - `newPersonalBest` 仍能上报 68 和 82（同周内连续刷新最高分）
+
+**覆盖真空区**：
+- 之前 [test_analyze_emptySessions_returnsAllEmptyOrNil](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/TrendAnalyticsTests.swift#L45-L54) 覆盖 `weekly.count == 0`
+- 之前 [test_detectMilestones_weeklyImprovement_triggersOnDeltaThreshold](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/TrendAnalyticsTests.swift#L135-L149) 等覆盖 `weekly.count >= 2`
+- **本次**覆盖 `weekly.count == 1`（缺失区间）
+
+**验证**：
+- `swift test 2>&1`：**Executed 106 tests, with 0 failures in 0.107s**（TrendAnalytics suite 从 15 → 16）
+- `GetDiagnostics` TrendAnalyticsTests.swift：空
+
 ### 2026-09-01（hotfix）：TrendAnalytics.detectMilestones 空 weekly 崩溃兜底
 
 **本轮性质**：运行时崩溃 hotfix。上一轮方案 A 落地后本机首次跑 `swift test` 触发。
