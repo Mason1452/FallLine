@@ -78,6 +78,95 @@ final class PoseSmootherTests: XCTestCase {
                              "bodyLean 未在 despike 名单里，尖峰不应被完全抹平，实测 \(leans[2])°")
     }
 
+    // MARK: - P4-A 短空洞插值
+
+    /// 单帧 nil：knee=[100,100,nil,100,100] 中间帧应被邻居中位数 100° 补上。
+    func test_impute_singleFrameGap_isFilled() {
+        let raw: [Double?] = [100, 100, nil, 100, 100]
+        let frames = raw.enumerated().map { (i, v) in
+            makeFrame(time: Double(i) * 0.2, leftKnee: v, rightKnee: v, leftCalf: 45, rightCalf: 45)
+        }
+
+        let smoothed = PoseSmoother.smooth(frames, scorer: PoseScorer())
+        let leftKnee = smoothed[2].bodyPose.leftKneeBendAngle
+
+        XCTAssertNotNil(leftKnee, "单帧 nil 应被插值恢复")
+        XCTAssertEqual(leftKnee?.value ?? -1, 100, accuracy: 5.0,
+                       "插值应恢复到邻域中位数 100° 附近，实测 \(leftKnee?.value ?? -1)°")
+        XCTAssertLessThanOrEqual(leftKnee?.confidence ?? 1.0,
+                                 AnalysisReliability.minimumPoseScoreConfidence,
+                                 "插值 confidence 应 <= minimumPoseScoreConfidence，避免进入可靠聚合")
+    }
+
+    /// 连续 2 帧 nil：knee=[100,100,nil,nil,100,100] 两个空洞都应被补上
+    /// （每个空帧窗口内至少 2 个健康邻居可用）。
+    func test_impute_twoFrameGap_isFilled() {
+        let raw: [Double?] = [100, 100, nil, nil, 100, 100]
+        let frames = raw.enumerated().map { (i, v) in
+            makeFrame(time: Double(i) * 0.2, leftKnee: v, rightKnee: v, leftCalf: 45, rightCalf: 45)
+        }
+
+        let smoothed = PoseSmoother.smooth(frames, scorer: PoseScorer())
+
+        XCTAssertNotNil(smoothed[2].bodyPose.leftKneeBendAngle, "空洞第 1 帧应被补上")
+        XCTAssertNotNil(smoothed[3].bodyPose.leftKneeBendAngle, "空洞第 2 帧应被补上")
+    }
+
+    /// 长空洞（连续 3 帧以上）不应被插值 —— 邻居健康数不足或全 nil。
+    /// knee=[100, nil, nil, nil, nil, 100]：中间 4 帧因窗口内健康邻居 <2，不应造分。
+    func test_impute_longGap_notFilled() {
+        let raw: [Double?] = [100, nil, nil, nil, nil, 100]
+        let frames = raw.enumerated().map { (i, v) in
+            makeFrame(time: Double(i) * 0.2, leftKnee: v, rightKnee: v, leftCalf: 45, rightCalf: 45)
+        }
+
+        let smoothed = PoseSmoother.smooth(frames, scorer: PoseScorer())
+
+        // 索引 2、3 距最近健康值 (0/5) 均超过 window(=2)：健康邻居数=0 → 不补
+        XCTAssertNil(smoothed[2].bodyPose.leftKneeBendAngle,
+                     "距最近健康帧超过窗口，不应插值")
+        XCTAssertNil(smoothed[3].bodyPose.leftKneeBendAngle,
+                     "距最近健康帧超过窗口，不应插值")
+    }
+
+    /// 现有健康值不被替换：所有帧都有值时输出保持连续。
+    func test_impute_healthyValues_notReplaced() {
+        let raw = [100.0, 95.0, 90.0, 95.0, 100.0]
+        let frames = raw.enumerated().map { (i, v) in
+            makeFrame(time: Double(i) * 0.2, leftKnee: v, rightKnee: v, leftCalf: 45, rightCalf: 45)
+        }
+
+        let smoothed = PoseSmoother.smooth(frames, scorer: PoseScorer())
+
+        // 插值层不动，1€/median 会做轻微平滑；只需确认没有 nil / confidence 未被降低
+        for (i, det) in smoothed.enumerated() {
+            let k = det.bodyPose.leftKneeBendAngle
+            XCTAssertNotNil(k, "第 \(i) 帧值应保留")
+            XCTAssertGreaterThan(k?.confidence ?? 0, 0.5, "健康 confidence 不应被插值层降级")
+        }
+    }
+
+    /// 端到端：video 4 t=17.6-18.2s 场景复现 —— 5 帧连续 calf=nil 被短窗健康邻居补上，
+    /// PoseScore.calfLeanScore 应从阶跃 0 恢复为连续值。
+    func test_impute_calfCollapseScenario_restoresContinuousScore() {
+        // 模拟：前后各 3 帧健康（calf=45°），中间 2 帧 calf=nil。
+        // 中间 2 帧仍在窗口 [i-2, i+2] 内能看到 2+ 个健康邻居，应被补上。
+        let calfSeries: [Double?] = [45, 45, 45, nil, nil, 45, 45, 45]
+        let frames = calfSeries.enumerated().map { (i, v) in
+            makeFrame(time: Double(i) * 0.2, leftKnee: 100, rightKnee: 100, leftCalf: v, rightCalf: v)
+        }
+
+        let smoothed = PoseSmoother.smooth(frames, scorer: PoseScorer())
+        let scores = smoothed.compactMap { $0.poseScore?.calfLeanScore }
+
+        XCTAssertEqual(scores.count, 8, "所有 8 帧都应产出 poseScore（含插值帧）")
+        for (i, s) in scores.enumerated() {
+            XCTAssertGreaterThan(s, 30.0,
+                                 "第 \(i) 帧 calfLeanScore 应 >30（插值后 45° 附近映射到 ~56 分），实测 \(s)")
+        }
+    }
+
+
     // MARK: - Helpers
 
     private func makeFrame(
