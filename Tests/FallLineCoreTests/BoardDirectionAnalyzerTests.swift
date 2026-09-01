@@ -200,6 +200,67 @@ final class BoardDirectionAnalyzerTests: XCTestCase {
         )
     }
 
+    // MARK: - 2026-09-01 P3 sideslipAngle 5 帧中位数滑窗
+
+    /// 单帧尖峰（一帧 boardAngle=90°）被前后邻居包围时，应被中位数滑窗抹平回邻居水平。
+    ///
+    /// 稳定性诊断显示 corpus median sideslip 帧间跳动 22°、max 28°，绝大部分来自光流 travelAngle
+    /// 突变，而非真实动作变化。此用例锁定该场景下的滤波行为。
+    func test_singleFrameSpikeIsAttenuatedByMedianSmoothing() {
+        let frames: [DetectionResult] = [
+            makeFrame(time: 0.0, boardAngle: 0, centerX: 0.1, centerY: 0.5),
+            makeFrame(time: 0.2, boardAngle: 0, centerX: 0.2, centerY: 0.5),
+            makeFrame(time: 0.4, boardAngle: 90, centerX: 0.3, centerY: 0.5),
+            makeFrame(time: 0.6, boardAngle: 0, centerX: 0.4, centerY: 0.5),
+            makeFrame(time: 0.8, boardAngle: 0, centerX: 0.5, centerY: 0.5)
+        ]
+
+        let analysis = BoardDirectionAnalyzer.analyze(frames: frames)
+        let sideslipValues = analysis.frames.compactMap(\.kinematics?.sideslipAngle)
+        XCTAssertEqual(sideslipValues.count, 5)
+
+        XCTAssertEqual(sideslipValues[2], 0, accuracy: 0.5,
+                       "中间帧的 90° 尖峰应被滑窗抹回 0°（前后 4 帧全 0°）")
+        XCTAssertLessThan(analysis.summary?.averageSideslipAngle ?? 90, 20,
+                          "整段平均 sideslip 不应被单帧尖峰主导")
+    }
+
+    /// 恒定 sideslip 序列在滑窗后应完全保持原值（等值序列的中位数=自身）。
+    ///
+    /// 保护"真横滑必须被 cap"的能力：滑窗不能抹掉持续存在的高 sideslip 证据。
+    func test_constantSideslipUnaffectedByMedianSmoothing() {
+        var frames: [DetectionResult] = []
+        for i in 0..<10 {
+            frames.append(makeFrame(
+                time: Double(i) * 0.2,
+                boardAngle: 45,
+                centerX: 0.1 + Double(i) * 0.02,
+                centerY: 0.5
+            ))
+        }
+        let analysis = BoardDirectionAnalyzer.analyze(frames: frames)
+
+        let sideslipValues = analysis.frames.compactMap(\.kinematics?.sideslipAngle)
+        XCTAssertEqual(sideslipValues.count, 10)
+        for value in sideslipValues {
+            XCTAssertEqual(value, 45, accuracy: 0.5)
+        }
+        XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 45, accuracy: 0.1)
+    }
+
+    /// 少于 3 帧时滑窗不触发，直接返回原值（避免边界样本被单帧主导）。
+    func test_shortSequenceKeepsRawSideslip() {
+        let frames = [
+            makeFrame(time: 0.0, boardAngle: 30, centerX: 0.1, centerY: 0.5),
+            makeFrame(time: 0.2, boardAngle: 30, centerX: 0.2, centerY: 0.5)
+        ]
+        let analysis = BoardDirectionAnalyzer.analyze(frames: frames)
+        XCTAssertEqual(analysis.frames.compactMap(\.kinematics).count, 2)
+        for kinematics in analysis.frames.compactMap(\.kinematics) {
+            XCTAssertEqual(kinematics.sideslipAngle, 30, accuracy: 0.5)
+        }
+    }
+
     private func makeFrame(
         time: Double,
         boardAngle: Double?,
