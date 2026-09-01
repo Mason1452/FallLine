@@ -199,11 +199,12 @@ def audit_one(path: Path) -> dict[str, Any]:
         p1_score = 100.0 * (1 - (p1["distanceToThreshold"] or 0) / CONF_WINDOW)
     else:
         p1_score = 0.0
-    # P2: flowMod 偏离 1.0 每 15% → 满分（对应约 ±13% 修正接近上限）
-    p2_score = normalize(p2["flowModOffset"], 0, 0.15)
-    if p2["isDegraded"]:
-        # 塌陷加权：任意子指标 = 0 已经是明显降级
-        p2_score = max(p2_score or 0, 50 + 20 * len(p2["degradations"]))
+    # P2: 实际损害 = flowMod 偏离 1.0（越大越是活跃的抖动源）
+    # 2026-09-01 熔断落地后：塌陷双 0 会让 flowMod 保持 1.0，本项自动归零；
+    # 单个塌陷仍可能通过其他分支产生偏离，用它反映"熔断后实际残留的调制损害"
+    p2_score = normalize(p2["flowModOffset"], 0, 0.13)
+    # P2 塌陷风险单独记录（不叠加到主贡献分，作为诊断参考）
+    p2_degrade_risk = 50 + 20 * len(p2["degradations"]) if p2["isDegraded"] else 0
     # P3: sideslip adj diff median → 0° / 20° 严重
     p3_score = normalize(p3["sideslipAdjDiffMedian"], 0, 20)
 
@@ -231,6 +232,7 @@ def audit_one(path: Path) -> dict[str, Any]:
         "p0Score": p0_score,
         "p1Score": p1_score,
         "p2Score": p2_score,
+        "p2DegradeRisk": p2_degrade_risk,
         "p3Score": p3_score,
     }
 
@@ -297,7 +299,7 @@ def summarize(rows: list[dict[str, Any]]) -> None:
     scores = {
         "P0 关节角帧间抖动 (median knee adj diff)": _mean_score("p0Score"),
         "P1 置信度落在阈值窗口": _mean_score("p1Score"),
-        "P2 flow modulation 倍增器 (含塌陷加权)": _mean_score("p2Score"),
+        "P2 flow modulation 实际损害 (|flowMod-1.0|)": _mean_score("p2Score"),
         "P3 sideslip 帧间跳动": _mean_score("p3Score"),
     }
     ordered = sorted(scores.items(), key=lambda x: -x[1])
@@ -305,6 +307,10 @@ def summarize(rows: list[dict[str, Any]]) -> None:
     for i, (name, s) in enumerate(ordered, 1):
         bar = "█" * int(s / 2)
         print(f"  {i}. {name}: {s:.1f}  {bar}")
+
+    p2_risk = _mean_score("p2DegradeRisk")
+    print(f"\n[诊断参考] P2 flow 塌陷风险（塌陷率×子指标数，与实际损害独立）: {p2_risk:.1f}")
+    print("           塌陷风险 = flow 内部降级发生率；主贡献分 = 熔断后实际影响到分数的部分")
 
     # 分位数辅助判断
     p0_vals = sorted([r["kneeAdjDiffMedian"] for r in rows if r["kneeAdjDiffMedian"] is not None])
