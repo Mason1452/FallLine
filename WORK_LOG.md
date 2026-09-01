@@ -1,17 +1,24 @@
 # FallLine Work Log
 
-## Current State (2026-09-01 hotfix：TrendAnalytics 空 weekly 崩溃兜底)
+## Current State (2026-09-01 补 TrendAnalytics 边界用例)
+
+**hotfix 后续 nice-to-have**：补齐 `weekly.count == 1` 真空区回归。仅测试文件改动，无生产代码变化。
+
+**本轮变更概要**（详见 `delta_update.md` 的"2026-09-01（补边界用例）"条目）：
+- [TrendAnalyticsTests.swift#L180-L219](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/TrendAnalyticsTests.swift#L180-L219) 新增 `test_detectMilestones_singleWeek_noWeeklyImprovementNoStreakNoCrash`
+- 覆盖点：3 次 session 同周聚合 → 断言 `weeklyImprovement` / `streak` 均不触发、`firstReached` / `newPersonalBest` 仍正常上报、不崩溃
+- 守护上一轮 hotfix 的 `if weekly.count >= 2` guard，防退回崩溃
+
+**验证**：
+- **`swift test 2>&1`：Executed 106 tests, with 0 failures in 0.107s**（TrendAnalytics suite 从 15 → 16）
+- `GetDiagnostics` TrendAnalyticsTests.swift：空
+
+## Previous State (2026-09-01 hotfix：TrendAnalytics 空 weekly 崩溃兜底)
 
 **运行时崩溃 hotfix**：上一轮方案 A 落地后本机首次跑 `swift test` 触发。iOS App 首次打开"进步"Tab（无 session）会走 `TrendAnalytics.detectMilestones(sorted: [], weekly: [])` → `for i in 1..<0` 触发 `Fatal error: Range requires lowerBound <= upperBound` SIGABRT。**上一轮 [test_analyze_emptySessions_returnsAllEmptyOrNil](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/TrendAnalyticsTests.swift) 就应该拦下，但沙箱 XCTest 阻塞 → 只跑 `swift build --build-tests` 没跑运行时**。教训：仅编译不跑测试无法拦运行时崩溃。
 
-**本轮变更概要**（详见 `delta_update.md` 的"2026-09-01（hotfix）"条目）：
-- [TrendAnalytics.swift#L235-L243](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/TrendAnalytics.swift#L235-L243)：加 `if weekly.count >= 2` 兜底，与同文件其他方法风格一致
-- 顺便清查所有 `1..<...` 模式：VideoAnalyzer / TurnPhaseDetector / TrendAnalytics#L288 均已有兜底，仅 L236 漏网，已修
-
-**验证**：
-- **`swift test 2>&1`：Executed 105 tests, with 0 failures in 0.118s**（12 个 test suite 全绿，含方案 A 的 2 条边界回归 + Trend 空输入用例）
-- `GetDiagnostics` TrendAnalytics.swift：空
-- 修正上一轮计数误差：实际总数 105（原以为 103），TrendAnalytics 15 用例（原以为 13），BoardDirectionAnalyzer 12 用例（含新增 2）
+- [TrendAnalytics.swift#L235-L243](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/TrendAnalytics.swift#L235-L243)：加 `if weekly.count >= 2` 兜底
+- 顺便清查所有 `1..<...` 模式：VideoAnalyzer / TurnPhaseDetector / TrendAnalytics#L288 均已有兜底，仅 L236 漏网
 
 ## Previous State (2026-08-30 方案 A 落地)
 
