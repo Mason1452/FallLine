@@ -48,11 +48,16 @@ public enum PoseSmoother {
     ) -> [DetectionResult] {
         guard results.count >= 3 else { return results }
 
+        // P0 预滤：对 knee/calf 关节角度做 3 帧中位数预处理，抹掉孤立尖峰
+        // （corpus zigzag 44~62%，表明帧间存在大量高频翻转，会击穿 1€ Filter 的自适应）。
+        // 只针对评分权重最大的 knee + calf 组，避免影响 bodyLean 和坐标的时间精度。
+        let deSpiked = despikeJointAngles(results)
+
         // 每类信号一个滤波器组。使用不同参数以匹配信号性质。
         let angleFilters = MultiOneEuroFilter { OneEuroFilter(minCutoff: config.angleMinCutoff, beta: config.angleBeta) }
         let coordFilters = MultiOneEuroFilter { OneEuroFilter(minCutoff: config.coordinateMinCutoff, beta: config.coordinateBeta) }
 
-        return results.map { detection in
+        return deSpiked.map { detection in
             let pose = detection.bodyPose
             guard pose.detected else { return detection }
 
@@ -106,6 +111,97 @@ public enum PoseSmoother {
     }
 
     // MARK: - 内部
+
+    /// P0 预滤：对 knee/calf 4 组角度做 3 帧中位数，抹掉孤立尖峰
+    /// （Vision 逐帧检测偶发抖动 → 40°/95° 孤立跳变）。
+    ///
+    /// - 只处理 leftKnee/rightKnee/leftCalf/rightCalf 共 4 组
+    /// - 保留原 confidence（滤值不改变检测可信度）
+    /// - 缺失帧（value=nil）不参与中位数窗口
+    /// - 边界处（前后无 3 帧）保留原值
+    /// - 对连续两帧的真实峰值不敏感（median 保留主流值，滤除孤立值）
+    private static func despikeJointAngles(_ results: [DetectionResult]) -> [DetectionResult] {
+        guard results.count >= 3 else { return results }
+
+        func extract(_ keyPath: KeyPath<BodyPoseData, MetricWithConfidence<Double>?>) -> [Double?] {
+            results.map { $0.bodyPose[keyPath: keyPath]?.value }
+        }
+        let leftKneeMedians = medianWindow(extract(\.leftKneeBendAngle))
+        let rightKneeMedians = medianWindow(extract(\.rightKneeBendAngle))
+        let leftCalfMedians = medianWindow(extract(\.leftCalfLeanAngle))
+        let rightCalfMedians = medianWindow(extract(\.rightCalfLeanAngle))
+
+        return results.enumerated().map { (index, detection) in
+            let pose = detection.bodyPose
+            guard pose.detected else { return detection }
+
+            func replace(
+                _ metric: MetricWithConfidence<Double>?,
+                with median: Double?
+            ) -> MetricWithConfidence<Double>? {
+                guard let m = metric, let mv = median else { return metric }
+                return MetricWithConfidence(value: mv, confidence: m.confidence)
+            }
+
+            let updatedPose = BodyPoseData(
+                detected: pose.detected,
+                visibility: pose.visibility,
+                bodyLeanAngle: pose.bodyLeanAngle,
+                leftBodyLeanAngle: pose.leftBodyLeanAngle,
+                rightBodyLeanAngle: pose.rightBodyLeanAngle,
+                leftKneeBendAngle: replace(pose.leftKneeBendAngle, with: leftKneeMedians[index]),
+                rightKneeBendAngle: replace(pose.rightKneeBendAngle, with: rightKneeMedians[index]),
+                leftCalfLeanAngle: replace(pose.leftCalfLeanAngle, with: leftCalfMedians[index]),
+                rightCalfLeanAngle: replace(pose.rightCalfLeanAngle, with: rightCalfMedians[index]),
+                centerOfGravity: pose.centerOfGravity,
+                signedBodyLeanAngle: pose.signedBodyLeanAngle,
+                signedCalfLeanAngle: pose.signedCalfLeanAngle,
+                hipCenterX: pose.hipCenterX,
+                ankleCenterX: pose.ankleCenterX,
+                bodyCenterX: pose.bodyCenterX,
+                hipCenterY: pose.hipCenterY,
+                ankleCenterY: pose.ankleCenterY,
+                bodyCenterY: pose.bodyCenterY,
+                ankleProxyBoardAngle: pose.ankleProxyBoardAngle,
+                leftShoulderPoint: pose.leftShoulderPoint,
+                rightShoulderPoint: pose.rightShoulderPoint,
+                leftHipPoint: pose.leftHipPoint,
+                rightHipPoint: pose.rightHipPoint,
+                leftKneePoint: pose.leftKneePoint,
+                rightKneePoint: pose.rightKneePoint,
+                leftAnklePoint: pose.leftAnklePoint,
+                rightAnklePoint: pose.rightAnklePoint
+            )
+
+            return DetectionResult(
+                time: detection.time,
+                objects: detection.objects,
+                faces: detection.faces,
+                textObservations: detection.textObservations,
+                sceneClassifications: detection.sceneClassifications,
+                bodyPose: updatedPose,
+                poseScore: detection.poseScore,
+                visualBoardObservation: detection.visualBoardObservation,
+                skiMetrics: detection.skiMetrics,
+                error: detection.error
+            )
+        }
+    }
+
+    /// 3 帧中位数窗口。对每个 index i，取 [i-1, i, i+1] 中的非 nil 值中位数。
+    /// 若窗口有效值 < 3，保留原值（避免边界样本被单帧主导）。
+    private static func medianWindow(_ values: [Double?]) -> [Double?] {
+        guard values.count >= 3 else { return values }
+
+        return values.indices.map { index -> Double? in
+            let start = max(0, index - 1)
+            let end = min(values.count - 1, index + 1)
+            let window = values[start...end].compactMap { $0 }
+            guard window.count >= 3 else { return values[index] }
+            let sorted = window.sorted()
+            return sorted[sorted.count / 2]
+        }
+    }
 
     /// 对单个 MetricWithConfidence 做滤波，nil 值直传，置信度保持不变。
     private static func filterMetric(
