@@ -9,6 +9,10 @@ public struct BoardDirectionAnalyzer {
     public static let minimumTravelDistance = 0.005
     private static let fullTravelConfidenceDistance = 0.04
     private static let travelWindowHalfWidth = 3
+    /// P3 sideslipAngle 中位数滑窗半宽。总窗宽 = 2 * halfWidth + 1 = 5 帧。
+    /// 5fps 采样下相当于 1s 的时间窗，用于抹平 travelAngle 单帧尖峰传递到 sideslip 的抖动
+    /// （corpus median 22° / max 28° 的帧间跳动主要来自光流角度突变，而非真实动作变化）。
+    private static let sideslipMedianWindowHalfWidth = 2
 
     public static func analyze(
         frames: [DetectionResult],
@@ -22,7 +26,7 @@ public struct BoardDirectionAnalyzer {
             : Dictionary(flowTravelDirections.map { ($0.time, (angle: $0.angle, confidence: $0.confidence)) },
                          uniquingKeysWith: { first, _ in first })
 
-        let analyses = prepared.indices.map { index in
+        let rawAnalyses = prepared.indices.map { index in
             let observation = prepared[index].observation
             let flowOverride = flowAngleByTime?[prepared[index].time]
             return BoardFrameAnalysis(
@@ -38,11 +42,48 @@ public struct BoardDirectionAnalyzer {
             )
         }
 
-        return BoardAnalysis(frames: analyses, summary: summary(from: analyses))
+        let smoothed = smoothSideslip(in: rawAnalyses)
+        return BoardAnalysis(frames: smoothed, summary: summary(from: smoothed))
     }
 }
 
 private extension BoardDirectionAnalyzer {
+    /// 对每帧的 sideslipAngle 做 5 帧中位数滑窗，并按新 sideslip 重算 carvingConfidence。
+    /// travelAngle / boardAngle / confidence 保持原值，因为它们分别是输入信号和帧级诊断信号，
+    /// 不应被时间维度污染。窗口内有效值不足 3 时保留原值（避免边界样本被单帧主导）。
+    static func smoothSideslip(in analyses: [BoardFrameAnalysis]) -> [BoardFrameAnalysis] {
+        guard analyses.count >= 3 else { return analyses }
+
+        return analyses.indices.map { index -> BoardFrameAnalysis in
+            let current = analyses[index]
+            guard let currentKinematics = current.kinematics else { return current }
+
+            let start = max(0, index - sideslipMedianWindowHalfWidth)
+            let end = min(analyses.count - 1, index + sideslipMedianWindowHalfWidth)
+            let windowValues = analyses[start...end].compactMap { $0.kinematics?.sideslipAngle }
+            guard windowValues.count >= 3 else { return current }
+
+            let sorted = windowValues.sorted()
+            let smoothedSideslip = sorted[sorted.count / 2]
+            let smoothedCarving = clamp(
+                100 - smoothedSideslip / AnalysisReliability.dominantSideslipAngle * 100,
+                lower: 0,
+                upper: 100
+            )
+            let updatedKinematics = BoardKinematics(
+                boardAngle: currentKinematics.boardAngle,
+                travelAngle: currentKinematics.travelAngle,
+                sideslipAngle: smoothedSideslip,
+                carvingConfidence: smoothedCarving,
+                confidence: currentKinematics.confidence
+            )
+            return BoardFrameAnalysis(
+                time: current.time,
+                observation: current.observation,
+                kinematics: updatedKinematics
+            )
+        }
+    }
     struct PreparedFrame {
         let time: Double
         let selectedObservation: BoardObservation
