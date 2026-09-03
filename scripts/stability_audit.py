@@ -11,6 +11,15 @@ stability_audit.py
          的相邻差绝对值 std，反映 Vision 关节输出的原始噪声
          被 PoseScorer 放大成分数抖动的程度
 
+    P0b (探针，未落地) - lean / centerOfGravity 抖动
+         bodyLeanAngle (20% 权重) 与 centerOfGravity (20% 权重) 在
+         PoseSmoother.despikeJointAngles 中未被覆盖，本项衡量若扩展 despike
+         是否有价值：
+           - leanAdjDiffMedian → p0bLeanScore (基准 0-15°)
+           - cogAdjDiffMedian  → p0bCogScore  (基准 0-0.15)
+           - Go/No-Go 规则：mean 贡献分 >= 30 且 命中率 >= 50%
+         数据满足条件时才推 P0b (扩展 despike 目标集)，避免过早优化
+
     P1 - 置信度阈值阶跃
          boardAnalysis.summary.confidence 分布中落在 [0.55, 0.85]
          过渡窗口的样本占比，反映当前 0.7 硬阈值造成的阶跃风险
@@ -26,7 +35,8 @@ stability_audit.py
 
 汇总输出：
     - 每层贡献分（0-100，越高越是主要抖动贡献者）
-    - 4 层排序，锁定"先改哪一层"
+    - 4 + 2 (P0b) 层排序，锁定"先改哪一层"
+    - P0b Go/No-Go 决策段：给出是否扩展 despike 的明确结论
 
 用法：
     python3 scripts/stability_audit.py
@@ -77,28 +87,42 @@ def p0_joint_jitter(frames: list[dict[str, Any]]) -> dict[str, float | None]:
     P0: 关节角度逐帧抖动
     - 用相邻差绝对值的 median 反映"典型帧间跳动量"（对离群鲁棒）
     - 再折算到最终分数：knee 深度惩罚 4pts/10°
+    - P0-A (2026-09-01) 已对 knee/calf 加 3 帧中位数去尖峰，本项衡量残留量
+    - P0b 探针 (2026-09-03) 新增 bodyLean / centerOfGravity 覆盖率评估，
+      两者在 PoseScorer 中分别占 20% + 20% 权重，未纳入 despike
     """
     knee_l = _adjacent_abs_diff(_extract_angle_series(frames, "leftKneeBendAngle"))
     knee_r = _adjacent_abs_diff(_extract_angle_series(frames, "rightKneeBendAngle"))
     lean = _adjacent_abs_diff(_extract_angle_series(frames, "bodyLeanAngle"))
     calf_l = _adjacent_abs_diff(_extract_angle_series(frames, "leftCalfLeanAngle"))
     calf_r = _adjacent_abs_diff(_extract_angle_series(frames, "rightCalfLeanAngle"))
+    cog = _adjacent_abs_diff(_extract_angle_series(frames, "centerOfGravity"))
 
     def _median_or_none(xs: list[float]) -> float | None:
         return statistics.median(xs) if xs else None
 
+    def _p90_or_none(xs: list[float]) -> float | None:
+        return statistics.quantiles(xs, n=10)[-1] if len(xs) >= 10 else None
+
     knee_jitter_all = knee_l + knee_r
     calf_jitter_all = calf_l + calf_r
 
-    knee_med = _median_or_none(knee_jitter_all)
-    lean_med = _median_or_none(lean)
-    calf_med = _median_or_none(calf_jitter_all)
+    # P0b 尖峰计数：与 medianWindow 触发条件保持同数量级
+    #   lean 尖峰阈值 15°：Vision 单帧掉点常见幅度
+    #   cog  尖峰阈值 0.10：归一化 hipRatio 的 10%，映射到 gravityScore 约 10 分/帧
+    lean_spike_count = sum(1 for v in lean if v > 15.0)
+    cog_spike_count = sum(1 for v in cog if v > 0.10)
 
     return {
-        "kneeAdjDiffMedian": knee_med,
-        "leanAdjDiffMedian": lean_med,
-        "calfAdjDiffMedian": calf_med,
-        "kneeAdjDiffP90": statistics.quantiles(knee_jitter_all, n=10)[-1] if len(knee_jitter_all) >= 10 else None,
+        "kneeAdjDiffMedian": _median_or_none(knee_jitter_all),
+        "leanAdjDiffMedian": _median_or_none(lean),
+        "leanAdjDiffP90": _p90_or_none(lean),
+        "leanSpikeCount": lean_spike_count,
+        "calfAdjDiffMedian": _median_or_none(calf_jitter_all),
+        "cogAdjDiffMedian": _median_or_none(cog),
+        "cogAdjDiffP90": _p90_or_none(cog),
+        "cogSpikeCount": cog_spike_count,
+        "kneeAdjDiffP90": _p90_or_none(knee_jitter_all),
     }
 
 
@@ -194,6 +218,11 @@ def audit_one(path: Path) -> dict[str, Any]:
     # 归一化贡献分（基准区间是经验值，反映"多少算大"）
     # P0: 关节角 median adj diff → 0° 无抖动 / 15° 严重抖动
     p0_score = normalize(p0["kneeAdjDiffMedian"], 0, 15)
+    # P0b 探针（未落地）：lean / cog 的抖动贡献分
+    #   lean: 0° 无抖 / 15° 严重（与 knee 同基准，两者都以角度衡量）
+    #   cog:  0 / 0.15 严重（cog 归一化到 [0,1]，0.15 相当于 hipRatio 15% 波动）
+    p0b_lean_score = normalize(p0["leanAdjDiffMedian"], 0, 15)
+    p0b_cog_score = normalize(p0["cogAdjDiffMedian"], 0, 0.15)
     # P1: 距 0.7 阈值 < 0.15 视为窗口内，距离越近贡献越大
     if p1["inTransitionWindow"]:
         p1_score = 100.0 * (1 - (p1["distanceToThreshold"] or 0) / CONF_WINDOW)
@@ -215,7 +244,12 @@ def audit_one(path: Path) -> dict[str, Any]:
         # 原始指标
         "kneeAdjDiffMedian": p0["kneeAdjDiffMedian"],
         "leanAdjDiffMedian": p0["leanAdjDiffMedian"],
+        "leanAdjDiffP90": p0["leanAdjDiffP90"],
+        "leanSpikeCount": p0["leanSpikeCount"],
         "calfAdjDiffMedian": p0["calfAdjDiffMedian"],
+        "cogAdjDiffMedian": p0["cogAdjDiffMedian"],
+        "cogAdjDiffP90": p0["cogAdjDiffP90"],
+        "cogSpikeCount": p0["cogSpikeCount"],
         "kneeAdjDiffP90": p0["kneeAdjDiffP90"],
         "boardConf": board_summary.get("confidence"),
         "inTransitionWindow": p1["inTransitionWindow"],
@@ -230,6 +264,8 @@ def audit_one(path: Path) -> dict[str, Any]:
         "averageScore": summary.get("averageScore"),
         # 贡献分
         "p0Score": p0_score,
+        "p0bLeanScore": p0b_lean_score,
+        "p0bCogScore": p0b_cog_score,
         "p1Score": p1_score,
         "p2Score": p2_score,
         "p2DegradeRisk": p2_degrade_risk,
@@ -251,12 +287,12 @@ def print_table(rows: list[dict[str, Any]]) -> None:
     print("\n== 每份 JSON 稳定性指标明细 ==")
     header = (
         f"{'file':<40} "
-        f"{'kJit':>5} {'lJit':>5} {'cJit':>5} "
+        f"{'kJit':>5} {'lJit':>5} {'cJit':>5} {'cogJ':>6} "
         f"{'conf':>5} {'win?':>4} "
         f"{'fMod':>5} {'degd':>4} "
         f"{'ssJt':>5} "
         f"{'stab':>5} {'sStd':>5} {'avg':>4} "
-        f"| {'P0':>4} {'P1':>4} {'P2':>4} {'P3':>4}"
+        f"| {'P0':>4} {'P0bL':>4} {'P0bC':>4} {'P1':>4} {'P2':>4} {'P3':>4}"
     )
     print(header)
     print("-" * len(header))
@@ -267,6 +303,7 @@ def print_table(rows: list[dict[str, Any]]) -> None:
             f"{_fmt(r['kneeAdjDiffMedian'], 5, 1)} "
             f"{_fmt(r['leanAdjDiffMedian'], 5, 1)} "
             f"{_fmt(r['calfAdjDiffMedian'], 5, 1)} "
+            f"{_fmt(r['cogAdjDiffMedian'], 6, 3)} "
             f"{_fmt(r['boardConf'], 5, 2)} "
             f"{_fmt(r['inTransitionWindow'], 4)} "
             f"{_fmt(r['flowModFactor'], 5, 2)} "
@@ -275,15 +312,17 @@ def print_table(rows: list[dict[str, Any]]) -> None:
             f"{_fmt(r['stabilityScore'], 5, 1)} "
             f"{_fmt(r['scoreStdDev'], 5, 1)} "
             f"{_fmt(r['averageScore'], 4, 0)} "
-            f"| {_fmt(r['p0Score'], 4, 0)} {_fmt(r['p1Score'], 4, 0)} "
+            f"| {_fmt(r['p0Score'], 4, 0)} "
+            f"{_fmt(r['p0bLeanScore'], 4, 0)} {_fmt(r['p0bCogScore'], 4, 0)} "
+            f"{_fmt(r['p1Score'], 4, 0)} "
             f"{_fmt(r['p2Score'], 4, 0)} {_fmt(r['p3Score'], 4, 0)}"
         )
     print(
-        "\n列说明: kJit=knee相邻差中位数° lJit=lean° cJit=calf° "
+        "\n列说明: kJit=knee相邻差中位数° lJit=lean° cJit=calf° cogJ=cog相邻差中位数 "
         "conf=boardConf win?=是否在0.55-0.85窗口 fMod=flowModFactor "
         "degd=flow子指标塌陷数 ssJt=sideslip相邻差中位数° "
         "stab=stabilityScore sStd=scoreStdDev "
-        "P0~P3=各层贡献分(0-100)"
+        "P0=knee抖动 P0bL=lean抖动 P0bC=cog抖动 P1~P3=各层贡献分(0-100)"
     )
 
 
@@ -297,10 +336,12 @@ def summarize(rows: list[dict[str, Any]]) -> None:
         return statistics.fmean(vals) if vals else 0.0
 
     scores = {
-        "P0 关节角帧间抖动 (median knee adj diff)": _mean_score("p0Score"),
-        "P1 置信度落在阈值窗口": _mean_score("p1Score"),
-        "P2 flow modulation 实际损害 (|flowMod-1.0|)": _mean_score("p2Score"),
-        "P3 sideslip 帧间跳动": _mean_score("p3Score"),
+        "P0  关节角帧间抖动 (knee median)": _mean_score("p0Score"),
+        "P0b lean 抖动 (未 despike, 20% 权重)": _mean_score("p0bLeanScore"),
+        "P0b cog  抖动 (未 despike, 20% 权重)": _mean_score("p0bCogScore"),
+        "P1  置信度落在阈值窗口": _mean_score("p1Score"),
+        "P2  flow modulation 实际损害 (|flowMod-1.0|)": _mean_score("p2Score"),
+        "P3  sideslip 帧间跳动": _mean_score("p3Score"),
     }
     ordered = sorted(scores.items(), key=lambda x: -x[1])
     print("平均贡献分排序（越高越是主要抖动源）：")
@@ -318,6 +359,39 @@ def summarize(rows: list[dict[str, Any]]) -> None:
         print(f"\nP0 关节抖动分布 (kneeAdjDiffMedian, °):")
         print(f"  min={p0_vals[0]:.2f} / median={statistics.median(p0_vals):.2f} / "
               f"max={p0_vals[-1]:.2f}")
+
+    # P0b 探针输出：bodyLean / centerOfGravity 抖动分布
+    lean_vals = sorted([r["leanAdjDiffMedian"] for r in rows if r["leanAdjDiffMedian"] is not None])
+    cog_vals = sorted([r["cogAdjDiffMedian"] for r in rows if r["cogAdjDiffMedian"] is not None])
+    lean_spikes = sum(r["leanSpikeCount"] for r in rows if r["leanSpikeCount"] is not None)
+    cog_spikes = sum(r["cogSpikeCount"] for r in rows if r["cogSpikeCount"] is not None)
+    if lean_vals:
+        print(f"\nP0b lean 抖动分布 (leanAdjDiffMedian, °):")
+        print(f"  min={lean_vals[0]:.2f} / median={statistics.median(lean_vals):.2f} / "
+              f"max={lean_vals[-1]:.2f}  (spike>15° 总数: {lean_spikes})")
+    if cog_vals:
+        print(f"\nP0b cog  抖动分布 (cogAdjDiffMedian):")
+        print(f"  min={cog_vals[0]:.3f} / median={statistics.median(cog_vals):.3f} / "
+              f"max={cog_vals[-1]:.3f}  (spike>0.10 总数: {cog_spikes})")
+
+    # ---- P0b Go/No-Go 决策 -------------------------------------------------
+    #   触发条件：mean 贡献分 >= 30 且 命中率 >= 50%
+    #   命中定义：单样本贡献分 > 30 视为命中
+    #   贡献分基准：lean 0~15°、cog 0~0.15，见 audit_one() 里 normalize() 调用
+    print(f"\n== P0b Go/No-Go 决策规则 ==")
+    print(f"  规则：mean(p0bScore) >= 30 且 命中率 >= 50%（单样本 > 30）→ 推荐扩展 despike")
+    for label, key in (("lean", "p0bLeanScore"), ("cog ", "p0bCogScore")):
+        vals = [r[key] for r in rows if r[key] is not None]
+        if not vals:
+            print(f"  P0b {label}: no data")
+            continue
+        mean_score = statistics.fmean(vals)
+        hits = [v for v in vals if v > 30]
+        hit_rate = len(hits) / len(vals) * 100
+        gate = mean_score >= 30 and hit_rate >= 50
+        verdict = "→ 推 P0b" if gate else "→ 维持现状"
+        print(f"  P0b {label}: mean={mean_score:5.1f} / 命中率={hit_rate:4.0f}%"
+              f" ({len(hits)}/{len(vals)})  {verdict}")
 
     p1_hits = [r for r in rows if r["inTransitionWindow"]]
     print(f"\nP1 命中阈值窗口 [{CONF_LOW}, {CONF_HIGH}] 的样本: "
