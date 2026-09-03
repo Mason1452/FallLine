@@ -95,7 +95,8 @@ final class PoseSmootherTests: XCTestCase {
                        "插值应恢复到邻域中位数 100° 附近，实测 \(leftKnee?.value ?? -1)°")
         XCTAssertLessThanOrEqual(leftKnee?.confidence ?? 1.0,
                                  AnalysisReliability.minimumPoseScoreConfidence,
-                                 "插值 confidence 应 <= minimumPoseScoreConfidence，避免进入可靠聚合")
+                                 "插值 confidence 应 <= minimumPoseScoreConfidence，"
+                                 + "让 smoothConfidenceWeight 压到 ~0.0625 避免污染 bilateralConfidence")
     }
 
     /// 连续 2 帧 nil：knee=[100,100,nil,nil,100,100] 两个空洞都应被补上

@@ -195,7 +195,14 @@ public enum PoseSmoother {
     }
 
     /// 3 帧中位数窗口。对每个 index i，取 [i-1, i, i+1] 中的非 nil 值中位数。
-    /// 若窗口有效值 < 3，保留原值（避免边界样本被单帧主导）。
+    ///
+    /// 若窗口有效值 < 3，保留原值（避免边界样本被单帧主导）。这是刻意折中：
+    /// - **首末帧**（index 0 和 count-1）永远只有 2 帧邻居，因此**首末帧的孤立毛刺不会被 despike**
+    /// - **中间帧含 nil 邻居**时也退化到"保留原值"（例如短空洞邻居），交给后续 P4-A `imputeMissingJointMetrics` 处理
+    /// - 影响面：每段视频固定丢首末各 1 帧的 despike 效果；100+ 帧长视频 <2%，
+    ///   短视频（<5 帧）在 [smooth()](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseSmoother.swift#L44-L49) 入口已被 `count >= 3` 拒绝
+    /// - 若未来要覆盖边界，可以对首末帧用偏置窗口（[i, i+1, i+2] 或 [i-2, i-1, i]），
+    ///   代价是首末帧引入 ~200ms 相位偏移
     private static func medianWindow(_ values: [Double?]) -> [Double?] {
         guard values.count >= 3 else { return values }
 
@@ -225,9 +232,17 @@ public enum PoseSmoother {
     /// 中间 3 帧维持 nil（阶跃损失被压缩，但不造假），是我们期望的行为。
     private static let imputeMinNeighborHealthy = 2
 
-    /// 插值 confidence 衰减因子：填充值的 confidence = 邻居均值 × 衰减。
-    /// 目的：让插值样本在 [smoothConfidenceWeight](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L115-L119) 中权重更低，
-    /// 且 <=[minimumPoseScoreConfidence](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L97) 时不进入可靠聚合。
+    /// 插值 confidence 衰减因子：填充值的 confidence = 邻居均值 × 衰减，上限截断到
+    /// [minimumPoseScoreConfidence](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L97)（0.30）。
+    ///
+    /// **实际护栏说明（澄清）**：
+    /// - 插值只写入**单个维度**（例如 leftCalf）；其余维度仍是真实高置信度
+    /// - [reliablePoseFrames](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L294-L299) 判定用 `totalConfidence`（5 维加权均值），
+    ///   单维度 conf=0.30 时 totalConfidence 仍远高于 0.30 → **含插值帧照样进入可靠聚合**
+    /// - **真正的护栏是** [smoothConfidenceWeight](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L114-L118)：
+    ///   conf=0.30 时权重 = ((0.30-0.15)/0.60)² ≈ 0.0625，
+    ///   即插值维度的实际贡献被压缩到 ~6.25%，避免污染 bilateralConfidence 的均值
+    /// - 若未来单段视频出现 >5 帧插值，考虑在 PoseScorer 层加"帧级插值标记"并给 totalConfidence 打折
     private static let imputeConfidenceDecay = 0.5
 
     /// 对 4 组 knee/calf 关节做短空洞插值。
