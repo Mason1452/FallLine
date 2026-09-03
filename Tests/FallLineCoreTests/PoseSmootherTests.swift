@@ -3,8 +3,10 @@ import XCTest
 
 // MARK: - PoseSmoother 测试
 //
-// 2026-09-01 P0 落地：在 1€ Filter 之前对 knee/calf 关节角度做 3 帧中位数预处理，
-// 抹掉孤立尖峰。以下用例覆盖预滤行为、边界处理及不影响的字段。
+// 2026-09-01 P0-A 落地：在 1€ Filter 之前对 knee/calf 关节角度做 3 帧中位数预处理。
+// 2026-09-03 P0b  落地：扩展 despike 覆盖 bodyLean / left/right bodyLean（3 组无符号）。
+// 2026-09-01 P4-A 落地：在 despike 之后对 knee/calf 短空洞做邻域中位数插值。
+// 以下用例覆盖预滤行为、边界处理、插值语义及不影响的字段。
 
 final class PoseSmootherTests: XCTestCase {
 
@@ -56,10 +58,9 @@ final class PoseSmootherTests: XCTestCase {
         XCTAssertEqual(smoothed[1].bodyPose.leftKneeBendAngle?.value ?? -1, 40, accuracy: 0.01)
     }
 
-    /// bodyLean 不在预滤名单里 → 应经过 1€ Filter 但不被 median 抹平。
-    /// 用极端尖峰验证：如果 bodyLean 被 median 抹掉，第 3 帧值应回到 ~20°。
-    /// 但实际上 1€ Filter 参数 minCutoff=1.2 允许突变通过，第 3 帧应保留较高值。
-    func test_smooth_bodyLean_notDespiked() {
+    /// P0b (2026-09-03) 落地：bodyLean 已加入 despike 名单，尖峰应被 median 抹平。
+    /// 用极端尖峰验证：knee=[20, 20, 60, 20, 20] 中间帧的 60° 应被回落到 ~20°。
+    func test_smooth_bodyLean_isDespikedAfterP0b() {
         let frames = (0..<5).map { i -> DetectionResult in
             let leanValue = (i == 2) ? 60.0 : 20.0
             return makeFrame(
@@ -72,10 +73,55 @@ final class PoseSmootherTests: XCTestCase {
         let smoothed = PoseSmoother.smooth(frames, scorer: PoseScorer())
         let leans = smoothed.map { $0.bodyPose.bodyLeanAngle?.value ?? -1 }
 
-        // 未预滤 → 尖峰应至少残留部分（1€ 有平滑作用，但不会像 median 那样直接抹掉）
-        // 判据：第 3 帧的 lean 值应显著大于第 1、5 帧的 20°（median 抹了就会 ~20°）
-        XCTAssertGreaterThan(leans[2], 25.0,
-                             "bodyLean 未在 despike 名单里，尖峰不应被完全抹平，实测 \(leans[2])°")
+        // P0b: 3 帧窗口 [20, 60, 20] 中位数 = 20 → 第 3 帧应被抹回 ~20°
+        XCTAssertLessThan(leans[2], 30.0,
+                          "bodyLean 已进入 P0b despike 名单，孤立尖峰应被 median 抹回 ~20°，实测 \(leans[2])°")
+    }
+
+    /// P0b: 连续 2 帧的真实 lean 峰值不应被误伤（对称于 knee 峰值保留用例）。
+    /// bodyLean [20, 60, 60, 20, 20]：中间两帧仍应保留在 60° 附近。
+    func test_smooth_bodyLeanTwoFramePeak_isPreserved() {
+        let raw = [20.0, 60.0, 60.0, 20.0, 20.0]
+        let frames = raw.enumerated().map { (i, v) in
+            makeFrame(
+                time: Double(i) * 0.2,
+                leftKnee: 100, rightKnee: 100, leftCalf: 45, rightCalf: 45,
+                bodyLean: v
+            )
+        }
+
+        let smoothed = PoseSmoother.smooth(frames, scorer: PoseScorer())
+        let leans = smoothed.map { $0.bodyPose.bodyLeanAngle?.value ?? -1 }
+
+        // 3 帧窗口 [20, 60, 60] median = 60；[60, 60, 20] median = 60
+        // 1€ Filter 后允许有一定平滑，但应保留在 40°+ 显著高于起点 20°
+        XCTAssertGreaterThan(leans[1], 40.0,
+                             "第 2 帧连续峰值应保留（median 取 60），实测 \(leans[1])°")
+        XCTAssertGreaterThan(leans[2], 40.0,
+                             "第 3 帧连续峰值应保留（median 取 60），实测 \(leans[2])°")
+    }
+
+    /// P0b: 边界帧（首末）保留原值，这是 medianWindow 的已知折中。
+    /// bodyLean [80, 20, 20, 20, 80]：首末孤立高值不会被抹掉（无 3 邻居）。
+    func test_smooth_bodyLeanBoundary_preservesRawValue() {
+        let raw = [80.0, 20.0, 20.0, 20.0, 80.0]
+        let frames = raw.enumerated().map { (i, v) in
+            makeFrame(
+                time: Double(i) * 0.2,
+                leftKnee: 100, rightKnee: 100, leftCalf: 45, rightCalf: 45,
+                bodyLean: v
+            )
+        }
+
+        let smoothed = PoseSmoother.smooth(frames, scorer: PoseScorer())
+        let leans = smoothed.map { $0.bodyPose.bodyLeanAngle?.value ?? -1 }
+
+        // 首帧原值 80° 应保留（1€ 首帧 = 原值）；末帧同理
+        // 若 medianWindow 覆盖了首末，会用偏置窗口抹到 ~20°；当前策略保留 80°
+        XCTAssertGreaterThan(leans[0], 60.0,
+                             "首帧应保留原值 ~80°（边界折中），实测 \(leans[0])°")
+        XCTAssertGreaterThan(leans[4], 60.0,
+                             "末帧应保留原值 ~80°（边界折中），实测 \(leans[4])°")
     }
 
     // MARK: - P4-A 短空洞插值

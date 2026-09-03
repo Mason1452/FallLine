@@ -48,9 +48,11 @@ public enum PoseSmoother {
     ) -> [DetectionResult] {
         guard results.count >= 3 else { return results }
 
-        // P0 预滤：对 knee/calf 关节角度做 3 帧中位数预处理，抹掉孤立尖峰
+        // P0 预滤：对 knee/calf/lean 关节角度做 3 帧中位数预处理，抹掉孤立尖峰
         // （corpus zigzag 44~62%，表明帧间存在大量高频翻转，会击穿 1€ Filter 的自适应）。
-        // 只针对评分权重最大的 knee + calf 组，避免影响 bodyLean 和坐标的时间精度。
+        // P0-A: knee/calf (25% + 20% 权重)
+        // P0b:  bodyLean + left/right bodyLean (20% 权重, 2026-09-03 落地)
+        //       只覆盖无符号 3 组，signedBodyLean 保守留给下游 (TurnPhaseDetector 需要方向信息)
         let deSpiked = despikeJointAngles(results)
 
         // P4-A 短空洞插值：对 knee/calf 4 组关节做邻域中位数补值。
@@ -118,14 +120,20 @@ public enum PoseSmoother {
 
     // MARK: - 内部
 
-    /// P0 预滤：对 knee/calf 4 组角度做 3 帧中位数，抹掉孤立尖峰
+    /// P0 预滤：对关键关节/姿态角度做 3 帧中位数，抹掉孤立尖峰
     /// （Vision 逐帧检测偶发抖动 → 40°/95° 孤立跳变）。
     ///
-    /// - 只处理 leftKnee/rightKnee/leftCalf/rightCalf 共 4 组
+    /// - **P0-A 覆盖** (2026-09-01): leftKnee / rightKnee / leftCalf / rightCalf（4 组）
+    /// - **P0b 覆盖** (2026-09-03): bodyLean / leftBodyLean / rightBodyLean（3 组，无符号）
     /// - 保留原 confidence（滤值不改变检测可信度）
     /// - 缺失帧（value=nil）不参与中位数窗口
     /// - 边界处（前后无 3 帧）保留原值
     /// - 对连续两帧的真实峰值不敏感（median 保留主流值，滤除孤立值）
+    ///
+    /// **为什么不覆盖 signedBodyLeanAngle**：
+    ///   下游 [TurnPhaseDetector.swift#L80](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/TurnPhaseDetector.swift#L80)
+    ///   用它做左右倾判定；中位数虽保留多数派符号，但 despike 只用于评分维度，
+    ///   与 phase 检测解耦更稳妥。
     private static func despikeJointAngles(_ results: [DetectionResult]) -> [DetectionResult] {
         guard results.count >= 3 else { return results }
 
@@ -136,6 +144,10 @@ public enum PoseSmoother {
         let rightKneeMedians = medianWindow(extract(\.rightKneeBendAngle))
         let leftCalfMedians = medianWindow(extract(\.leftCalfLeanAngle))
         let rightCalfMedians = medianWindow(extract(\.rightCalfLeanAngle))
+        // P0b (2026-09-03): 覆盖 3 组无符号 lean 角度
+        let bodyLeanMedians = medianWindow(extract(\.bodyLeanAngle))
+        let leftBodyLeanMedians = medianWindow(extract(\.leftBodyLeanAngle))
+        let rightBodyLeanMedians = medianWindow(extract(\.rightBodyLeanAngle))
 
         return results.enumerated().map { (index, detection) in
             let pose = detection.bodyPose
@@ -152,9 +164,9 @@ public enum PoseSmoother {
             let updatedPose = BodyPoseData(
                 detected: pose.detected,
                 visibility: pose.visibility,
-                bodyLeanAngle: pose.bodyLeanAngle,
-                leftBodyLeanAngle: pose.leftBodyLeanAngle,
-                rightBodyLeanAngle: pose.rightBodyLeanAngle,
+                bodyLeanAngle: replace(pose.bodyLeanAngle, with: bodyLeanMedians[index]),
+                leftBodyLeanAngle: replace(pose.leftBodyLeanAngle, with: leftBodyLeanMedians[index]),
+                rightBodyLeanAngle: replace(pose.rightBodyLeanAngle, with: rightBodyLeanMedians[index]),
                 leftKneeBendAngle: replace(pose.leftKneeBendAngle, with: leftKneeMedians[index]),
                 rightKneeBendAngle: replace(pose.rightKneeBendAngle, with: rightKneeMedians[index]),
                 leftCalfLeanAngle: replace(pose.leftCalfLeanAngle, with: leftCalfMedians[index]),
