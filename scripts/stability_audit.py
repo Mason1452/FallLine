@@ -113,6 +113,29 @@ def p0_joint_jitter(frames: list[dict[str, Any]]) -> dict[str, float | None]:
     lean_spike_count = sum(1 for v in lean if v > 15.0)
     cog_spike_count = sum(1 for v in cog if v > 0.10)
 
+    # P0bC 深度探针 (2026-09-05)：单纯的 median/spike 无法区分
+    #   (a) 孤立尖峰 —— 3 帧 median 就能压掉
+    #   (b) 短簇跳动 —— 需要 window=5，但会伤连续 turn 峰值
+    #   (c) 长时漂移 —— despike 无效，需要重构 hipRatio 计算
+    # 引入 3 组特征：
+    #   cogSpikeMaxCluster / cogSpikeClusterLens: 相邻尖峰帧簇长度分布
+    #   cogRawRange / cogRawStd: 全序 raw 值分布，判断是否漂移
+    #   gravityImpactedFrames: cog > 0.75 (gravityScore < 32.5) 的帧数，
+    #     反映 cog 抖动是否落入实际扣分区
+    cog_series = _extract_angle_series(frames, "centerOfGravity")
+    spike_positions = [i for i, v in enumerate(cog) if v > 0.10]
+    cluster_lens: list[int] = []
+    if spike_positions:
+        cur = [spike_positions[0]]
+        for idx in spike_positions[1:]:
+            if idx == cur[-1] + 1:
+                cur.append(idx)
+            else:
+                cluster_lens.append(len(cur))
+                cur = [idx]
+        cluster_lens.append(len(cur))
+    gravity_impacted = sum(1 for v in cog_series if v > 0.75)
+
     return {
         "kneeAdjDiffMedian": _median_or_none(knee_jitter_all),
         "leanAdjDiffMedian": _median_or_none(lean),
@@ -122,6 +145,12 @@ def p0_joint_jitter(frames: list[dict[str, Any]]) -> dict[str, float | None]:
         "cogAdjDiffMedian": _median_or_none(cog),
         "cogAdjDiffP90": _p90_or_none(cog),
         "cogSpikeCount": cog_spike_count,
+        "cogSpikeMaxCluster": max(cluster_lens) if cluster_lens else 0,
+        "cogSpikeClusterLens": cluster_lens,
+        "cogRawRange": (max(cog_series) - min(cog_series)) if cog_series else None,
+        "cogRawStd": statistics.pstdev(cog_series) if len(cog_series) > 1 else None,
+        "gravityImpactedFrames": gravity_impacted,
+        "cogFrameCount": len(cog_series),
         "kneeAdjDiffP90": _p90_or_none(knee_jitter_all),
     }
 
@@ -250,6 +279,12 @@ def audit_one(path: Path) -> dict[str, Any]:
         "cogAdjDiffMedian": p0["cogAdjDiffMedian"],
         "cogAdjDiffP90": p0["cogAdjDiffP90"],
         "cogSpikeCount": p0["cogSpikeCount"],
+        "cogSpikeMaxCluster": p0["cogSpikeMaxCluster"],
+        "cogSpikeClusterLens": p0["cogSpikeClusterLens"],
+        "cogRawRange": p0["cogRawRange"],
+        "cogRawStd": p0["cogRawStd"],
+        "gravityImpactedFrames": p0["gravityImpactedFrames"],
+        "cogFrameCount": p0["cogFrameCount"],
         "kneeAdjDiffP90": p0["kneeAdjDiffP90"],
         "boardConf": board_summary.get("confidence"),
         "inTransitionWindow": p1["inTransitionWindow"],
@@ -392,6 +427,64 @@ def summarize(rows: list[dict[str, Any]]) -> None:
         verdict = "→ 推 P0b" if gate else "→ 维持现状"
         print(f"  P0b {label}: mean={mean_score:5.1f} / 命中率={hit_rate:4.0f}%"
               f" ({len(hits)}/{len(vals)})  {verdict}")
+
+    # ---- P0bC 深度探针 (2026-09-05) --------------------------------------
+    #   区分 cog 抖动的三种形态，指导 despike 策略选择：
+    #     (a) 孤立尖峰       → 3 帧 median 就足够
+    #     (b) 短簇 (2~4 帧)  → 3 帧 median 削减一半，5 帧 median 边际收益小
+    #     (c) 长簇 / 漂移    → despike 无效，需重构 hipRatio 计算
+    #   同时看 gravityImpactedFrames：cog > 0.75 才落到实际扣分区
+    print(f"\n== P0bC 深度探针：cog 抖动形态学 ==")
+    header_pc = (
+        f"  {'file':<38} {'nCog':>4} {'#spk':>4} {'maxCl':>5} "
+        f"{'range':>6} {'std':>6} {'gImp':>4}"
+    )
+    print(header_pc)
+    print("  " + "-" * (len(header_pc) - 2))
+    for r in rows:
+        print(
+            f"  {r['file'][:38]:<38} "
+            f"{_fmt(r.get('cogFrameCount'), 4, 0)} "
+            f"{_fmt(r.get('cogSpikeCount'), 4, 0)} "
+            f"{_fmt(r.get('cogSpikeMaxCluster'), 5, 0)} "
+            f"{_fmt(r.get('cogRawRange'), 6, 3)} "
+            f"{_fmt(r.get('cogRawStd'), 6, 3)} "
+            f"{_fmt(r.get('gravityImpactedFrames'), 4, 0)}"
+        )
+    print(
+        "\n  列说明: nCog=cog 有效帧数  #spk=cog 相邻差>0.10 尖峰数  maxCl=最长连续尖峰簇长度\n"
+        "         range=cog raw 全序极差  std=raw 标准差  gImp=cog>0.75 落入 gravityScore<32.5 惩罚区帧数"
+    )
+
+    # 汇总形态分类：只看主 corpus（testvideo/N.json，不含 _baseline / _c_2d 等对照目录）
+    main_rows = [r for r in rows if Path(r["file"]).parent.name == "testvideo"]
+    if main_rows:
+        drift_samples = [r for r in main_rows if (r.get("cogRawStd") or 0) > 0.08]
+        cluster_samples = [r for r in main_rows if (r.get("cogSpikeMaxCluster") or 0) >= 3]
+        gravity_samples = [r for r in main_rows if (r.get("gravityImpactedFrames") or 0) > 0]
+        print(f"\n  主 corpus ({len(main_rows)} 段) 形态分类:")
+        print(f"    cogRawStd > 0.08       (可能漂移): {len(drift_samples)}/{len(main_rows)}"
+              f" [{', '.join(Path(r['file']).stem for r in drift_samples) or '-'}]")
+        print(f"    maxCluster >= 3        (需 5 帧窗?): {len(cluster_samples)}/{len(main_rows)}"
+              f" [{', '.join(Path(r['file']).stem for r in cluster_samples) or '-'}]")
+        print(f"    gravityImpacted > 0    (落入惩罚区): {len(gravity_samples)}/{len(main_rows)}"
+              f" [{', '.join(Path(r['file']).stem for r in gravity_samples) or '-'}]")
+        # P0c 决策规则
+        need_p0c = len(cluster_samples) >= len(main_rows) / 2 or len(gravity_samples) >= 2
+        drift_dominant = len(drift_samples) >= len(main_rows) / 2
+        print(f"\n  P0c 决策：")
+        if drift_dominant:
+            print(f"    多数段 cog raw std > 0.08：抖动包含长时漂移分量，despike 收益有限。")
+            print(f"    建议：先重构 hipRatio 计算 (BoardDirectionAnalyzer/PoseMetrics)，")
+            print(f"          而不是加 despike。")
+        elif need_p0c:
+            print(f"    尖峰簇 >= 3 帧占多数段 或 落入 gravity 惩罚区 —— 推荐落 P0c cog despike。")
+            max_cl = max((r.get("cogSpikeMaxCluster") or 0) for r in main_rows)
+            print(f"    最长 cluster = {max_cl} 帧 → 建议 window = "
+                  f"{'5 帧' if max_cl >= 3 else '3 帧'}。")
+        else:
+            print(f"    cog 抖动多为孤立尖峰 (簇长 < 3)，3 帧 median 即可；")
+            print(f"    但 gravity 惩罚区帧数 < 2，实际扣分影响小 → 维持现状。")
 
     p1_hits = [r for r in rows if r["inTransitionWindow"]]
     print(f"\nP1 命中阈值窗口 [{CONF_LOW}, {CONF_HIGH}] 的样本: "
