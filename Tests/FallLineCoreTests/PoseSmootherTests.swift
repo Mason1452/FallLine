@@ -181,6 +181,70 @@ final class PoseSmootherTests: XCTestCase {
                              "末帧应保留原值 ~80°（边界折中），实测 \(leans[4])°")
     }
 
+    // MARK: - P0-E centerOfGravity despike
+
+    /// P0-E: cog 孤立尖峰应被 3 帧中位数抹回。
+    /// cog=[0.4, 0.4, 0.9, 0.4, 0.4]，index=2 窗口 [0.4, 0.9, 0.4] median=0.4。
+    func test_smooth_cog_isolatedSpike_isDespiked() {
+        let raw = [0.4, 0.4, 0.9, 0.4, 0.4]
+        let frames = raw.enumerated().map { (i, v) in
+            makeFrame(
+                time: Double(i) * 0.2,
+                leftKnee: 100, rightKnee: 100, leftCalf: 45, rightCalf: 45,
+                cog: v
+            )
+        }
+
+        let smoothed = PoseSmoother.smooth(frames, scorer: PoseScorer())
+        let cogs = smoothed.map { $0.bodyPose.centerOfGravity?.value ?? -1 }
+
+        XCTAssertLessThan(cogs[2], 0.55,
+                          "cog 孤立尖峰应被 median 抹回 ~0.4，实测 \(cogs[2])")
+    }
+
+    /// P0-E: 连续 2 帧真实 cog 峰值应被保留（cog 用 halfWidth=1，语义同 knee/calf）。
+    /// cog=[0.4, 0.9, 0.9, 0.4, 0.4]，index=1 window=[0.4, 0.9, 0.9] median=0.9（保留）。
+    func test_smooth_cog_twoFramePeak_isPreserved() {
+        let raw = [0.4, 0.9, 0.9, 0.4, 0.4]
+        let frames = raw.enumerated().map { (i, v) in
+            makeFrame(
+                time: Double(i) * 0.2,
+                leftKnee: 100, rightKnee: 100, leftCalf: 45, rightCalf: 45,
+                cog: v
+            )
+        }
+
+        let smoothed = PoseSmoother.smooth(frames, scorer: PoseScorer())
+        let cogs = smoothed.map { $0.bodyPose.centerOfGravity?.value ?? -1 }
+
+        XCTAssertGreaterThan(cogs[1], 0.55,
+                             "cog 连续 2 帧峰值应保留（median 取 0.9），实测 \(cogs[1])")
+        XCTAssertGreaterThan(cogs[2], 0.55,
+                             "cog 第 3 帧持续峰值应保留，实测 \(cogs[2])")
+    }
+
+    /// P0-E: cog 边界帧保留原值（medianWindow 边界折中）。
+    /// cog=[0.9, 0.4, 0.4, 0.4, 0.9]：首末孤立高值不会被抹掉（<3 邻居）。
+    func test_smooth_cog_boundary_preservesRawValue() {
+        let raw = [0.9, 0.4, 0.4, 0.4, 0.9]
+        let frames = raw.enumerated().map { (i, v) in
+            makeFrame(
+                time: Double(i) * 0.2,
+                leftKnee: 100, rightKnee: 100, leftCalf: 45, rightCalf: 45,
+                cog: v
+            )
+        }
+
+        let smoothed = PoseSmoother.smooth(frames, scorer: PoseScorer())
+        let cogs = smoothed.map { $0.bodyPose.centerOfGravity?.value ?? -1 }
+
+        // 首帧原值 0.9 应保留（1€ 首帧 = 原值）；末帧同理
+        XCTAssertGreaterThan(cogs[0], 0.7,
+                             "cog 首帧应保留原值 ~0.9（边界折中），实测 \(cogs[0])")
+        XCTAssertGreaterThan(cogs[4], 0.7,
+                             "cog 末帧应保留原值 ~0.9（边界折中），实测 \(cogs[4])")
+    }
+
     // MARK: - P4-A 短空洞插值
 
     /// 单帧 nil：knee=[100,100,nil,100,100] 中间帧应被邻居中位数 100° 补上。
@@ -279,7 +343,8 @@ final class PoseSmootherTests: XCTestCase {
         rightKnee: Double?,
         leftCalf: Double?,
         rightCalf: Double?,
-        bodyLean: Double? = 20
+        bodyLean: Double? = 20,
+        cog: Double? = nil
     ) -> DetectionResult {
         DetectionResult(
             time: time,
@@ -297,7 +362,7 @@ final class PoseSmootherTests: XCTestCase {
                 rightKneeBendAngle: rightKnee.map { MetricWithConfidence(value: $0, confidence: 0.9) },
                 leftCalfLeanAngle: leftCalf.map { MetricWithConfidence(value: $0, confidence: 0.9) },
                 rightCalfLeanAngle: rightCalf.map { MetricWithConfidence(value: $0, confidence: 0.9) },
-                centerOfGravity: nil,
+                centerOfGravity: cog.map { MetricWithConfidence(value: $0, confidence: 0.9) },
                 hipCenterX: MetricWithConfidence(value: 0.5, confidence: 0.9),
                 ankleCenterX: MetricWithConfidence(value: 0.5, confidence: 0.9),
                 bodyCenterX: MetricWithConfidence(value: 0.5, confidence: 0.9),
