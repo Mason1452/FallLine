@@ -70,6 +70,42 @@ public struct PoseScorer {
     public static let deepKneePenaltyPer10Deg = 4.0
     public static let straightLegPenaltyPer10Deg = 28.0
 
+    /// P5-A 直腿分段平滑 (2026-09-06)：
+    /// 出 idealMax 后前 [straightLegSoftZoneDegrees]° 用温和斜率
+    /// [straightLegSoftPenaltyPer10Deg]，之后回到接近原斜率但截顶到 90，
+    /// 使 148° / 155° 相邻抖动不再一帧掉 20 分（v6 t=6.80 lknee=159.4° 场景）。
+    ///
+    /// 关键锚点校准（clamp 下限仍 20）：
+    /// - 135°(dev 0)  → 100
+    /// - 140°(dev 5)  → 100 - 5/10*20 = 90（原 86，缓 +4）
+    /// - 145°(dev 10) → 90 - 5/10*24 = 78（原 72，缓 +6）
+    /// - 155°(dev 20) → 90 - 15/10*24 = 54（原 44，缓 +10）
+    /// - 158°(dev 23) → 90 - 18/10*24 = 46.8（原 35.6，缓 +11.2）
+    /// - 165°(dev 30) → 90 - 25/10*24 = 30（原 20 clamp）
+    /// - dev ≥ 34.17 → 触底 20（原 dev ≥ 28.57 触底）
+    public static let straightLegSoftZoneDegrees = 5.0
+    public static let straightLegSoftPenaltyPer10Deg = 20.0
+    public static let straightLegHardPenaltyPer10Deg = 24.0
+
+    /// P5-B knee quality cap 线性缓冲带 (2026-09-06)：
+    /// 原语义：kneeBendScore < 60 → totalScore ≤ 72（悬崖）
+    /// 新语义：kneeBendScore ∈ (kneeCapSoftFloor, kneeCapHardCeiling) 时，
+    ///        cap 从 kneeCapMin 线性抬升到 kneeCapMax，避免 kneeBend 60±ε 抖动
+    ///        造成 totalScore 15+ 分跳变（v6 t=30.60 场景）。
+    ///
+    /// 关键锚点：
+    /// - kneeBendScore ≤ 40 → cap = 72（保持严格，明显直腿或蹲坑）
+    /// - kneeBendScore = 50 → cap = 80（线性中点）
+    /// - kneeBendScore = 60 → cap = 88（临近悬崖，仍有轻微 clip 保护）
+    /// - kneeBendScore > 60 → 无 cap（原语义）
+    ///
+    /// 副作用极小：只影响 kneeBend ∈ (40, 60) 且 rawScore > cap 的帧，
+    /// 这些帧原本就在 quality cap 惩罚带内。symmetry cap 保持不变。
+    public static let kneeCapHardCeiling = 60.0
+    public static let kneeCapSoftFloor = 40.0
+    public static let kneeCapMin = 72.0
+    public static let kneeCapMax = 88.0
+
     /// 小腿倾斜（立刃幅度）：0°=0分, 80°=100分（越高越好）
     /// 来源：滑雪教练经验——立刃角度越大，走刃质量越好。
     /// 80° 是现实中侧向立刃可达到的极限参考值。
@@ -239,6 +275,14 @@ public struct PoseScorer {
     }
 
     /// 膝盖弯曲评分
+    ///
+    /// P5-A (2026-09-06): 直腿段（>135°）改为两段线性：
+    /// - 前 [straightLegSoftZoneDegrees] °：温和斜率 [straightLegSoftPenaltyPer10Deg]/10°
+    /// - 之后：更陡但从 90 起降 [straightLegHardPenaltyPer10Deg]/10°
+    ///
+    /// 目的：让 145°/155°/158° 附近的相邻帧抖动不再一帧掉 20 分，
+    /// 同时保留 165° 触底附近的严格惩罚（clamp 20），符合 calibration_anchors 语义。
+    /// 深屈膝 (<80°) 曲线保持不变。
     private func scoreKneeBend(_ pose: BodyPoseData) -> Double {
         let left = pose.leftKneeBendAngle?.value
         let right = pose.rightKneeBendAngle?.value
@@ -255,7 +299,13 @@ public struct PoseScorer {
         }
 
         let deviation = avg - Self.kneeIdealMax
-        return max(20, 100 - (deviation / 10.0) * Self.straightLegPenaltyPer10Deg)
+        if deviation <= Self.straightLegSoftZoneDegrees {
+            // 前 5°：100 → 90，斜率 20/10°
+            return 100 - (deviation / 10.0) * Self.straightLegSoftPenaltyPer10Deg
+        }
+        // 5° 之后：从 90 起继续降，斜率 24/10°
+        let hardDev = deviation - Self.straightLegSoftZoneDegrees
+        return max(20, 90 - (hardDev / 10.0) * Self.straightLegHardPenaltyPer10Deg)
     }
 
     /// 小腿倾斜评分（越高越好）
@@ -283,13 +333,36 @@ public struct PoseScorer {
         symmetryConfidence: Double
     ) -> Double {
         var capped = score
-        if kneeBendScore < 60, kneeBendConfidence >= AnalysisReliability.minimumPoseScoreConfidence {
-            capped = min(capped, 72)
+        // P5-B (2026-09-06): knee cap 从硬阈值悬崖改为分段线性缓冲带
+        //   - kneeBend ≤ 40    → cap = 72（严格）
+        //   - kneeBend ∈ (40,60) → cap 线性 72 → 88
+        //   - kneeBend ≥ 60    → 无 cap（原语义）
+        // 目的：v6 t=30.60 相邻抖动 kneeBend 54→63 不再一帧从 72 跳到 87。
+        if kneeBendScore < Self.kneeCapHardCeiling,
+           kneeBendConfidence >= AnalysisReliability.minimumPoseScoreConfidence {
+            let cap = kneeCapValue(for: kneeBendScore)
+            capped = min(capped, cap)
         }
         if symmetryScore < 45, symmetryConfidence >= AnalysisReliability.minimumPoseScoreConfidence {
             capped = min(capped, 72)
         }
         return capped
+    }
+
+    /// P5-B 缓冲带 cap 值计算
+    /// - kneeBend ≤ kneeCapSoftFloor (40)  → kneeCapMin (72)
+    /// - kneeBend ≥ kneeCapHardCeiling (60) → kneeCapMax (88)  ← 只在调用处配合 <60 门控生效
+    /// - 中间：线性插值
+    private func kneeCapValue(for kneeBendScore: Double) -> Double {
+        if kneeBendScore <= Self.kneeCapSoftFloor {
+            return Self.kneeCapMin
+        }
+        if kneeBendScore >= Self.kneeCapHardCeiling {
+            return Self.kneeCapMax
+        }
+        let range = Self.kneeCapHardCeiling - Self.kneeCapSoftFloor
+        let ratio = (kneeBendScore - Self.kneeCapSoftFloor) / range
+        return Self.kneeCapMin + ratio * (Self.kneeCapMax - Self.kneeCapMin)
     }
 
     /// 对称性评分（加权）
