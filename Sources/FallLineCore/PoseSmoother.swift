@@ -125,6 +125,12 @@ public enum PoseSmoother {
     ///
     /// - **P0-A 覆盖** (2026-09-01): leftKnee / rightKnee / leftCalf / rightCalf（4 组）
     /// - **P0b 覆盖** (2026-09-03): bodyLean / leftBodyLean / rightBodyLean（3 组，无符号）
+    /// - **P0-D 覆盖** (2026-09-07): lean 3 组扩宽为 5 帧窗（halfWidth=2）
+    /// - **P0-E 覆盖** (2026-09-07): centerOfGravity（3 帧窗，halfWidth=1）。
+    ///   诊断显示 gravity 是 v2/v3/v4/v6 stability 的第 2~3 大贡献源
+    ///   （avg_pen 27~37），主要为 hipRatio 单帧位置跳变造成，非长时漂移。
+    ///   之前 P0bC 深度探针误判为"不适合 despike"（把长时漂移和短尖峰簇混算），
+    ///   本次仅对 3 帧中位数抹掉孤立尖峰，长时漂移交给 1€ Filter 处理。
     /// - 保留原 confidence（滤值不改变检测可信度）
     /// - 缺失帧（value=nil）不参与中位数窗口
     /// - 边界处（前后无 3 帧）保留原值
@@ -152,6 +158,10 @@ public enum PoseSmoother {
         let bodyLeanMedians = medianWindow(extract(\.bodyLeanAngle), halfWidth: leanHalfWidth)
         let leftBodyLeanMedians = medianWindow(extract(\.leftBodyLeanAngle), halfWidth: leanHalfWidth)
         let rightBodyLeanMedians = medianWindow(extract(\.rightBodyLeanAngle), halfWidth: leanHalfWidth)
+        // P0-E (2026-09-07): centerOfGravity 3 帧窗 despike，抹掉孤立尖峰。
+        //   与 knee/calf 一致 halfWidth=1，长时漂移交给下游 1€ Filter。
+        //   注：cog 是位置比值（0~1 hipRatio 派生），不是角度。
+        let cogMedians = medianWindow(extract(\.centerOfGravity), halfWidth: cogHalfWidth)
 
         return results.enumerated().map { (index, detection) in
             let pose = detection.bodyPose
@@ -175,7 +185,7 @@ public enum PoseSmoother {
                 rightKneeBendAngle: replace(pose.rightKneeBendAngle, with: rightKneeMedians[index]),
                 leftCalfLeanAngle: replace(pose.leftCalfLeanAngle, with: leftCalfMedians[index]),
                 rightCalfLeanAngle: replace(pose.rightCalfLeanAngle, with: rightCalfMedians[index]),
-                centerOfGravity: pose.centerOfGravity,
+                centerOfGravity: replace(pose.centerOfGravity, with: cogMedians[index]),
                 signedBodyLeanAngle: pose.signedBodyLeanAngle,
                 signedCalfLeanAngle: pose.signedCalfLeanAngle,
                 hipCenterX: pose.hipCenterX,
@@ -223,8 +233,10 @@ public enum PoseSmoother {
     ///
     /// P0-D (2026-09-07): 半宽参数化。knee/calf 用 halfWidth=1（3 帧窗），lean 用 halfWidth=2
     /// （5 帧窗，感受野扩大到 800ms 以覆盖连续多帧漂移）。
+    /// P0-E (2026-09-07): cog 也用 halfWidth=1（3 帧窗），抹孤立尖峰即可。
     private static let kneeCalfHalfWidth = 1
     private static let leanHalfWidth = 2
+    private static let cogHalfWidth = 1
 
     private static func medianWindow(_ values: [Double?], halfWidth: Int = 1) -> [Double?] {
         guard values.count >= 3 else { return values }
