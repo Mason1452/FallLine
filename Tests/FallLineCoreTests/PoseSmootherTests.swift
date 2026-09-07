@@ -78,9 +78,16 @@ final class PoseSmootherTests: XCTestCase {
                           "bodyLean 已进入 P0b despike 名单，孤立尖峰应被 median 抹回 ~20°，实测 \(leans[2])°")
     }
 
-    /// P0b: 连续 2 帧的真实 lean 峰值不应被误伤（对称于 knee 峰值保留用例）。
-    /// bodyLean [20, 60, 60, 20, 20]：中间两帧仍应保留在 60° 附近。
-    func test_smooth_bodyLeanTwoFramePeak_isPreserved() {
+    /// P0b + P0-D: 连续 2 帧的真实 lean 峰值在 5 帧中位数窗下会被压制。
+    ///
+    /// bodyLean [20, 60, 60, 20, 20]，halfWidth=2 后 window 语义：
+    /// - index=0/1: window <5 元素，保留原值（20/60）
+    /// - index=2: window=[20,60,60,20,20] median=20 → **中间峰值被抹掉**
+    /// - index=3/4: window <5 元素，保留原值（20/20）
+    ///
+    /// 这是 P0-D (2026-09-07) 后 lean 用 5 帧窗的**期望副作用**：为了压制连续多帧漂移，
+    /// 会把"2 帧持续 lean 峰值"当作噪声处理。若真实动作 lean 变化持续 ≥3 帧才会保留。
+    func test_smooth_bodyLeanTwoFramePeak_underP0D_isSuppressed() {
         let raw = [20.0, 60.0, 60.0, 20.0, 20.0]
         let frames = raw.enumerated().map { (i, v) in
             makeFrame(
@@ -93,12 +100,62 @@ final class PoseSmootherTests: XCTestCase {
         let smoothed = PoseSmoother.smooth(frames, scorer: PoseScorer())
         let leans = smoothed.map { $0.bodyPose.bodyLeanAngle?.value ?? -1 }
 
-        // 3 帧窗口 [20, 60, 60] median = 60；[60, 60, 20] median = 60
-        // 1€ Filter 后允许有一定平滑，但应保留在 40°+ 显著高于起点 20°
+        // index=1 保留原始 60（边界不足 5 元素）
         XCTAssertGreaterThan(leans[1], 40.0,
-                             "第 2 帧连续峰值应保留（median 取 60），实测 \(leans[1])°")
+                             "index=1 边界保留原始 60，实测 \(leans[1])°")
+        // index=2 中间帧被 5 帧窗 median 抹到 20（P0-D 期望行为）
+        XCTAssertLessThan(leans[2], 40.0,
+                          "P0-D 5 帧窗应把 2 帧连续峰值中间帧抹回 ~20°，实测 \(leans[2])°")
+    }
+
+    /// P0-D: 连续 3 帧真实 lean 变化应被保留（median 无法压制 3 帧持续信号）。
+    ///
+    /// bodyLean [20, 20, 60, 60, 60, 20, 20]（长度 7），halfWidth=2：
+    /// - index=2: window=[20,20,60,60,60] sorted=[20,20,60,60,60] median=60 ✓
+    /// - index=3: window=[20,60,60,60,20] sorted=[20,20,60,60,60] median=60 ✓
+    /// - index=4: window=[60,60,60,20,20] median=60 ✓
+    ///
+    /// 三帧持续变化视为真实动作，5 帧窗 median 会保留。
+    func test_smooth_bodyLeanThreeFramePeak_underP0D_isPreserved() {
+        let raw = [20.0, 20.0, 60.0, 60.0, 60.0, 20.0, 20.0]
+        let frames = raw.enumerated().map { (i, v) in
+            makeFrame(
+                time: Double(i) * 0.2,
+                leftKnee: 100, rightKnee: 100, leftCalf: 45, rightCalf: 45,
+                bodyLean: v
+            )
+        }
+
+        let smoothed = PoseSmoother.smooth(frames, scorer: PoseScorer())
+        let leans = smoothed.map { $0.bodyPose.bodyLeanAngle?.value ?? -1 }
+
         XCTAssertGreaterThan(leans[2], 40.0,
-                             "第 3 帧连续峰值应保留（median 取 60），实测 \(leans[2])°")
+                             "P0-D 5 帧窗下持续 3 帧变化应保留（median 取 60），实测 \(leans[2])°")
+        XCTAssertGreaterThan(leans[3], 40.0,
+                             "中心帧应保留原 60，实测 \(leans[3])°")
+        XCTAssertGreaterThan(leans[4], 40.0,
+                             "末端持续帧应保留 60，实测 \(leans[4])°")
+    }
+
+    /// P0-D: knee/calf 保持 3 帧窗，其"2 帧真实峰值保留"语义不受影响。
+    ///
+    /// leftKnee [100, 40, 40, 100, 100]：knee 用 halfWidth=1（3 帧窗）
+    /// - index=1: window=[100,40,40] median=40（保留）
+    /// - index=2: window=[40,40,100] median=40（保留）
+    func test_smooth_kneeTwoFramePeak_underP0D_stillPreserved() {
+        let raw = [100.0, 40.0, 40.0, 100.0, 100.0]
+        let frames = raw.enumerated().map { (i, v) in
+            makeFrame(time: Double(i) * 0.2, leftKnee: v, rightKnee: v, leftCalf: 45, rightCalf: 45)
+        }
+
+        let smoothed = PoseSmoother.smooth(frames, scorer: PoseScorer())
+        let knees = smoothed.map { $0.bodyPose.leftKneeBendAngle?.value ?? -1 }
+
+        // P0-D 后 knee 仍是 3 帧窗，连续 2 帧峰值必须保留
+        XCTAssertLessThan(knees[1], 60.0,
+                          "knee 3 帧窗下 2 帧峰值应保留，实测 \(knees[1])°")
+        XCTAssertLessThan(knees[2], 60.0,
+                          "knee 3 帧窗下 2 帧峰值应保留，实测 \(knees[2])°")
     }
 
     /// P0b: 边界帧（首末）保留原值，这是 medianWindow 的已知折中。

@@ -564,11 +564,25 @@ public class VideoAnalyzer {
         guard confWeight >= 0.01 else { return }
 
         let velocity = abs(current.value - previous.value) / dt
+        // P0-D (2026-09-07): 速度上限门控。
+        //   当帧间速度超过 [Self.motionNoiseVelocityMultiplier] × tolerance 时，视为 Vision
+        //   检测噪声（如 video 4 t=18.40s knee 单帧 539°/s，远超人体运动极限），
+        //   直接跳过不参与惩罚计入。避免极端异常值 saturating penalty=100 拉低整段 stabilityScore。
+        //   阈值 3× 的依据：滑雪场景中真实关节角速度极值约 90-140°/s（膝关节屈伸），
+        //   3× tolerance = 420°/s 已远超生理极限，可安全归类为噪声。
+        //   不同于置信度门控——高置信度帧也可能出现单帧位置跳变，需要速度层护栏。
+        if velocity > tolerancePerSecond * Self.motionNoiseVelocityMultiplier {
+            return
+        }
         let penalty = clamp(velocity / tolerancePerSecond, lower: 0, upper: 1) * 100
         let effectiveWeight = weight * confWeight
         weightedPenalty += penalty * effectiveWeight
         totalWeight += effectiveWeight
     }
+
+    /// P0-D (2026-09-07): 速度上限门控倍数。帧间速度 > tolerance × 此值时判定为噪声，跳过惩罚。
+    /// 3.0 覆盖 v4 knee 539°/s、v3 bodyLean 308°/s、v6 rightCalf 308°/s 等诊断样本的极端峰值。
+    private static let motionNoiseVelocityMultiplier: Double = 3.0
 
     /// hipRatio 已是 0~1 连续值，直接用于动作稳定性计算
     /// 注：容忍度在 addMotionPenalty 中针对连续值做了调整

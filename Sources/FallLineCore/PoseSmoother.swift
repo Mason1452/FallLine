@@ -140,14 +140,18 @@ public enum PoseSmoother {
         func extract(_ keyPath: KeyPath<BodyPoseData, MetricWithConfidence<Double>?>) -> [Double?] {
             results.map { $0.bodyPose[keyPath: keyPath]?.value }
         }
-        let leftKneeMedians = medianWindow(extract(\.leftKneeBendAngle))
-        let rightKneeMedians = medianWindow(extract(\.rightKneeBendAngle))
-        let leftCalfMedians = medianWindow(extract(\.leftCalfLeanAngle))
-        let rightCalfMedians = medianWindow(extract(\.rightCalfLeanAngle))
-        // P0b (2026-09-03): 覆盖 3 组无符号 lean 角度
-        let bodyLeanMedians = medianWindow(extract(\.bodyLeanAngle))
-        let leftBodyLeanMedians = medianWindow(extract(\.leftBodyLeanAngle))
-        let rightBodyLeanMedians = medianWindow(extract(\.rightBodyLeanAngle))
+        let leftKneeMedians = medianWindow(extract(\.leftKneeBendAngle), halfWidth: kneeCalfHalfWidth)
+        let rightKneeMedians = medianWindow(extract(\.rightKneeBendAngle), halfWidth: kneeCalfHalfWidth)
+        let leftCalfMedians = medianWindow(extract(\.leftCalfLeanAngle), halfWidth: kneeCalfHalfWidth)
+        let rightCalfMedians = medianWindow(extract(\.rightCalfLeanAngle), halfWidth: kneeCalfHalfWidth)
+        // P0b (2026-09-03): 覆盖 3 组无符号 lean 角度（初版 3 帧窗）
+        // P0-D (2026-09-07): lean 扩宽到 5 帧窗（半宽 2），因 stability_decomp
+        //   诊断显示 bodyLean 是 v3/v4/v5/v6 的 #1 或 #2 抖动主导项，3 帧窗对
+        //   连续多帧漂移（v6 27.20s 单帧 34° 跳变）无效，需要更长感受野。
+        //   knee/calf 保持 3 帧窗以免削弱真实动作变化响应。
+        let bodyLeanMedians = medianWindow(extract(\.bodyLeanAngle), halfWidth: leanHalfWidth)
+        let leftBodyLeanMedians = medianWindow(extract(\.leftBodyLeanAngle), halfWidth: leanHalfWidth)
+        let rightBodyLeanMedians = medianWindow(extract(\.rightBodyLeanAngle), halfWidth: leanHalfWidth)
 
         return results.enumerated().map { (index, detection) in
             let pose = detection.bodyPose
@@ -206,23 +210,31 @@ public enum PoseSmoother {
         }
     }
 
-    /// 3 帧中位数窗口。对每个 index i，取 [i-1, i, i+1] 中的非 nil 值中位数。
+    /// 3 帧中位数窗口。对每个 index i，取 [i-halfWidth, i+halfWidth] 中的非 nil 值中位数。
     ///
-    /// 若窗口有效值 < 3，保留原值（避免边界样本被单帧主导）。这是刻意折中：
-    /// - **首末帧**（index 0 和 count-1）永远只有 2 帧邻居，因此**首末帧的孤立毛刺不会被 despike**
+    /// 若窗口有效值 < minWindowSize（=2*halfWidth+1），保留原值（避免边界样本被单帧主导）。
+    /// 这是刻意折中：
+    /// - **首末帧**（index 0 和 count-1）永远只有 halfWidth 个邻居，因此**首末帧的孤立毛刺不会被 despike**
     /// - **中间帧含 nil 邻居**时也退化到"保留原值"（例如短空洞邻居），交给后续 P4-A `imputeMissingJointMetrics` 处理
-    /// - 影响面：每段视频固定丢首末各 1 帧的 despike 效果；100+ 帧长视频 <2%，
+    /// - 影响面：每段视频固定丢首末各 halfWidth 帧的 despike 效果；100+ 帧长视频 <2%，
     ///   短视频（<5 帧）在 [smooth()](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseSmoother.swift#L44-L49) 入口已被 `count >= 3` 拒绝
     /// - 若未来要覆盖边界，可以对首末帧用偏置窗口（[i, i+1, i+2] 或 [i-2, i-1, i]），
     ///   代价是首末帧引入 ~200ms 相位偏移
-    private static func medianWindow(_ values: [Double?]) -> [Double?] {
+    ///
+    /// P0-D (2026-09-07): 半宽参数化。knee/calf 用 halfWidth=1（3 帧窗），lean 用 halfWidth=2
+    /// （5 帧窗，感受野扩大到 800ms 以覆盖连续多帧漂移）。
+    private static let kneeCalfHalfWidth = 1
+    private static let leanHalfWidth = 2
+
+    private static func medianWindow(_ values: [Double?], halfWidth: Int = 1) -> [Double?] {
         guard values.count >= 3 else { return values }
+        let minWindowSize = 2 * halfWidth + 1
 
         return values.indices.map { index -> Double? in
-            let start = max(0, index - 1)
-            let end = min(values.count - 1, index + 1)
+            let start = max(0, index - halfWidth)
+            let end = min(values.count - 1, index + halfWidth)
             let window = values[start...end].compactMap { $0 }
-            guard window.count >= 3 else { return values[index] }
+            guard window.count >= minWindowSize else { return values[index] }
             let sorted = window.sorted()
             return sorted[sorted.count / 2]
         }
