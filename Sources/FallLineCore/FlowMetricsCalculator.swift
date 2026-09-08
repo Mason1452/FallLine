@@ -45,9 +45,10 @@ public struct FlowMetrics {
 /// 三个指标：
 /// - motionCoherence: 髋部 vs 脚踝光流方向夹角 → 上下身运动一致性
 /// - directionalStability: 髋部光流方向的 circular variance → 走刃/搓雪区分
+///   （P7-A 2026-09-08：已退役评分调制，仅作报告展示——2D 光流方向不携带质量信息）
 /// - velocitySmoothness: 光流幅值变化率 → 动作流畅度
 ///
-/// 调制范围 ±13%。
+/// 调制范围 ±13%（P7-A 后有效范围 ±5%：coherence +0.05 / smoothness -0.05）。
 public struct FlowMetricsCalculator {
 
     // MARK: - 配置常量
@@ -58,15 +59,19 @@ public struct FlowMetricsCalculator {
     /// 调制参数
     public let coherenceBoostThreshold: Double = 70.0
     public let coherenceBoostAmount: Double = 0.05
+    /// P7-A (2026-09-08)：directionalStability 已退役，不再参与评分调制。
+    /// 诊断显示 6 种统计口径（全段/0.5s/1s 窗 × travelAngle/boardAngle ×
+    /// variance/median delta）全部无法区分 corpus 质量排序——滑雪换刃天然
+    /// 产生 ~180° 方向摆动，2D 光流方向被相机运动主导，信号源不携带质量信息。
+    /// 以下 stability 常量保留仅为 API 兼容，computeModulation 已不引用。
     public let stabilityBoostThreshold: Double = 70.0
     public let stabilityBoostAmount: Double = 0.08
     public let stabilityPenaltyThreshold: Double = 30.0
     public let stabilityPenaltyAmount: Double = 0.08
     public let smoothnessPenaltyThreshold: Double = 40.0
     public let smoothnessPenaltyAmount: Double = 0.05
-    /// 方向稳定性调制仅在姿态分低于此阈值时提升（避免已高分因拍摄角度被低估）
+    /// P7-A (2026-09-08)：随 stability 调制一并退役，保留仅为 API 兼容。
     public let stabilityBoostScoreCap: Double = 75.0
-    /// 方向稳定性调制仅在姿态分高于此阈值时扣减（避免已低分再被压低）
     public let stabilityPenaltyScoreFloor: Double = 75.0
 
     /// 光流置信度分母（帧率归一化后的像素位移基准）。
@@ -190,7 +195,7 @@ public struct FlowMetricsCalculator {
     // MARK: - 调制公式
 
     /// 应用光流调制到原始姿态评分。
-    /// 内部调用带 poseScore 上下文的 computeModulation，确保稳定性阈值判断正确。
+    /// 内部调用带 poseScore 上下文的 computeModulation（P7-A 后两者行为一致）。
     ///
     /// 塌陷熔断（2026-09-01 稳定性收敛，配合 scripts/stability_audit.py 量化基线）：
     /// 当 directionalStability 与 velocitySmoothness 同时为 0 时视为
@@ -211,8 +216,8 @@ public struct FlowMetricsCalculator {
         return clamp(poseScore * factor, lower: 0, upper: 100)
     }
 
-    /// 根据三个光流指标计算调制系数（不含稳定性阈值——稳定性依赖 poseScore 上下文）。
-    /// 供基础测试使用；生产环境使用带 poseScore 的重载版本。
+    /// 根据三个光流指标计算调制系数（不含稳定性阈值——P7-A 起 stability 不再参与调制）。
+    /// 供基础测试使用；生产环境使用带 poseScore 的重载版本（行为一致）。
     public func computeModulation(
         coherence: Double,
         stability: Double,
@@ -229,11 +234,11 @@ public struct FlowMetricsCalculator {
     }
 
     /// 带姿态分上下文的完整调制系数（生产环境使用此版本）。
-    /// stability 阈值仅在 poseScore 满足条件时触发 boost/penalty。
     ///
-    /// stability / smoothness = 0 视为塌陷降级信号：penalty 分支加 > 0 守卫，
-    /// 避免"工具坏了所以扣分"的错误逻辑。boost 分支保留以便未来 stability 修复
-    /// 后自动恢复。塌陷双 0 由 applyModulation 早退熔断兜底。
+    /// P7-A (2026-09-08)：stability 分支已退役（见常量区注释），本函数与
+    /// 3-param 版本行为一致，stability / poseScore 参数仅为 API 兼容保留。
+    /// smoothness = 0 视为塌陷降级信号：penalty 分支加 > 0 守卫，
+    /// 避免"工具坏了所以扣分"的错误逻辑。塌陷双 0 由 applyModulation 早退熔断兜底。
     public func computeModulation(
         coherence: Double,
         stability: Double,
@@ -243,12 +248,6 @@ public struct FlowMetricsCalculator {
         var modulation = 1.0
         if coherence > coherenceBoostThreshold {
             modulation += coherenceBoostAmount
-        }
-        if stability > stabilityBoostThreshold && poseScore < stabilityBoostScoreCap {
-            modulation += stabilityBoostAmount
-        }
-        if stability > 0 && stability < stabilityPenaltyThreshold && poseScore > stabilityPenaltyScoreFloor {
-            modulation -= stabilityPenaltyAmount
         }
         if smoothness > 0 && smoothness < smoothnessPenaltyThreshold {
             modulation -= smoothnessPenaltyAmount
