@@ -1,6 +1,6 @@
 # Delta Update
 
-最后更新：2026-08-29
+最后更新：2026-09-08
 
 本文档只记录每轮工作的增量变化，不记录项目全量背景。需要项目当前状态、目标和长期上下文时，先看 `WORK_LOG.md`；需要文件职责时，看 `file_manifest.md`。
 
@@ -13,6 +13,36 @@
 - 同一轮没有代码变更时，明确写”仅文档变更”或”未运行测试”的原因。
 
 ## 变更
+
+### 2026-09-08（P6-A + P7-A 落地）
+
+**本轮性质**：稳定性系列继续。P6-A（velocitySmoothness avg→median）验证、补测试、提交；directionalStability 只读诊断后用户拍板方案 A，P7-A（退役 stability 评分调制）落地。
+
+**背景补记**：2026-09-01 至 2026-09-07 间有多个稳定性提交未逐轮记录（P2 flow 熔断、P3 sideslip 5 帧中值、P4-A 短缺口中值插补、P5-A/B 膝盖评分、P0-A/P0b/P0-D/P0-E despike 系列），详见 `git log`。本轮起恢复逐轮记录。
+
+**P6-A 落地**（commit `be59c7c`）：
+- 问题：velocitySmoothness 在 6 份主 corpus **100% 塌陷为 0** —— avg(changeRate) 被单帧极端跳变（max 75.2 vs median 0.62）主导，全部超过旧阈值上限 0.50
+- 改动：[FlowMetricsCalculator.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift) avg→median，阈值 [0.15, 0.50]→[0.30, 1.20]（0.30=corpus median 最小值，1.20=观测最大+45% buffer）；抽取 `computeVelocitySmoothness(fromChangeRates:)` 为 internal 供单测
+- 测试：+4 用例（空序列回落 50、单帧 75.2 跳变不塌陷、阈值锚点、持续抖动仍扣 0）
+- corpus 重跑：velocitySmoothness 0 → 40.8~78.7；**flowMod/averageScore 全部不变**（恢复值均高于 penalty 阈值 40，3.json 40.8 最接近）；testvideo/*.md 已刷新
+
+**P7-A 落地**（commit `256d3f2`）：
+- 诊断（只读）：directionalStability 24/24 样本塌陷为 0。用 JSON 逐帧数据测 6 种统计口径（全段/0.5s/1s 窗 × travelAngle/boardAngle × variance/median delta），**全部无法区分 corpus 质量排序**；medDelta 与质量**反相关**（最差样本 1.json=60.9 分 medΔ 最小 15.9°，刻滑样本 5.json medΔ 41.8°）
+- 根因：滑雪换刃天然 ~180° 方向摆动 + 2D 光流方向被相机运动主导，信号源不携带质量信息。阈值重标/窗口化无法挽救
+- 决策：用户拍板方案 A（退役评分调制）
+- 改动：`computeModulation(4-param)` 移除 stability boost/penalty 两分支（与 3-param 行为一致）；stability 常量保留仅为 API 兼容；报告"方向稳定性"标注 `*不参与评分`
+- 测试：更新 7 个受影响用例 + 新增 `testModulation_full_stabilityValueIsIgnoredAfterP7A` 退役守护（stability 取 0~100 结果必须一致）
+- corpus 重跑：averageScore/flowMod 全部 Δ=0.00（stability 恒为 0 时分支本不触发，退役为零行为变化正式化）
+
+**验证**：
+- `swift test`：149 tests, 0 failures（两轮均绿）
+- `swift build -c release`：PASS
+- 诊断脚本为一次性 python heredoc，未落盘、无副作用
+
+**未做/后续**：
+- 光流调制有效范围现为 ±5%（coherence +0.05 / smoothness -0.05）；`applyModulation` 的双 0 熔断保留（仍防 smoothness 塌陷误调制）
+- P6-A/P7-A 未跑 49 视频大批量回归（主 corpus 6 份已覆盖）
+- 调制层只剩 coherence/smoothness 两项，若后续要恢复方向类指标需换信号源（IMU 或板身视觉线），不在当前范围
 
 ### 2026-09-01（CLI 复核方案 A）：主 corpus 重跑 + 实际分数对照
 
