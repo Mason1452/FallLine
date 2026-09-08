@@ -62,34 +62,39 @@ final class FlowMetricsCalculatorTests: XCTestCase {
         XCTAssertEqual(mod, 1.0, accuracy: 0.001)
     }
 
-    // MARK: - computeModulation (4-param — with poseScore, stability thresholds active)
+    // MARK: - computeModulation (4-param — P7-A 起 stability 不再参与调制，与 3-param 行为一致)
 
-    func testModulation_full_highCoherenceAndStabilityAndLowPose_boosts() {
-        // coherence > 70 → +0.05, stability > 70 + poseScore 60 (<75) → +0.08
+    /// P7-A (2026-09-08)：stability 调制退役。高 stability + 低 poseScore 不再触发 boost，
+    /// 只剩 coherence 分支生效。
+    func testModulation_full_highCoherenceAndStabilityAndLowPose_noStabilityBoostAfterP7A() {
         let mod = calculator.computeModulation(
             coherence: 85, stability: 85, smoothness: 60, poseScore: 60
         )
-        XCTAssertEqual(mod, 1.13, accuracy: 0.001)
-    }
-
-    func testModulation_full_highStabilityAndHighPose_noStabilityBoost() {
-        // stability > 70 but poseScore 80 (>75) → no stability boost
-        let mod = calculator.computeModulation(
-            coherence: 85, stability: 85, smoothness: 60, poseScore: 80
-        )
+        // P7-A 前：coherence +0.05 + stability +0.08 = 1.13；P7-A 后：仅 coherence 1.05
         XCTAssertEqual(mod, 1.05, accuracy: 0.001)
     }
 
-    func testModulation_full_lowStabilityAndHighPose_penalizes() {
-        // stability 20 (<30) + poseScore 80 (>75) → -0.08
+    /// P7-A 守护：同样的输入，stability 取 0 / 50 / 100 结果必须完全一致。
+    func testModulation_full_stabilityValueIsIgnoredAfterP7A() {
+        for stability in [0.0, 20.0, 50.0, 85.0, 100.0] {
+            let mod = calculator.computeModulation(
+                coherence: 50, stability: stability, smoothness: 60, poseScore: 80
+            )
+            XCTAssertEqual(mod, 1.0, accuracy: 0.001,
+                           "stability=\(stability) 不应影响调制结果，实测 \(mod)")
+        }
+    }
+
+    /// P7-A：低 stability + 高 poseScore 不再触发 penalty。
+    func testModulation_full_lowStabilityAndHighPose_noPenaltyAfterP7A() {
         let mod = calculator.computeModulation(
             coherence: 50, stability: 20, smoothness: 60, poseScore: 80
         )
-        XCTAssertEqual(mod, 0.92, accuracy: 0.001)
+        // P7-A 前：stability 20 + poseScore 80 → -0.08 = 0.92；P7-A 后：1.0
+        XCTAssertEqual(mod, 1.0, accuracy: 0.001)
     }
 
     func testModulation_full_lowStabilityAndLowPose_noPenalty() {
-        // stability 20 (<30) but poseScore 60 (<75) → no penalty (避免已低分再压低)
         let mod = calculator.computeModulation(
             coherence: 50, stability: 20, smoothness: 60, poseScore: 60
         )
@@ -100,16 +105,16 @@ final class FlowMetricsCalculatorTests: XCTestCase {
         let mod = calculator.computeModulation(
             coherence: 85, stability: 85, smoothness: 60, poseScore: 60
         )
-        // coherence +0.05, stability boost +0.08 → 1.13
-        XCTAssertEqual(mod, 1.13, accuracy: 0.001)
+        // P7-A 后仅 coherence +0.05
+        XCTAssertEqual(mod, 1.05, accuracy: 0.001)
     }
 
     func testModulation_full_allNegative_combined() {
         let mod = calculator.computeModulation(
             coherence: 50, stability: 20, smoothness: 25, poseScore: 80
         )
-        // stability penalty -0.08, smoothness -0.05 → 0.87
-        XCTAssertEqual(mod, 0.87, accuracy: 0.001)
+        // P7-A 后仅 smoothness -0.05（stability penalty 已退役）
+        XCTAssertEqual(mod, 0.95, accuracy: 0.001)
     }
 
     // MARK: - applyModulation
@@ -120,9 +125,9 @@ final class FlowMetricsCalculatorTests: XCTestCase {
             velocitySmoothness: 60, framePairsUsed: 10
         )
         let result = calculator.applyModulation(poseScore: 70, metrics: metrics)
-        // coherence 85 (>70) → +0.05, stability 85 (>70) + poseScore 70 (<75) → +0.08
-        // modulation = 1.13, 70 × 1.13 = 79.1
-        XCTAssertEqual(result, 79.1, accuracy: 0.01)
+        // P7-A (2026-09-08)：stability 调制退役，只剩 coherence 85 (>70) → +0.05
+        // modulation = 1.05, 70 × 1.05 = 73.5（P7-A 前 stability boost 叠加为 79.1）
+        XCTAssertEqual(result, 73.5, accuracy: 0.01)
     }
 
     func testApplyModulation_emptyMetrics_returnsUnchanged() {
@@ -179,17 +184,16 @@ final class FlowMetricsCalculatorTests: XCTestCase {
         XCTAssertEqual(result, 80, accuracy: 0.01)
     }
 
-    func testApplyModulation_lowStabilityHighPose_stillPenalizedWhenNotCollapsed() {
-        // 真正的低 stability（非塌陷，例如 stability=15）+ poseScore>75 时，
-        // stabilityPenalty 分支的 > 0 守卫允许通过，-0.08 生效；smoothness=25>0
-        // 也走 penalty，-0.05；净 modulation = 0.87，80 × 0.87 = 69.6。
-        // 说明熔断只对"双 0"塌陷起作用，不误伤真实低质量样本。
+    func testApplyModulation_lowStabilityHighPose_noPenaltyAfterP7A() {
+        // P7-A (2026-09-08)：stability penalty 分支退役。stability=15 + poseScore>75
+        // 不再扣 -0.08；smoothness=25>0 仍走 penalty -0.05；净 modulation = 0.95，
+        // 80 × 0.95 = 76。P7-A 前该用例为 0.87 × 80 = 69.6。
         let metrics = FlowMetrics(
             motionCoherence: 0, directionalStability: 15,
             velocitySmoothness: 25, framePairsUsed: 10
         )
         let result = calculator.applyModulation(poseScore: 80, metrics: metrics)
-        XCTAssertEqual(result, 69.6, accuracy: 0.01)
+        XCTAssertEqual(result, 76.0, accuracy: 0.01)
     }
 
     func testApplyModulation_fewFrames_noModulation() {

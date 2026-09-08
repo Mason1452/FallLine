@@ -468,8 +468,10 @@ public struct ReportGenerator {
            let smoothness = ctx.flowVelocitySmoothness {
             lines.append("  🌊 光流运动指标（实验性）")
             let framePairs = output.summary.flowFramePairsUsed.map { " · 帧对 \($0)" } ?? ""
-            lines.append("  | 运动一致性: \(String(format: "%.0f", coherence)) | 方向稳定性: \(String(format: "%.0f", dirStability)) | 速度平滑度: \(String(format: "%.0f", smoothness))\(framePairs) |")
-            lines.append("  | >70 上下身运动一致 | >70 方向稳定 | <40 动作不稳定 |")
+            // P7-A (2026-09-08)：方向稳定性信号不可靠（2D 光流方向无法区分滑行质量），
+            // 已退役评分调制，仅作展示并标注。
+            lines.append("  | 运动一致性: \(String(format: "%.0f", coherence)) | 方向稳定性: \(String(format: "%.0f", dirStability))* | 速度平滑度: \(String(format: "%.0f", smoothness))\(framePairs) |")
+            lines.append("  | >70 上下身运动一致 | *不参与评分 | <40 动作不稳定 |")
             lines.append("")
         }
 
