@@ -210,4 +210,36 @@ final class FlowMetricsCalculatorTests: XCTestCase {
         XCTAssertEqual(FlowMetrics.empty.directionalStability, 0)
         XCTAssertEqual(FlowMetrics.empty.velocitySmoothness, 0)
     }
+
+    // MARK: - P6-A computeVelocitySmoothness (2026-09-07)
+
+    /// P6-A: 空序列回落中性 50。
+    func testComputeVelocitySmoothness_empty_returnsNeutral50() {
+        XCTAssertEqual(calculator.computeVelocitySmoothness(fromChangeRates: []), 50, accuracy: 0.001)
+    }
+
+    /// P6-A: 单帧极端跳变不再拖垮整段平滑度（avg 时代 100% 塌陷为 0 的回归守护）。
+    func testComputeVelocitySmoothness_singleOutlierSpike_doesNotCollapse() {
+        // 诊断实录：主 corpus median ≈ 0.62，max 单帧跳变 75.2（>120×）
+        let changes: [Double] = [0.55, 0.60, 0.62, 0.58, 75.2]
+        let smoothness = calculator.computeVelocitySmoothness(fromChangeRates: changes)
+        // median = 0.60 → linearMap([0.30, 1.20]→[100, 0]) ≈ 66.7
+        XCTAssertEqual(smoothness, 66.67, accuracy: 0.01)
+        // 对照：avg = 15.43，旧公式 linearMap(15.43, [0.15, 0.50]→[100, 0]) = 0（塌陷）
+        XCTAssertGreaterThan(smoothness, 60, "单帧 75.2 跳变不应把平滑度拖垮，实测 \(smoothness)")
+    }
+
+    /// P6-A: 阈值锚点 — 0.30 → 100，1.20 → 0，中点 0.75 → 50。
+    func testComputeVelocitySmoothness_thresholdAnchors() {
+        XCTAssertEqual(calculator.computeVelocitySmoothness(fromChangeRates: [0.30]), 100, accuracy: 0.001)
+        XCTAssertEqual(calculator.computeVelocitySmoothness(fromChangeRates: [1.20]), 0, accuracy: 0.001)
+        XCTAssertEqual(calculator.computeVelocitySmoothness(fromChangeRates: [0.75]), 50, accuracy: 0.001)
+    }
+
+    /// P6-A: 持续高变化率（真实全程抖动）仍应得低分 — median 不是免罚金牌。
+    func testComputeVelocitySmoothness_persistentJitter_stillScoresZero() {
+        let changes: [Double] = [1.5, 1.6, 1.4, 1.55, 1.5]
+        let smoothness = calculator.computeVelocitySmoothness(fromChangeRates: changes)
+        XCTAssertEqual(smoothness, 0, accuracy: 0.001, "median 1.5 超过 1.20 上限应映射为 0，实测 \(smoothness)")
+    }
 }

@@ -11,7 +11,8 @@ public struct FlowMetrics {
     public let motionCoherence: Double
     /// 方向稳定性 0-100：髋部运动方向帧间一致性，高值 = 走刃特征明显
     public let directionalStability: Double
-    /// 速度平滑度 0-100：光流幅值变化率，高值 = 动作流畅
+    /// 速度平滑度 0-100：光流幅值 median(changeRate) → linearMap([0.30, 1.20]→[100, 0])。
+    /// P6-A (2026-09-07)：从 avg + [0.15, 0.50] 迁移，因 avg 被单帧跳变污染导致 100% 塌陷。
     public let velocitySmoothness: Double
     /// 参与计算的有效帧对数
     public let framePairsUsed: Int
@@ -172,13 +173,8 @@ public struct FlowMetricsCalculator {
 
         let motionCoherence = clamp(coherenceSamples.reduce(0, +) / Double(coherenceSamples.count), lower: 0, upper: 100)
         let directionalStability = computeCircularStability(hipFlowDirections)
-        let velocitySmoothness: Double
-        if velocityChanges.isEmpty {
-            velocitySmoothness = 50
-        } else {
-            let avgChange = velocityChanges.reduce(0, +) / Double(velocityChanges.count)
-            velocitySmoothness = linearMap(avgChange, inMin: 0.15, inMax: 0.50, outMin: 100, outMax: 0)
-        }
+        // P6-A (2026-09-07): 见 computeVelocitySmoothness 文档。
+        let velocitySmoothness = computeVelocitySmoothness(fromChangeRates: velocityChanges)
 
         return (
             metrics: FlowMetrics(
@@ -397,5 +393,30 @@ public struct FlowMetricsCalculator {
             return (2 * pi - diff) * 180.0 / pi
         }
         return diff * 180.0 / pi
+    }
+
+    /// P6-A (2026-09-07): 速度平滑度 = median(changeRate) → linearMap([0.30, 1.20]→[100, 0])。
+    /// 用 median 替代 avg 抗离群，阈值从 [0.15, 0.50] 重标为 [0.30, 1.20]。诊断显示 6 份 corpus 中：
+    ///   - avgChange ∈ [0.93, 3.47]，被 max >20 倍跳变主导；100% 塌陷为 0
+    ///   - median(changeRate) ∈ [0.49, 0.83]，稳定反映真实动作变化率
+    /// 新阈值锚点：0.30 = 主 corpus median 最小值，1.20 = 观测 median 最大 +45%
+    /// buffer，保证正常滑行样本落在 (0, 100) 有效区，异常抖动仍能触发扣分。
+    /// 空序列回落 50（中性）。internal 供单测直接验证 median 抗离群与阈值锚点。
+    func computeVelocitySmoothness(fromChangeRates changes: [Double]) -> Double {
+        guard !changes.isEmpty else { return 50 }
+        let medianChange = medianOfChangeRates(changes)
+        return linearMap(medianChange, inMin: 0.30, inMax: 1.20, outMin: 100, outMax: 0)
+    }
+
+    /// 计算 changeRate 序列的中位数。P6-A (2026-09-07) 用于替代 avg，
+    /// 抵消单帧极端跳变（诊断中观测 max changeRate 75.2 vs median 0.62）对均值的污染。
+    private func medianOfChangeRates(_ changes: [Double]) -> Double {
+        guard !changes.isEmpty else { return 0 }
+        let sorted = changes.sorted()
+        let count = sorted.count
+        if count % 2 == 1 {
+            return sorted[count / 2]
+        }
+        return (sorted[count / 2 - 1] + sorted[count / 2]) / 2.0
     }
 }
