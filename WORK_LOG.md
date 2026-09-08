@@ -1,6 +1,20 @@
 # FallLine Work Log
 
-## Current State (2026-09-01 CLI 复核方案 A)
+## Current State (2026-09-08 P6-A + P7-A 落地)
+
+**P6-A（velocitySmoothness avg→median，commit `be59c7c`）**：修复 velocitySmoothness 在 6 份主 corpus 100% 塌陷为 0。corpus 重跑后恢复 40.8~78.7，flowMod/averageScore 不变（恢复值均高于 penalty 阈值 40）。
+
+**P7-A（退役 directionalStability 评分调制，commit `256d3f2`）**：诊断证实 6 种 2D 统计口径全部无法区分 corpus 质量排序（换刃天然 ~180° 摆动 + 相机运动主导光流方向），用户拍板方案 A。`computeModulation` 移除 stability 分支，报告标注 `*不参与评分`。corpus 分数 Δ=0.00（零行为变化正式化）。**光流调制有效范围现为 ±5%**（coherence +0.05 / smoothness -0.05）。
+
+**自 2026-09-01 以来的稳定性提交**（未逐轮记录，见 git log）：P2 flow 熔断、P3 sideslip 5 帧中值、P4-A 短缺口插补、P5-A/B 膝盖评分、P0-A/P0b/P0-D/P0-E despike 系列、P6-A、P7-A。
+
+**验证状态**：`swift test` 149 tests, 0 failures；`swift build -c release` PASS。
+
+**下一步候选**：
+- 光流调制层只剩 coherence/smoothness 两项；若恢复方向类指标需换信号源（IMU 或板身视觉线），不在当前范围
+- 待优化点清单里剩余的：5fps→30fps 采样率（WORK_LOG Next Steps #1）、confidence-weighted 时序平滑（#3）
+
+## Previous State (2026-09-01 CLI 复核方案 A)
 
 **方案 A 生产数据复核**：用 [FallLineCLI](file:///Users/mingsen/Project/FallLine/Sources/FallLineCLI) 重跑 6 份主 corpus 视频，坐实 audit 预测。仅报告文本改动，无生产代码变化。
 
