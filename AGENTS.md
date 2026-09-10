@@ -9,7 +9,7 @@ swift build -c release          # Build CLI (macOS)
 swift run FallLineCLI <video> # Run analysis → JSON + Markdown report
 swift run FallLineCLI --debug-overlay <video>  # + per-frame debug PNGs
 swift run FallLineCLI --output-video <video>  # + annotated MP4 (native FPS, per-frame Vision)
-swift test                       # 88 tests
+swift test                       # 155 tests
 swift test --filter <TestName>
 swift test 2>&1 | tail -5        # Summary only
 ```
@@ -53,7 +53,7 @@ Post-processing in generateSummary():
 - **Confidence gating**: minimumPoseScoreConfidence=0.30, minimumSkiMetricConfidence=0.35. Low-confidence excluded from scoring. Reports show "暂不评分".
 - **Stable carving baseline**: stability ≥85 + continuous ≥5-frame plateau ≥18% of video → plateau average as true score. Prevents low-confidence carving frames from being misjudged.
 - **Evidence caps**: edge/board/时长 evidence each cap the score. Duration-based thresholds (seconds), not frame counts (5fps).
-- **Optical flow (Phase 1)**: `VNGenerateOpticalFlowRequest` on cached frame pairs. Three metrics modulate evidence-capped score ±13%. Stability thresholds context-aware: low score + high stability → boost; high score + low stability → penalty.
+- **Optical flow (Phase 1)**: `VNGenerateOpticalFlowRequest` on cached frame pairs. Three metrics modulate evidence-capped score ±13%. Stability thresholds context-aware: low score + high stability → boost; high score + low stability → penalty. **2026-09-10 P6-B**: hip / ankle 光流采样从单点 → 默认 5×5 窗均值（`FlowMetricsCalculator.flowSampleRadius=2`），在输入层给 coherence / velocitySmoothness 去噪；radius=0 保留紧急回退；纯窗函数 `averageFlowWindow` 供单测直接验证。与 P6-A 时序 median 形成"空间+时序"双层抗噪。
 - **Score transparency**: `VideoSummary` includes rawPoseAverageScore, bestThirdAverageScore, evidenceCappedScore, flowModulationFactor. Reports show decomposition.
 - **VideoSeed**: DJB2 hash of filename for deterministic output.
 - **Git hygiene**: Ignore Xcode user interface state file `UserInterfaceState.xcuserstate`. If already tracked, remove it from the index separately; `.gitignore` does not untrack existing files.
