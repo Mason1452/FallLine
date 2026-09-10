@@ -17,8 +17,7 @@ travel_angle_audit.py
       - travelAngle / sideslipAngle 均值与分布
       - carvingConfidence 均值 + 高置信度帧占比
       - boardAnalysis.summary.confidence（Core 用来判定 cap 的字段，非帧级均值）
-      - 是否满足 cap 判定门槛：summary.confidence ≥ 0.7 && kinematicDuration ≥ 5.0s
-      - predictedCap: 判定条件满足时的 cap 值（none / 70(sideslip≥30) / 58(sideslip≥45) / 62(低置信度短片)）
+      - predictedCap: P8-A 后仅剩低置信度短片段分支（none / 62(低置信度短片)）
       - effectiveCap: cap 实际生效（cap < evidenceCappedScore）时的 cap 值，否则 None
       - summary.rawPoseAverageScore vs evidenceCappedScore 的实际差值
 
@@ -29,14 +28,19 @@ travel_angle_audit.py
       - 低置信度但仍被 cap 的样本（潜在误判候选）
       - sideslip 波动过大候选（travelAngle 抖动放大）
 
+    P8-A (2026-09-08)：sideslip 派生的两档 cap（58/70）已从 Core 退役——诊断证实
+    sideslip 测量带 ~40-50° 系统性偏差（2D 光流方向被相机运动主导），主 corpus
+    6 份全部落在 42-53°（含已确认刻滑样本）。本脚本保留 sideslip/travelAngle 的
+    统计输出作为信号质量监控，cap 复现逻辑已同步为新行为。
+
 用法：
     python3 scripts/travel_angle_audit.py
 
 无副作用：不写任何非 stdout 的文件。
 
 注：
-    与 Core [applyBoardEvidenceCaps](Sources/FallLineCore/VideoAnalyzer.swift#L469-L477) +
-    [boardKinematicHighScoreCap](Sources/FallLineCore/Utilities.swift#L215-L242) 严格对齐。
+    与 Core [applyBoardEvidenceCaps](Sources/FallLineCore/VideoAnalyzer.swift) +
+    [boardKinematicHighScoreCap](Sources/FallLineCore/Utilities.swift) 严格对齐。
     reliable_duration 用 `data.duration` 近似（Core 用 reliablePoseDuration，
     需要访问帧级 pose confidence，JSON 未直接暴露；对本 corpus 影响可忽略——
     kinematicDuration 通常已经是主要门槛）。
@@ -53,12 +57,7 @@ from typing import Any
 
 # 与 Core Utilities.swift 严格保持一致的阈值
 CONF_THRESHOLD_FOR_HIGH_SCORE = 0.7
-MIN_KINEMATIC_DURATION = 5.0
 SHORT_CLIP_DURATION = 10.0
-HIGH_SIDESLIP_ANGLE = 30.0
-DOMINANT_SIDESLIP_ANGLE = 45.0
-HIGH_SIDESLIP_SCORE_CAP = 70.0
-DOMINANT_SIDESLIP_SCORE_CAP = 58.0
 LOW_BOARD_EVIDENCE_CAP = 62.0
 
 

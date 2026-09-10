@@ -305,8 +305,6 @@ public struct ReportGenerator {
             : ski.edgeQualityConfidence
         let edgeJudgmentIsReliable = edgeConfidence >= lowConfidenceThreshold
         let weakEdgeEvidence = hasWeakEdgeEvidence(ctx)
-        let highSideslipEvidence = ctx.stableCarvingBaseline == nil
-            && hasHighSideslipEvidenceForHighScore(from: output.frames)
         let insufficientBoardEvidence = ctx.stableCarvingBaseline == nil
             && hasInsufficientBoardKinematicEvidenceForHighScore(from: output.frames)
         let reliableFrames = reliablePoseFrames(from: output.frames)
@@ -346,9 +344,6 @@ public struct ReportGenerator {
         if weakEdgeEvidence {
             lines.append("  ⚠️ 持续立刃证据不足：前倾和屈膝不能单独推高综合分，已按初中级表现封顶")
         }
-        if highSideslipEvidence {
-            lines.append("  ⚠️ 板身/滑行方向夹角偏大：更像横滑或推坡，不能按刻滑高分处理")
-        }
         if insufficientBoardEvidence {
             lines.append("  ⚠️ 板身/运动方向证据不足：单帧姿态不能证明走刃，已保守封顶")
         }
@@ -363,8 +358,6 @@ public struct ReportGenerator {
         if let baseline = ctx.stableCarvingBaseline {
             lines.append("  📋 检测到连续稳定的高质量刻滑平台，低分帧可能受大倒伏、低姿态或遮挡影响；综合评分采用该稳定平台作为基线。")
             lines.append("     基线片段：\(formatTime(baseline.plateauStartTime))-\(formatTime(baseline.plateauEndTime))")
-        } else if highSideslipEvidence {
-            lines.append("  📋 板身方向和滑行方向没有对齐，说明转弯主要不是沿板身切雪完成；姿态项看起来有支撑，也不能直接解释为刻滑。")
         } else if insufficientBoardEvidence {
             lines.append("  📋 板身线和运动方向的连续证据不足，不能把一两帧像样的姿态直接解释成稳定走刃。")
         } else if weakEdgeEvidence {
@@ -381,8 +374,6 @@ public struct ReportGenerator {
         let mainObservation: String
         if ctx.stableCarvingBaseline != nil {
             mainObservation = "这段动作稳定性很高，系统不应把部分低分帧直接理解成滑得差；更合理的解释是姿态识别在大倒伏或低姿态刻滑时产生了冲突。"
-        } else if highSideslipEvidence {
-            mainObservation = "这段板身方向和滑行方向夹角偏大，更接近横滑或推坡控制；即使身体姿态有些像样，也不能评价为稳定刻滑。"
         } else if insufficientBoardEvidence {
             mainObservation = "这段目前缺少持续板刃/刃线证据；即使个别帧的身体姿态看起来还可以，也不足以评价为高质量走刃。"
         } else if weakEdgeEvidence {
@@ -797,7 +788,9 @@ public struct ReportGenerator {
         for byte in name.utf8 {
             hash = ((hash << 5) &+ hash) &+ Int(byte)
         }
-        return abs(hash)
+        // DJB2 溢出环绕后理论上可能恰好为 Int.min，abs(Int.min) 会触发运行时崩溃。
+        // 对该唯一值回退 0，其余值行为不变（保持既有语料选择的确定性）。
+        return hash == Int.min ? 0 : abs(hash)
     }
 
     private static func averageSubScoreConfidences(from scores: [PoseScore]) -> (forwardLean: Double, kneeBend: Double, calfLean: Double, gravity: Double, symmetry: Double) {
@@ -925,7 +918,9 @@ public struct ReportGenerator {
             return "    横滑角暂不评分 · 数据来源：\(source) · 置信度 \(confidence)/100；当前画面角度不足以稳定判断走刃/横滑。"
         }
 
-        return "    平均横滑角 \(String(format: "%.0f", sideslip))° · 走刃置信 \(String(format: "%.0f", carving))/100 · \(boardKinematicsLabel(sideslip)) · 数据来源：\(source) · 置信度 \(confidence)/100"
+        // P8-A (2026-09-08)：横滑角派生的评分 cap 已退役（测量带系统性偏差），
+        // 此处仅作展示并标注不参与评分。
+        return "    平均横滑角 \(String(format: "%.0f", sideslip))° · 走刃置信 \(String(format: "%.0f", carving))/100 · \(boardKinematicsLabel(sideslip)) · 数据来源：\(source) · 置信度 \(confidence)/100 · 不参与评分"
     }
 
     private static func boardSourceLabel(_ source: BoardObservationSource) -> String {

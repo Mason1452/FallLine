@@ -58,7 +58,6 @@ final class BoardDirectionAnalyzerTests: XCTestCase {
         XCTAssertEqual(analysis.frames.compactMap(\.kinematics).count, 2)
         XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 45, accuracy: 0.1)
         XCTAssertNil(boardKinematicHighScoreCap(from: frames))
-        XCTAssertFalse(hasHighSideslipEvidenceForHighScore(from: frames))
     }
 
     func test_denseButShortHighSideslipDoesNotTriggerHighScoreCap() {
@@ -74,7 +73,6 @@ final class BoardDirectionAnalyzerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(analysis.frames.compactMap(\.kinematics).count, 3)
         XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 45, accuracy: 0.1)
         XCTAssertNil(boardKinematicHighScoreCap(from: frames))
-        XCTAssertFalse(hasHighSideslipEvidenceForHighScore(from: frames))
     }
 
     func test_stationaryCentersKeepObservationButNoKinematics() {
@@ -134,12 +132,14 @@ final class BoardDirectionAnalyzerTests: XCTestCase {
         XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 90, accuracy: 0.1)
     }
 
-    // MARK: - 2026-08-30 travelAngle 决策：阈值 0.55 → 0.7 边界回归
+    // MARK: - 2026-09-08 P8-A：sideslip 派生 cap 退役
 
-    /// 高置信度（obsCnf ≥ 0.7）+ 真横滑（sideslip 60°）+ 长时长（30 帧×0.2s=6s） → 仍应触发 58 分强封顶
+    /// P8-A：高置信度（obsCnf ≥ 0.7）+ 高 sideslip（60°）+ 长时长 → **不再触发任何 cap**
     ///
-    /// 保护"真横滑必须被 cap"这条主线，防止阈值漂移把真横滑也放过去。
-    func test_highConfidenceTrueSideslipStillTriggersDominantCap() {
+    /// 诊断证实 sideslip 测量带 ~40-50° 系统性偏差（2D 光流方向被相机运动主导），
+    /// 主 corpus 6 份全部落在 42-53°（含已确认刻滑样本），cap 触发即误伤。
+    /// 本用例守护退役语义：obsCnf 0.9 + sideslip 60° 也必须放行（P8-A 前此场景 cap=58）。
+    func test_highConfidenceTrueSideslip_noCapAfterP8A() {
         var frames: [DetectionResult] = []
         for i in 0..<30 {
             frames.append(makeFrame(
@@ -155,21 +155,16 @@ final class BoardDirectionAnalyzerTests: XCTestCase {
         XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 60, accuracy: 0.1)
         XCTAssertGreaterThanOrEqual(analysis.summary?.confidence ?? 0, 0.7)
 
-        XCTAssertEqual(
-            boardKinematicHighScoreCap(from: frames) ?? -1,
-            AnalysisReliability.dominantSideslipScoreCap,
-            accuracy: 0.001,
-            "obsCnf 0.9 且 sideslip 60° 是真横滑证据，必须触发 dominantSideslipScoreCap=58"
+        XCTAssertNil(
+            boardKinematicHighScoreCap(from: frames),
+            "P8-A：sideslip 派生 cap 已退役，obsCnf 0.9 + sideslip 60° 不得再触发 58/70 封顶"
         )
     }
 
-    /// 中等置信度（obsCnf 0.65，位于旧阈值 0.55 与新阈值 0.7 之间）+ 高 sideslip → 新阈值下不再走 sideslip 分支 cap
-    ///
-    /// 复现 corpus 里 3.json / 5.json 的场景（obsCnf 0.58~0.59 被误 cap 到 sideslip 分支）。
-    /// 阈值抬到 0.7 后：obsCnf 0.65 < 0.7 走"低置信度"分支，只在短片段（<10s reliable pose）里走
-    /// lowBoardEvidenceScoreCap=62；长片段直接放行。此处 poseScore=nil → reliablePoseDuration=0，
-    /// 走 62 分支，**关键是不再触发 dominantSideslipScoreCap=58**（那才是 corpus 里的误 cap 类型）。
-    func test_midConfidenceHighSideslipNoLongerHitsSideslipCap() {
+    /// P8-A 后低置信度（obsCnf < 0.7）分支保留：短片段（reliablePoseDuration < 阈值）仍走
+    /// lowBoardEvidenceScoreCap=62（纯时长证据，不依赖 sideslip/travelAngle）。
+    /// 此处 poseScore=nil → reliablePoseDuration=0 → 命中 62 分支。
+    func test_midConfidenceShortClip_stillGetsLowEvidenceCapAfterP8A() {
         var frames: [DetectionResult] = []
         for i in 0..<30 {
             frames.append(makeFrame(
@@ -185,18 +180,11 @@ final class BoardDirectionAnalyzerTests: XCTestCase {
         XCTAssertEqual(analysis.summary?.averageSideslipAngle ?? -1, 60, accuracy: 0.1)
         XCTAssertLessThan(analysis.summary?.confidence ?? 1, AnalysisReliability.minimumBoardKinematicConfidenceForHighScore)
 
-        let cap = boardKinematicHighScoreCap(from: frames)
-        XCTAssertNotEqual(
-            cap ?? -1,
-            AnalysisReliability.dominantSideslipScoreCap,
+        XCTAssertEqual(
+            boardKinematicHighScoreCap(from: frames) ?? -1,
+            AnalysisReliability.lowBoardEvidenceScoreCap,
             accuracy: 0.001,
-            "obsCnf 0.65 已在新阈值 0.7 之下，不允许走 sideslip 分支的 58 分强封顶"
-        )
-        XCTAssertNotEqual(
-            cap ?? -1,
-            AnalysisReliability.highSideslipScoreCap,
-            accuracy: 0.001,
-            "同理，也不允许走 sideslip 分支的 70 分封顶"
+            "P8-A 保留低置信度短片段的 62 分保守封顶（时长证据，与 sideslip 无关）"
         )
     }
 

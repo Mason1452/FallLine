@@ -88,7 +88,10 @@ final class StableCarvingBaselineTests: XCTestCase {
         XCTAssertEqual(summary?.averageScore ?? 0, 62, accuracy: 0.1)
     }
 
-    func test_generateSummary_capsHighScoreWhenBoardTravelAngleShowsSideslip() async throws {
+    /// P8-A (2026-09-08)：sideslip 派生 cap 退役。boardAngle 90°（纯横滑测量值）+
+    /// 高置信度不再触发 58 分封顶——该测量被证实带系统性偏差，cap 触发即误伤。
+    /// 本用例守护退役语义：同参数在 P8-A 前断言 58，现在必须放行到原始 82。
+    func test_generateSummary_noSideslipCapAfterP8A() async throws {
         let frames = makeFrames(
             score: 82,
             confidence: 0.8,
@@ -101,7 +104,8 @@ final class StableCarvingBaselineTests: XCTestCase {
         let summary = await makeAnalyzer().generateSummary(from: frames)
 
         XCTAssertNotNil(summary)
-        XCTAssertEqual(summary?.averageScore ?? 0, 58, accuracy: 0.1)
+        XCTAssertEqual(summary?.averageScore ?? 0, 82, accuracy: 0.1,
+                       "P8-A：sideslip cap 已退役，boardAngle 90° 不得再压到 58")
     }
 
     private func makeAnalyzer() -> VideoAnalyzer {

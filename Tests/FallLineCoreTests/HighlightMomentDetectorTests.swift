@@ -70,13 +70,17 @@ final class HighlightMomentDetectorTests: XCTestCase {
         XCTAssertTrue(highlights.isEmpty)
     }
 
-    func test_suppressesHighlightWhenBoardTravelAngleShowsSideslip() {
+    /// P8-A (2026-09-08)：sideslip 派生 cap 退役后，boardAngle 90° 不再触发
+    /// 高光抑制（该抑制原本由 boardKinematicHighScoreCap != nil 驱动，而 cap 的
+    /// sideslip 分支已被证实基于无效测量）。同参数在 P8-A 前断言为空，现在应产出高光。
+    func test_sideslipMeasurementNoLongerSuppressesHighlightAfterP8A() {
         let frames = makeFrames(score: 82, count: 12, calfScore: 82, boardConfidence: 0.9, boardAngle: 90)
         let summary = makeSummary(averageScore: 58, stabilityScore: 90)
 
         let highlights = HighlightMomentDetector.detect(from: frames, summary: summary, maxCount: 1)
 
-        XCTAssertTrue(highlights.isEmpty)
+        XCTAssertFalse(highlights.isEmpty,
+                       "P8-A：sideslip 测量不再抑制高光，稳定 82 分片段应正常产出")
     }
 
     private func makeFrames(groups: [(score: Double, count: Int)], timeStep: Double = 1.0) -> [DetectionResult] {
