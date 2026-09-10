@@ -9,7 +9,7 @@ swift build -c release          # Build CLI (macOS)
 swift run FallLineCLI <video> # Run analysis → JSON + Markdown report
 swift run FallLineCLI --debug-overlay <video>  # + per-frame debug PNGs
 swift run FallLineCLI --output-video <video>  # + annotated MP4 (native FPS, per-frame Vision)
-swift test                       # 155 tests
+swift test                       # 164 tests
 swift test --filter <TestName>
 swift test 2>&1 | tail -5        # Summary only
 ```
@@ -58,6 +58,7 @@ Post-processing in generateSummary():
 - **VideoSeed**: DJB2 hash of filename for deterministic output.
 - **Git hygiene**: Ignore Xcode user interface state file `UserInterfaceState.xcuserstate`. If already tracked, remove it from the index separately; `.gitignore` does not untrack existing files.
 - **Board detection**: ankle-proxy is primary; visual line detector is debug-only (near_board_false_positive issue).
+- **Report determinism (2026-09-10 P9-A)**: `ReportGenerator.dominantPhaseRawValue(from:)` 稳定挑选每个 TurnSegment 的"主要阶段"文案。旧实现 `phaseDistribution.max { ... }` 依赖 Swift Dictionary 无序迭代，同频 tie 时报告文案会跨轮抖动（弯中承压 ↔ 出弯释放）；现按频率降序 + 语义优先级 shaping > initiation > release > transition 二次排序。只影响文案标签，不影响任何评分或 JSON 结构，由 `ReportGeneratorPhaseTieBreakTests` 的 9 条用例守护（含 2000 次稳定性 fuzz）。
 - **Travel direction**: 光流 (`computeWithDirections`) 采样髋+踝位置的像素运动向量作为行进方向，替代了 hipCenter 2D 位移。已知问题：低置信度帧角度跳动大，画面 2D 像素运动 ≠ 雪板实际行进方向。**2026-08-30 决策方案 A 落地**：`scripts/travel_angle_audit.py` 对 24 份 corpus 的量化表明，阈值 0.55 会把 obsCnf 0.58~0.59 的样本误 cap（最大 Δ=-18.4 分），已把 `minimumBoardKinematicConfidenceForHighScore` 从 0.55 → 0.7，corpus 里 sideslip 分支 cap 触发数 8 → 0。**2026-09-08 P8-A 落地**：进一步诊断证实 sideslip 测量带 ~40-50° 系统性偏差（主 corpus 6 份全部 42-53°，含已确认刻滑样本），2D 光流方向不携带质量信息（与 P7-A 退役 directionalStability 同根因）。`boardKinematicHighScoreCap` 的 sideslip 两分支（58/70）已退役，仅保留低置信度短片段的 62 分时长证据 cap；`hasHighSideslipEvidenceForHighScore` 及其报告警告文案一并移除；横滑角展示保留但标注"不参与评分"。由 `BoardDirectionAnalyzerTests` / `StableCarvingBaselineTests` / `HighlightMomentDetectorTests` 的 P8-A 用例守护。
 
 ## Code duplication

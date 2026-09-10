@@ -892,11 +892,44 @@ public struct ReportGenerator {
         case .unknown: direction = "方向不明"
         }
 
-        let dominantPhase = segment.phaseDistribution
-            .max { $0.value < $1.value }
-            .map { phaseLabel($0.key) } ?? "阶段不明"
+        let dominantPhase = dominantPhaseRawValue(from: segment.phaseDistribution)
+            .map(phaseLabel) ?? "阶段不明"
 
         return "  • \(segment.startTimeString)-\(segment.endTimeString) · \(direction) · 主要阶段：\(dominantPhase) · \(segment.mainIssue)"
+    }
+
+    /// P9-A (2026-09-10): 从 phaseDistribution 里挑主阶段。
+    /// 原实现 `phaseDistribution.max { $0.value < $1.value }` 在同频 tie 时
+    /// 依赖 `Dictionary` 无序迭代，导致每次运行/构建都可能给出不同的"主要阶段"标签，
+    /// 短片段（≤3 秒、只有几个 phase 样本）尤其容易被观察到抖动（弯中承压 ↔ 出弯释放）。
+    /// 修复：频率降序为主键，同频时按语义优先级 shaping > initiation > release > transition
+    /// 做二次排序。语义排序遵循"技术含量最高的阶段优先展示"的直觉：
+    ///   - shaping   (弯中承压) 是刻滑质量的核心，最应保留
+    ///   - initiation(入弯)   反映建立刃角的能力
+    ///   - release   (出弯释放) 是收尾动作
+    ///   - transition(换刃/过渡) 是无信号段，最后展示
+    /// internal 以供 [ReportGeneratorPhaseTieBreakTests] 直接验证。
+    static func dominantPhaseRawValue(from distribution: [String: Double]) -> String? {
+        guard !distribution.isEmpty else { return nil }
+        return distribution
+            .sorted { lhs, rhs in
+                if lhs.value != rhs.value { return lhs.value > rhs.value }
+                return phaseSortRank(lhs.key) < phaseSortRank(rhs.key)
+            }
+            .first?.key
+    }
+
+    /// P9-A: 与 [phaseLabel] 保持同一枚举来源。
+    /// 未知 rawValue 归入 `Int.max`，保证有效 phase 永远排在未知之前，
+    /// 又不会因为 rank 溢出破坏 Swift Int 比较。
+    private static func phaseSortRank(_ rawValue: String) -> Int {
+        switch rawValue {
+        case TurnPhase.shaping.rawValue: return 0
+        case TurnPhase.initiation.rawValue: return 1
+        case TurnPhase.release.rawValue: return 2
+        case TurnPhase.transition.rawValue: return 3
+        default: return .max
+        }
     }
 
     private static func highlightMomentLine(_ moment: HighlightMoment) -> String {
