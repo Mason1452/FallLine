@@ -89,8 +89,18 @@ public struct FlowMetricsCalculator {
     /// 默认 1/30 与新的 30fps 采样对齐。
     public let sampleInterval: Double
 
-    public init(sampleInterval: Double = 1.0 / 30.0) {
+    /// P6-B (2026-09-10): 光流窗采样半径（像素）。0 = 单点（旧行为），>=1 = (2r+1)×(2r+1) 邻域均值。
+    /// 单点采样对光流噪声（局部纹理、遮挡、亚像素抖动）无免疫力，导致：
+    ///   1. hipFlowDirections 的 circular variance 被随机方向污染 → directionalStability 塌陷
+    ///   2. coherence 的 hip vs ankle 方向差异被单像素噪声随机抬高
+    ///   3. velocity 的帧间 changeRate 被单点跳变主导 → 已在 P6-A 用 median 兜底
+    /// radius=2（5×5 = 25 采样点）在 720p/1080p 关节区域内落点密度足够抗噪，
+    /// 且不会溢出到相邻身体部位或背景。radius=0 保留是为了单测回归与紧急回退。
+    public let flowSampleRadius: Int
+
+    public init(sampleInterval: Double = 1.0 / 30.0, flowSampleRadius: Int = 2) {
         self.sampleInterval = sampleInterval
+        self.flowSampleRadius = max(0, flowSampleRadius)
     }
 
     /// 按当前帧率归一化的等价 5fps magnitude
@@ -343,13 +353,35 @@ public struct FlowMetricsCalculator {
                 // 光流像素格式为 two-component float32: (dx, dy)
                 let floatPtr = baseAddress.assumingMemoryBound(to: Float.self)
                 let floatsPerRow = bytesPerRow / MemoryLayout<Float>.stride
+                let radius = self.flowSampleRadius
 
                 func sample(atX x: Double, y: Double) -> (dx: Double, dy: Double)? {
                     let px = Int(x * Double(width))
                     let py = Int(y * Double(height))
                     guard px >= 0, px < width, py >= 0, py < height else { return nil }
-                    let offset = py * floatsPerRow + px * 2
-                    return (Double(floatPtr[offset]), Double(floatPtr[offset + 1]))
+                    // P6-B (2026-09-10): (2r+1)×(2r+1) 窗均值，边界裁剪。radius=0 退化为单点。
+                    if radius == 0 {
+                        let offset = py * floatsPerRow + px * 2
+                        return (Double(floatPtr[offset]), Double(floatPtr[offset + 1]))
+                    }
+                    let x0 = max(0, px - radius)
+                    let x1 = min(width - 1, px + radius)
+                    let y0 = max(0, py - radius)
+                    let y1 = min(height - 1, py + radius)
+                    var sumDx = 0.0
+                    var sumDy = 0.0
+                    var count = 0
+                    for sy in y0...y1 {
+                        let rowBase = sy * floatsPerRow
+                        for sx in x0...x1 {
+                            let offset = rowBase + sx * 2
+                            sumDx += Double(floatPtr[offset])
+                            sumDy += Double(floatPtr[offset + 1])
+                            count += 1
+                        }
+                    }
+                    guard count > 0 else { return nil }
+                    return (sumDx / Double(count), sumDy / Double(count))
                 }
 
                 guard let hipFlow = sample(atX: prevHipX.value, y: prevHipY.value),
@@ -392,6 +424,45 @@ public struct FlowMetricsCalculator {
             return (2 * pi - diff) * 180.0 / pi
         }
         return diff * 180.0 / pi
+    }
+
+    /// P6-B (2026-09-10): 光流窗采样纯数学函数，供单测在不依赖 CVPixelBuffer 的情况下守护窗均值行为。
+    /// `field` 以 (dx, dy) 元组的行主序二维数组给出（每个元素代表一个像素的光流向量）。
+    /// - 当 radius=0 时退化为单点采样（对齐旧行为）。
+    /// - 边界处按 image 边界 clip，返回窗内实际落点的均值。
+    /// - centerX/Y 使用整数像素坐标；越界返回 nil，与 sampleFlowVectors 内嵌 sample 语义一致。
+    /// 与生产采样路径共享相同的窗遍历/边界 clip/均值语义，仅剥离了 CVPixelBuffer 与归一化坐标。
+    func averageFlowWindow(
+        field: [[(dx: Double, dy: Double)]],
+        centerX: Int,
+        centerY: Int,
+        radius: Int
+    ) -> (dx: Double, dy: Double)? {
+        let height = field.count
+        guard height > 0 else { return nil }
+        let width = field[0].count
+        guard width > 0, centerX >= 0, centerX < width, centerY >= 0, centerY < height else {
+            return nil
+        }
+        if radius == 0 {
+            return field[centerY][centerX]
+        }
+        let x0 = max(0, centerX - radius)
+        let x1 = min(width - 1, centerX + radius)
+        let y0 = max(0, centerY - radius)
+        let y1 = min(height - 1, centerY + radius)
+        var sumDx = 0.0
+        var sumDy = 0.0
+        var count = 0
+        for sy in y0...y1 {
+            for sx in x0...x1 {
+                sumDx += field[sy][sx].dx
+                sumDy += field[sy][sx].dy
+                count += 1
+            }
+        }
+        guard count > 0 else { return nil }
+        return (sumDx / Double(count), sumDy / Double(count))
     }
 
     /// P6-A (2026-09-07): 速度平滑度 = median(changeRate) → linearMap([0.30, 1.20]→[100, 0])。

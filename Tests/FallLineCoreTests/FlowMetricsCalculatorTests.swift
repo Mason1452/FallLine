@@ -246,4 +246,84 @@ final class FlowMetricsCalculatorTests: XCTestCase {
         let smoothness = calculator.computeVelocitySmoothness(fromChangeRates: changes)
         XCTAssertEqual(smoothness, 0, accuracy: 0.001, "median 1.5 超过 1.20 上限应映射为 0，实测 \(smoothness)")
     }
+
+    // MARK: - P6-B averageFlowWindow (2026-09-10)
+
+    /// P6-B: 均匀场应恒等 — 窗均值 == 单点值，radius 变化不影响结果。
+    func testAverageFlowWindow_uniformField_returnsIdenticalMean() {
+        let field: [[(dx: Double, dy: Double)]] = Array(
+            repeating: Array(repeating: (dx: 3.0, dy: -4.0), count: 20),
+            count: 20
+        )
+        let result = calculator.averageFlowWindow(field: field, centerX: 10, centerY: 10, radius: 2)
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.dx ?? 0, 3.0, accuracy: 1e-9)
+        XCTAssertEqual(result?.dy ?? 0, -4.0, accuracy: 1e-9)
+    }
+
+    /// P6-B: 窗均值应能拑制单点跳变 — 25 个像素中 1 个极端值被稀释为 1/25 权重。
+    /// 单点采样若命中该噪声像素，方向 / 幅值都会被彻底带偏；窗均值不受影响。
+    func testAverageFlowWindow_singleOutlierSuppressed() {
+        var field: [[(dx: Double, dy: Double)]] = Array(
+            repeating: Array(repeating: (dx: 1.0, dy: 0.0), count: 10),
+            count: 10
+        )
+        // 在窗中心正上方放置一个 (100, 100) 的噪声像素
+        field[5][5] = (dx: 100.0, dy: 100.0)
+        let result = calculator.averageFlowWindow(field: field, centerX: 5, centerY: 5, radius: 2)
+        XCTAssertNotNil(result)
+        // 25 个像素，24 个 (1, 0) + 1 个 (100, 100) = ((24 + 100) / 25, 100 / 25) = (4.96, 4.0)
+        XCTAssertEqual(result?.dx ?? 0, (24.0 + 100.0) / 25.0, accuracy: 1e-9)
+        XCTAssertEqual(result?.dy ?? 0, 100.0 / 25.0, accuracy: 1e-9)
+        // 对照：单点采样命中噪声像素时 dx=100, dy=100 — 完全被单帧噪声主导
+    }
+
+    /// P6-B: 边界处 window clip — 中心在 (0,0) 时只有右下 3×3 落点，均值只统计有效格子。
+    func testAverageFlowWindow_boundaryClipsToImage() {
+        let field: [[(dx: Double, dy: Double)]] = [
+            [(1, 0), (2, 0), (3, 0)],
+            [(4, 0), (5, 0), (6, 0)],
+            [(7, 0), (8, 0), (9, 0)]
+        ]
+        let result = calculator.averageFlowWindow(field: field, centerX: 0, centerY: 0, radius: 2)
+        XCTAssertNotNil(result)
+        // 从 (0,0) radius=2 但受 image 3×3 边界约束 → 落点为整张 3×3，dx 均值 = 45/9 = 5
+        XCTAssertEqual(result?.dx ?? 0, 5.0, accuracy: 1e-9)
+        XCTAssertEqual(result?.dy ?? 0, 0.0, accuracy: 1e-9)
+    }
+
+    /// P6-B: radius=0 回退为单点采样（保留紧急回退路径，避免 P6-B 引入回归时无法快速止血）。
+    func testAverageFlowWindow_radiusZeroReturnsCenterOnly() {
+        let field: [[(dx: Double, dy: Double)]] = [
+            [(0, 0), (0, 0), (0, 0)],
+            [(0, 0), (42, -7), (0, 0)],
+            [(0, 0), (0, 0), (0, 0)]
+        ]
+        let result = calculator.averageFlowWindow(field: field, centerX: 1, centerY: 1, radius: 0)
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.dx ?? 0, 42.0, accuracy: 1e-9)
+        XCTAssertEqual(result?.dy ?? 0, -7.0, accuracy: 1e-9)
+    }
+
+    /// P6-B: 越界坐标返回 nil（与 sampleFlowVectors 内嵌 sample 语义一致）。
+    func testAverageFlowWindow_outOfBoundsReturnsNil() {
+        let field: [[(dx: Double, dy: Double)]] = Array(
+            repeating: Array(repeating: (dx: 1.0, dy: 1.0), count: 4),
+            count: 4
+        )
+        XCTAssertNil(calculator.averageFlowWindow(field: field, centerX: -1, centerY: 0, radius: 2))
+        XCTAssertNil(calculator.averageFlowWindow(field: field, centerX: 0, centerY: 4, radius: 2))
+    }
+
+    /// P6-B: init 中 radius 参数持久化到实例属性；负值 clip 到 0。
+    func testInit_flowSampleRadius_persistsAndClipsNegative() {
+        let defaultCalc = FlowMetricsCalculator()
+        XCTAssertEqual(defaultCalc.flowSampleRadius, 2, "默认 radius 应为 2 (5×5 窗)")
+
+        let customCalc = FlowMetricsCalculator(sampleInterval: 1.0 / 30.0, flowSampleRadius: 4)
+        XCTAssertEqual(customCalc.flowSampleRadius, 4)
+
+        let negativeCalc = FlowMetricsCalculator(sampleInterval: 1.0 / 30.0, flowSampleRadius: -1)
+        XCTAssertEqual(negativeCalc.flowSampleRadius, 0, "负值应 clip 到 0（等价 radius=0 回退）")
+    }
 }

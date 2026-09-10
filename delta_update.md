@@ -1,6 +1,6 @@
 # Delta Update
 
-最后更新：2026-09-08
+最后更新：2026-09-10
 
 本文档只记录每轮工作的增量变化，不记录项目全量背景。需要项目当前状态、目标和长期上下文时，先看 `WORK_LOG.md`；需要文件职责时，看 `file_manifest.md`。
 
@@ -14,7 +14,58 @@
 
 ## 变更
 
+### 2026-09-10（P6-B 落地：hip 光流窗采样）
+
+**本轮性质**：稳定性系列延伸。P6-B 把光流关键点采样从单点 → 5×5 窗均值，在**输入层**给运动一致性 / 速度平滑度做去噪，与 P6-A（时序层 median）形成"空间+时序"双层抗噪。
+
+**问题定位**：
+- 单点采样对光流噪声（局部纹理、遮挡、亚像素抖动）无免疫力
+- hipFlowDirections 的 circular variance 被随机方向污染（虽然 P7-A 已退役其评分调制，但报告展示的 `方向稳定性: 0*` 仍来自这条路径）
+- coherence 的 hip vs ankle 方向差异被单像素噪声随机抬高，压低 coherence boost 触发概率
+- velocity 的 changeRate 单帧跳变已由 P6-A median 兜底，本轮补齐空间维度
+
+**改动**（[FlowMetricsCalculator.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift)）：
+- 新增 `flowSampleRadius: Int` 实例属性，默认 2（→ 5×5 = 25 采样点），负值 clip 到 0
+- `init(sampleInterval:flowSampleRadius:)` 新增第二参数（默认参数保持向后兼容）
+- [sampleFlowVectors](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift#L305-L398) 里内嵌的 `sample(atX:y:)` 从单点像素读取改为 `(2r+1)×(2r+1)` 邻域均值 + 边界 clip；radius=0 保留为紧急回退（一行分支）
+- 新增 internal 纯函数 [averageFlowWindow](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift#L435-L466)，与生产采样路径共享窗遍历/边界 clip/均值语义，剥离 CVPixelBuffer 依赖供单测直接验证
+
+**测试**（+6 用例，[FlowMetricsCalculatorTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/FlowMetricsCalculatorTests.swift)）：
+- 均匀场恒等（radius 变化不影响结果）
+- 25 像素中 1 个 (100, 100) 噪声被稀释到 1/25 权重（`(24 + 100) / 25 = 4.96`，方向被拉回）
+- 边界 clip（中心在 (0,0) radius=2 但 image 3×3 → 落点为整张 9 格）
+- radius=0 回退为单点采样
+- 越界坐标返回 nil
+- init 默认 radius=2 + 负值 clip 到 0
+
+**Corpus 重跑对照**（主 5 份，radius=2 vs 单点 baseline）：
+
+| video | coherence | stability | smoothness | evidenceCapped | flowMod |
+|---|---|---|---|---|---|
+| 1 | 87 → 87 | 0* → 0* | 78 → **79** | 58.0 | 1.05 |
+| 2 | 53 → 53 | 0* → 0* | 79 → **81** | 84.5 | 1.00 |
+| 3 | 42 → 42 | 0* → 0* | 41 → **43** | 85.9 | 1.00 |
+| 4 | 99 → 99 | 0* → 0* | 58 → 58 | 82.4 | 1.05 |
+| 6 | 69 → **70** | 0* → 0* | 63 → **64** | 88.9 | 1.05 |
+
+**核心洞察**：
+- **velocitySmoothness 4/5 微增 +1~+2**：空间去噪压低了单点噪声对 median 的污染，与 P6-A 时序 median 叠加去噪
+- **coherence 稳定（4/5 一致，视频 6 +1）**：符合"输入层去噪不改变主体趋势，只压噪声"的预期
+- **evidence-capped 分与 flowMod 100% 稳定**：无回归，`applyModulation` 的双 0 熔断仍正常工作
+- **directionalStability 仍全 0\***：P7-A 结论未变——2D 光流方向被相机运动主导 + 换刃天然 ~180° 摆动，窗采样只能消 pixel-level 噪声，不能改变信号性质（stability 已在 P7-A 退役评分调制，本轮为报告展示的知情预期）
+
+**验证**：
+- `swift test`：**155 tests, 0 failures**（149 → 155，+6 P6-B 用例）
+- `swift build -c release`：PASS（9.95s）
+- CLI 重跑 5 份 corpus：全部成功产出 md，无 crash
+
+**未做/后续**：
+- 未跑 49 视频大批量回归（主 5 份已充分覆盖 low/mid/high coherence + 各类置信度）
+- radius=2 是保守选择；若 720p/1080p 上落点密度不够，可上调到 3（7×7=49），但需评估 hipCenter 采样偏移到骨盆边缘的风险
+- 若未来要重新引入 stability 评分调制，光信号源换掉才有意义（IMU 或板身视觉线），本轮不涉及
+
 ### 2026-09-08（P6-A + P7-A 落地）
+
 
 **本轮性质**：稳定性系列继续。P6-A（velocitySmoothness avg→median）验证、补测试、提交；directionalStability 只读诊断后用户拍板方案 A，P7-A（退役 stability 评分调制）落地。
 
