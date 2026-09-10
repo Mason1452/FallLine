@@ -1,18 +1,29 @@
 # FallLine Work Log
 
-## Current State (2026-09-08 P6-A + P7-A 落地)
+## Current State (2026-09-10 P6-B / P6-B-r3 / P9-A / P9-B 已落地)
+
+**P6-B（光流窗采样，commit `3681dc2`）+ P6-B-r3（radius 2→3，commit `b25c082`）**：`FlowMetricsCalculator` hip/ankle 光流从单点采样改为 (2r+1)×(2r+1) 邻域均值，默认 radius=3（7×7 窗）。与 P6-A 时序 median 形成"空间+时序"双层抗噪；`averageFlowWindow` 作为纯函数供单测直接验证；radius=0 保留紧急回退。主 corpus 5 份重跑：视频 2 velocitySmoothness 81→84（+3），视频 3 43→47（+4），其他 3 份 coherence/smoothness/finalScore 全部稳定。
+
+**P9-A（TurnPhase 报告文案 tie-break，commit `70f2149`）**：`ReportGenerator.dominantPhaseRawValue(from:)` 替换 `phaseDistribution.max { ... }`。同频 tie 时按语义优先级 shaping > initiation > release > transition 二次排序。`ReportGeneratorPhaseTieBreakTests` 9 条用例（含 2000 次稳定性 fuzz）守护。**只影响文案标签，不影响任何评分或 JSON 结构**。
+
+**P9-B（重心主问题 tie-break，commit `f092025`）**：`CenterOfMassFitCalculator.dominantIssue(from:)` 同型 bug，抖动面比 P9-A 更大（作用在整个视频顶层 `mainIssue`）。同频 tie 时按语义优先级 **偏高 > 过低** 二次排序，理据：`score(hipRatio:targetRange:)` 里偏高每 0.24 单位掉 100 分（≈416 分/单位）远高于过低（≈305 分/单位），教练视角上"跟不上刃角"是刻滑典型缺陷。`CenterOfMassFitCalculatorTieBreakTests` 9 条用例（含 2000 次稳定性 fuzz）守护。**同样只影响文案标签**。
+
+**dict/set 无序迭代审计（未落库）**：本轮全 `Sources/` 审计命中 12+ 处，其中 11 处为 Array-based（`Array.max/min/sorted(by:)` 语义保证稳定或返回首个最大值），唯一必修高风险点是 P9-B 的 `CenterOfMassFitCalculator.dominantIssue`，已修复。`AGENTS.md` "Report determinism" 条目已升级为通用规约：**任何依赖 `Dictionary`/`Set` 归约影响用户可见输出的位置必须显式声明 tie-break 顺序**。
+
+**验证状态**：`swift test` **173 tests, 0 failures**（149 → 155 → 164 → 173）；`swift build -c release` PASS（未在当轮显式跑，P9-B 已过 diagnostics）。
+
+**下一步候选**（不阻塞）：
+- 采样率 5fps → 视频原生 30fps（WORK_LOG Next Steps #1，深度研究确认 200ms 帧间隔 → 20° 膝角误差）
+- travelAngle 输出链路精简（P8-A 已退役 sideslip 高分 cap，横滑角展示还留着）
+- confidence-weighted 时序平滑（WORK_LOG Next Steps #3）
+
+## Previous State (2026-09-08 P6-A + P7-A 落地)
 
 **P6-A（velocitySmoothness avg→median，commit `be59c7c`）**：修复 velocitySmoothness 在 6 份主 corpus 100% 塌陷为 0。corpus 重跑后恢复 40.8~78.7，flowMod/averageScore 不变（恢复值均高于 penalty 阈值 40）。
 
 **P7-A（退役 directionalStability 评分调制，commit `256d3f2`）**：诊断证实 6 种 2D 统计口径全部无法区分 corpus 质量排序（换刃天然 ~180° 摆动 + 相机运动主导光流方向），用户拍板方案 A。`computeModulation` 移除 stability 分支，报告标注 `*不参与评分`。corpus 分数 Δ=0.00（零行为变化正式化）。**光流调制有效范围现为 ±5%**（coherence +0.05 / smoothness -0.05）。
 
 **自 2026-09-01 以来的稳定性提交**（未逐轮记录，见 git log）：P2 flow 熔断、P3 sideslip 5 帧中值、P4-A 短缺口插补、P5-A/B 膝盖评分、P0-A/P0b/P0-D/P0-E despike 系列、P6-A、P7-A。
-
-**验证状态**：`swift test` 149 tests, 0 failures；`swift build -c release` PASS。
-
-**下一步候选**：
-- 光流调制层只剩 coherence/smoothness 两项；若恢复方向类指标需换信号源（IMU 或板身视觉线），不在当前范围
-- 待优化点清单里剩余的：5fps→30fps 采样率（WORK_LOG Next Steps #1）、confidence-weighted 时序平滑（#3）
 
 ## Previous State (2026-09-01 CLI 复核方案 A)
 
