@@ -14,6 +14,38 @@
 
 ## 变更
 
+### 2026-09-10（P9-B：修 CenterOfMass 主问题 tie-break 抖动）
+
+**本轮性质**：紧接 P9-A 的字典排序问题审计发现的第二处同型 bug，**不影响任何评分维度**，只影响 `CenterOfMassAnalysis.mainIssue` 这一顶层文案（进入报告与 JSON）。**抖动面比 P9-A 更大**：P9-A 只作用在 TurnSegment 段内标签，本处作用在整个视频的顶层重心结论。
+
+**审计来源**：本轮先对 [Sources/](file:///Users/mingsen/Project/FallLine/Sources) 做了一次 dict/set 无序迭代影响输出的全量审计，命中 12+ 处，其中 11 处属 Array-based（Swift 语义保证顺序确定，无需处理）；唯一必修高风险点是 [CenterOfMassFitCalculator.dominantIssue](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/CenterOfMassFitCalculator.swift) 的 `counts.max { $0.value < $1.value }`。
+
+**根因**：`CenterOfMassFrameAnalysis.issue` 只可能取三个字面量：`当前阶段重心过低` / `当前阶段重心偏高` / `当前阶段重心适配`；`dominantIssue` 会过滤掉最后一个，剩下 `counts: [String: Int]` 上做 `max`。当"过低"与"偏高"各占 50% 时，`Dictionary.max` 返回哪个键完全依赖 Swift Dictionary 每进程 hash-seed，产生跨轮抖动。
+
+**改动**：
+- [CenterOfMassFitCalculator.swift#L167-L207](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/CenterOfMassFitCalculator.swift#L167-L207)：把 `dominantIssue(from:)` 从 `private extension` 挪到独立的 `extension CenterOfMassFitCalculator`（默认 internal），实现由 `counts.max { ... }` 改为 `counts.sorted { lhs, rhs in ... }.first?.key`；新增 fileprivate `issueSortRank(_:)` 定义语义优先级 **偏高 > 过低**。
+- 优先级选择理据（写在 doc-comment 里）：
+  - [score(hipRatio:targetRange:)](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/CenterOfMassFitCalculator.swift#L108-L120) 里"偏高"每 0.24 单位掉 100 分（约 416 分/单位），"过低"每 0.18 单位仅掉 55 分（约 305 分/单位）——偏高对总分的惩罚显著更重。
+  - 教练视角：重心跟不上刃角是刻滑典型缺陷；重心过低多为防御性深蹲，相对次要。
+- 未知 issue rank 归 `Int.max`，保证有效 issue 永远排在未知之前。
+
+**测试**：新增 [CenterOfMassFitCalculatorTieBreakTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/CenterOfMassFitCalculatorTieBreakTests.swift)，9 条用例：
+- 单赢家（高频过低 / 高频偏高）2 条：验证纯频率场景不受二级排序影响
+- 同频 tie（多帧对多帧 / 单帧对单帧）2 条：定钉 **偏高 > 过低** 语义优先级
+- 边界（empty / 全部适配 / 适配帧不参与计数 / 未知字面量 tie 时输给已知）4 条
+- **稳定性 fuzz 1 条**：2000 次不同顺序构造 frames 反复调用 → 应始终返回同一 rawValue。
+
+**验证**：
+- `swift test` → **173 tests, 0 failures**（164 → 173，+9 P9-B 用例）
+- 未跑 corpus 对比：本次改动只在同频 tie 时改变字面量选择，非 tie 场景（大多数视频）行为完全一致；tie 场景在原实现是"抽奖"，无法建立对照 baseline。
+- `GetDiagnostics` 无 lint/type 问题。
+
+**核心洞察**：P9-A 时留下的规约"任何依赖 Dictionary/Set 归约影响用户可见输出的地方必须显式声明 tie-break 顺序"在本处直接兑现。审计报告里剩余的 11 处 Array-based 命中经 Swift 语义分析确认确定性（`Array.max/min/sorted(by:)` 保证 stable 或返回首个最大值），无需处理。
+
+**遗留**：无。评分与产物 JSON 结构完全兼容；`mainIssue` 字段类型 (`String?`) 不变。
+
+---
+
 ### 2026-09-10（P9-A：修 TurnPhase 报告文案 tie-break 抖动）
 
 **本轮性质**：报告可读性稳定性修复。**不影响任何评分维度**，只影响 `main.swift` 报告"转弯阶段分析"段落里"主要阶段"这个文案标签。
