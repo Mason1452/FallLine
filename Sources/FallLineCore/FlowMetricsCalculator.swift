@@ -94,11 +94,14 @@ public struct FlowMetricsCalculator {
     ///   1. hipFlowDirections 的 circular variance 被随机方向污染 → directionalStability 塌陷
     ///   2. coherence 的 hip vs ankle 方向差异被单像素噪声随机抬高
     ///   3. velocity 的帧间 changeRate 被单点跳变主导 → 已在 P6-A 用 median 兜底
-    /// radius=2（5×5 = 25 采样点）在 720p/1080p 关节区域内落点密度足够抗噪，
-    /// 且不会溢出到相邻身体部位或背景。radius=0 保留是为了单测回归与紧急回退。
+    /// **radius=3（7×7 = 49 采样点，2026-09-10 P6-B-r3 上调）**：radius=2 阶段 corpus 观测到
+    /// 部分弱一致 / 中一致样本仍受空间噪声牵引，遂扩大窗尺寸继续压噪。radius=2 的对照数据
+    /// 保留在 git 历史与 [delta_update.md](file:///Users/mingsen/Project/FallLine/delta_update.md)。
+    /// radius=0 保留是为了单测回归与紧急回退。若关节落点集中在近骨盆区（正面 / 背面
+    /// 大幅遮挡），7×7 窗有轻微越界到相邻身体部位的风险，此时可用 init 参数临时降到 2。
     public let flowSampleRadius: Int
 
-    public init(sampleInterval: Double = 1.0 / 30.0, flowSampleRadius: Int = 2) {
+    public init(sampleInterval: Double = 1.0 / 30.0, flowSampleRadius: Int = 3) {
         self.sampleInterval = sampleInterval
         self.flowSampleRadius = max(0, flowSampleRadius)
     }
