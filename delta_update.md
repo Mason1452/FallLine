@@ -14,6 +14,37 @@
 
 ## 变更
 
+### 2026-09-10（P9-A：修 TurnPhase 报告文案 tie-break 抖动）
+
+**本轮性质**：报告可读性稳定性修复。**不影响任何评分维度**，只影响 `main.swift` 报告"转弯阶段分析"段落里"主要阶段"这个文案标签。
+
+**问题**：P6-B 落地时观察到视频 1 / 2 里若干极短 phase 片段（≤3 秒）出现 `主要阶段：出弯释放` ↔ `弯中承压` 的无规律抖动，Round-1 与 Round-2 之间标签会切换。当时列为独立议题。
+
+**根因**：[ReportGenerator.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift) 原代码用 `phaseDistribution.max { $0.value < $1.value }` 挑主阶段。`phaseDistribution` 是 `[String: Double]`，Swift Dictionary 迭代顺序依赖每进程 hash seed，**同频 tie 时 `max` 返回哪个键完全是随机的**。短片段（只有 3~5 个 phase 样本）经常出现 40% / 40% 的双峰分布，就成了报告文案抽奖。
+
+**改动**：
+- [ReportGenerator.swift#L901-L933](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift#L901-L933)：新增 `static internal dominantPhaseRawValue(from:)` + `private static phaseSortRank(_:)`。稳定排序策略：**频率降序为主键，同频时按语义优先级 shaping (弯中承压) > initiation (入弯) > release (出弯释放) > transition (换刃/过渡) 二次排序**。`phaseSortRank` 未知 rawValue 归 `Int.max`，让有效 phase 永远排在前面。语义优先级选择遵循"技术含量最高的阶段优先展示"——报告核心是刻滑质量诊断，shaping 阶段承载了压刃能力这个最核心的信息量。
+- 调用点从 `segment.phaseDistribution.max { ... }.map { phaseLabel($0.key) }` 简化为 `dominantPhaseRawValue(from:).map(phaseLabel)`。
+
+**测试**：新增 [ReportGeneratorPhaseTieBreakTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/ReportGeneratorPhaseTieBreakTests.swift)，9 条用例：
+- 单赢家（shaping / release）2 条：验证纯频率场景不受二级排序影响
+- 同频 tie（shaping vs release / initiation vs release / shaping vs initiation / 四相全平）4 条：定钉语义优先级
+- 边界（空 dict / 未知 rawValue vs 已知）2 条
+- **稳定性 fuzz 1 条**：同一 dict 重构 2000 次调用 → 应始终返回同一 rawValue。这条如果 hash-order 抽奖复现，会显著失败。
+
+**验证**：
+- `swift test` → **164 tests, 0 failures**（155 → 164，+9 新用例）
+- CLI 两轮独立跑 5 份 corpus，`diff` 全部 `identical`：**确定性行为已锁定**（before-fix 时观察到跨轮报告文案漂移，after-fix 消除）
+- Before/After 对照：视频 1 有 2 个短片段（00:01-00:01、00:10-00:11）的"主要阶段"从"入弯"→"弯中承压"，这些片段的 `mainIssue` 已是"弯中刃角保持不足"，主阶段标签现在跟 issue 互相支持而不是打架
+- 视频 2 / 3 / 4 / 6 报告文案 100% 不变（这些视频原本就没触及同频 tie）
+- 全部 5 份 corpus final score 完全不变（0 评分回归）
+
+**核心洞察**：Swift `Dictionary` 无序迭代 + 打平 tie 的 `max` 是一个隐蔽的非确定性源；一旦文案基于 dict 挑首元素，就应显式声明 tie-break 顺序。P6-B 里"次生现象"的成因至此闭环，独立于光流管线。
+
+**遗留**：无。评分与产物 JSON 结构完全兼容。
+
+---
+
 ### 2026-09-10（P6-B-r3 微调：窗采样半径 2 → 3）
 
 **本轮性质**：P6-B 参数抬升。radius 2（5×5=25 采样点）→ radius 3（7×7=49 采样点），继续放大空间去噪覆盖。
