@@ -14,6 +14,39 @@
 
 ## 变更
 
+### 2026-09-10（P6-B-r3 微调：窗采样半径 2 → 3）
+
+**本轮性质**：P6-B 参数抬升。radius 2（5×5=25 采样点）→ radius 3（7×7=49 采样点），继续放大空间去噪覆盖。
+
+**动机**：P6-B(r=2) 落地后主 corpus 5 份仍有部分弱一致 / 中等 smoothness 样本（视频 2、3）对空间噪声敏感；风险面主要是"7×7 窗溢出到相邻部位或背景"，用主 corpus 5 份重跑 A/B 对照直接验证。
+
+**改动**：
+- [FlowMetricsCalculator.swift#L92-L107](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift#L92-L107)：`init(flowSampleRadius:)` 默认值 2 → 3，注释追加"P6-B-r3"依据与已知边缘遮挡回退指引。
+- [FlowMetricsCalculatorTests.swift#L319-L328](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/FlowMetricsCalculatorTests.swift#L319-L328)：`testInit_flowSampleRadius_persistsAndClipsNegative` 期望默认值同步为 3；其余 5 条窗数学单测（均匀场恒等 / outlier 拑制 / 边界 clip / radius=0 回退 / 越界 nil）保持原状——纯 `averageFlowWindow` 函数不吃默认值，天然守护。
+
+**A/B 对照（主 corpus 5 份，r=2 baseline 保存在 `/tmp/fl_p6b_r2/*.md.r2`）**：
+
+| video | coherence | velocitySmoothness | final score |
+|:-----:|:---------:|:------------------:|:-----------:|
+| 1 | 87 → 87 | 79 → 79 | 61 → 61 |
+| 2 | 53 → 53 | 81 → **84 (+3)** | 85 → 85 |
+| 3 | 42 → 42 | 43 → **47 (+4)** | 86 → 86 |
+| 4 | 99 → 99 | 58 → 58 | 87 → 87 |
+| 6 | 70 → **71 (+1)** | 64 → 63 (-1) | 93 → 93 |
+
+**验证**：
+- `swift test`：**155 tests, 0 failures**（只有 `testInit_flowSampleRadius_persistsAndClipsNegative` 的期望值需要更新，其余不动）
+- 主 corpus 5 份 CLI 重跑：velocitySmoothness 2 份显著改善 +3~+4，coherence 4/5 稳定 / 1 份微增 +1；**final score 5/5 完全不变**——evidence cap 和 flow modulation 完全稳态，无评分回归
+- **越界风险实测检验**：如果 7×7 窗真溢出到相邻身体部位 / 背景，某维度应大幅反向跳变；实际数据没有观察到这种异常
+
+**核心洞察**：radius 从 2 抬到 3 属于"参数微调"而非"结构变更"，收益集中在弱一致 / 中等 smoothness 样本上（这些样本恰好最需要空间去噪）；强一致样本已经在信号地板上，扩大窗不再帮助。
+
+**遗留 / 后续**：
+- radius=3 只在主 5 份 corpus 验证过，若发现极端遮挡或近骨盆构图样本出现异常，可通过 `FlowMetricsCalculator(flowSampleRadius: 2)` 或 `flowSampleRadius: 0` 逐级回退。
+- 视频 6 smoothness -1 属噪声波动（P6-A median 已经在时序维度兜底），不视为回归。
+
+---
+
 ### 2026-09-10（P6-B 落地：hip 光流窗采样）
 
 **本轮性质**：稳定性系列延伸。P6-B 把光流关键点采样从单点 → 5×5 窗均值，在**输入层**给运动一致性 / 速度平滑度做去噪，与 P6-A（时序层 median）形成"空间+时序"双层抗噪。

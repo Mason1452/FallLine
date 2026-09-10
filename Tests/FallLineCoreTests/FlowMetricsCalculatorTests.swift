@@ -318,7 +318,7 @@ final class FlowMetricsCalculatorTests: XCTestCase {
     /// P6-B: init 中 radius 参数持久化到实例属性；负值 clip 到 0。
     func testInit_flowSampleRadius_persistsAndClipsNegative() {
         let defaultCalc = FlowMetricsCalculator()
-        XCTAssertEqual(defaultCalc.flowSampleRadius, 2, "默认 radius 应为 2 (5×5 窗)")
+        XCTAssertEqual(defaultCalc.flowSampleRadius, 3, "默认 radius 应为 3 (7×7 窗，P6-B-r3)")
 
         let customCalc = FlowMetricsCalculator(sampleInterval: 1.0 / 30.0, flowSampleRadius: 4)
         XCTAssertEqual(customCalc.flowSampleRadius, 4)
