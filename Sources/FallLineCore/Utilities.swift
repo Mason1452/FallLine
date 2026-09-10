@@ -141,12 +141,13 @@ public enum AnalysisReliability {
     /// 最大惩罚 Δ=-18.4 分；且 travelAngle 逐帧噪声 travelStd 大多 >100°，导致 sideslip 均值
     /// 本身被噪声主导。抬到 0.7 后，24 份 corpus 里 sideslip 分支的 cap 触发预期从 8 → 0，
     /// 3D 融合修正后的 kneeBendScore 可以透传到综合分。
+    ///
+    /// P8-A (2026-09-08)：sideslip 派生的两档 cap 已退役（见 dominantSideslipScoreCap 注释）。
+    /// 本常量现在只服务低置信度 + 短片段的 lowBoardEvidenceScoreCap 分支。
     public static let minimumBoardKinematicConfidenceForHighScore = 0.7
 
-    /// 高横滑封顶至少需要该持续时长的运动学证据，避免高采样率下的一小段误判。
-    ///
-    /// 历史值 3.0s 在 30fps 下等价于 ~90 帧，短片段（4~6 秒）非常容易被误判。
-    /// 提升到 5.0s 让封顶只作用于有足够行进方向证据的中长片段。
+    /// P8-A (2026-09-08)：随 sideslip cap 一并退役（原为高横滑封顶的最短运动学证据时长），
+    /// 保留仅为 API 兼容，boardKinematicHighScoreCap 已不引用。
     public static let minimumBoardKinematicDurationForHighScore = 5.0
 
     /// 短片段的低板身置信度才触发保守封顶；长片段中脚踝代理可能因视角失效。
@@ -208,14 +209,19 @@ public func hasInsufficientBoardKinematicEvidenceForHighScore(from frames: [Dete
     return summary.confidence < AnalysisReliability.minimumBoardKinematicConfidenceForHighScore
 }
 
-/// 如果板身方向与滑行方向夹角已经明确偏大，则返回高分封顶值。
+/// 板身证据不足时的保守高分封顶（P8-A 后唯一保留的板身 cap）。
 ///
-/// 核心逻辑：板身方向由左右脚踝连线代理，滑行方向由连续帧身体/脚踝中心位移估计。
-/// 两者夹角越大，越接近横滑、推坡或搓雪，不能把单帧姿态解释为高质量刻滑。
+/// P8-A (2026-09-08)：sideslip 派生的两档 cap（dominantSideslipScoreCap=58 /
+/// highSideslipScoreCap=70）已退役。诊断证实 sideslip 测量带 ~40-50° 系统性
+/// 偏差（2D 光流方向被相机运动主导），主 corpus 6 份全部落在 42-53°——包括
+/// 已确认的刻滑样本——测量不携带质量信息，cap 触发即误伤。与 P7-A 退役
+/// directionalStability 调制同根因（2D 像素方向 ≠ 雪板实际行进方向）。
+///
+/// 保留的唯一分支：板身观测置信度低 + 可靠片段过短 → 62 分保守封顶
+/// （纯时长证据，不依赖 sideslip/travelAngle）。
 public func boardKinematicHighScoreCap(from frames: [DetectionResult]) -> Double? {
     let analysis = BoardDirectionAnalyzer.analyze(frames: frames)
-    guard let summary = analysis.summary,
-          let sideslip = summary.averageSideslipAngle else {
+    guard let summary = analysis.summary else {
         return nil
     }
 
@@ -224,35 +230,7 @@ public func boardKinematicHighScoreCap(from frames: [DetectionResult]) -> Double
             ? AnalysisReliability.lowBoardEvidenceScoreCap
             : nil
     }
-
-    let kinematicDuration = sampledDuration(fromTimes: analysis.frames.compactMap { frame in
-        frame.kinematics == nil ? nil : frame.time
-    })
-    guard kinematicDuration >= AnalysisReliability.minimumBoardKinematicDurationForHighScore else {
-        return nil
-    }
-
-    if sideslip >= AnalysisReliability.dominantSideslipAngle {
-        return AnalysisReliability.dominantSideslipScoreCap
-    }
-    if sideslip >= AnalysisReliability.highSideslipAngle {
-        return AnalysisReliability.highSideslipScoreCap
-    }
     return nil
-}
-
-public func hasHighSideslipEvidenceForHighScore(from frames: [DetectionResult]) -> Bool {
-    let analysis = BoardDirectionAnalyzer.analyze(frames: frames)
-    guard let summary = analysis.summary,
-          let sideslip = summary.averageSideslipAngle else {
-        return false
-    }
-    let kinematicDuration = sampledDuration(fromTimes: analysis.frames.compactMap { frame in
-        frame.kinematics == nil ? nil : frame.time
-    })
-    return kinematicDuration >= AnalysisReliability.minimumBoardKinematicDurationForHighScore
-        && summary.confidence >= AnalysisReliability.minimumBoardKinematicConfidenceForHighScore
-        && sideslip >= AnalysisReliability.highSideslipAngle
 }
 
 // MARK: - 稳定刻滑基线

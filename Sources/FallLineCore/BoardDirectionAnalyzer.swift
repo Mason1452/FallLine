@@ -180,8 +180,10 @@ private extension BoardDirectionAnalyzer {
         let travelConfidence: Double
 
         // 门控：仅当光流置信度足够高时才采纳光流方向；否则回退到脚踝代理位移。
-        // 低置信度帧下光流角度会剧烈跳动（-4.7° ↔ 112.4°），若无脑采纳会污染 sideslipAngle
-        // → carvingConfidence → boardKinematicHighScoreCap（62 分封顶）整条链路。
+        // 低置信度帧下光流角度会剧烈跳动（-4.7° ↔ 112.4°），若无脑采纳会污染
+        // sideslipAngle → carvingConfidence 展示链路。
+        // P8-A (2026-09-08)：下游 boardKinematicHighScoreCap 的 sideslip 分支已退役，
+        // 本门控现在只保护报告展示值，不再影响评分。
         let hasReliableFlow = flowTravelAngle != nil
             && (flowTravelConfidence ?? 0) >= AnalysisReliability.minimumFlowTravelConfidence
 
