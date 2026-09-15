@@ -1,8 +1,9 @@
-# Flow Modulation Edge-Confidence Gating 设计（草案 v3）
+# Flow Modulation Edge-Confidence Gating 设计
 
 > 作者：agent
 > 日期：2026-09-15
-> 状态：**Draft v3 / Pending Review**（v2 基于 corpus 实测；v3 补齐阈值向量图 + spike 复核 + video 1 保护方案实测校验，[scripts/flow_gating_replay.py](file:///Users/mingsen/Project/FallLine/scripts/flow_gating_replay.py) 提供可重复计算的证据链）
+> 状态：**Landed（2026-09-15）** — Tick 1-3 落地于 commit `ab16817`；Tick 4 corpus 端到端验证通过（6/6 gated 集合精确匹配，见 §5.4），实测产物归档于 [testvideo/_tick4_gated/](file:///Users/mingsen/Project/FallLine/testvideo/_tick4_gated)。
+> 演进：v2 基于 corpus 实测；v3 补齐阈值向量图 + spike 复核 + video 1 保护方案实测校验（方案 (c) 采用）；[scripts/flow_gating_replay.py](file:///Users/mingsen/Project/FallLine/scripts/flow_gating_replay.py) 提供可重复计算的静态证据链，§5.4 为 Swift release CLI 端到端复核。
 > 关联：
 > - [Sources/FallLineCore/FlowMetricsCalculator.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift)
 > - [Sources/FallLineCore/VideoAnalyzer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L378-L389)
@@ -418,36 +419,57 @@ gate      v1      v2      v3      v4      v5      v6    累计Δ  kill数  跨�
 
 **关键实测**：v4/v6 在两个保护方案下 `rawPose/evidenceCapped` 均 ≥ 60，**保护条件对它们均不触发**，即 v4/v6 门控效果完全保留（门控继续 kill 掉 flow ×1.05 加成）。方案 (c) **胜过** (a) 的关键在于它不产生新的跨档风险；胜过 (b) 的关键在于 `evidenceCapped` 已经是 evidence cap 语义链的下游产物，与 gating 决策的语义源同根，避免引入 `rawPose` 作为新的分数约束语义（若 `rawPose < 60` 但 `evidenceCapped > 60`，说明 evidence 已把它抬升到"值得保留 flow 加成"的位置）。
 
+### 5.4 Tick 4 端到端实测（2026-09-15，release CLI）
 
+§5 / §5.1 / §5.3 均为 [flow_gating_replay.py](file:///Users/mingsen/Project/FallLine/scripts/flow_gating_replay.py) 的**静态推演**（从 JSON 抽指标复现纯函数）。Tick 4 用落地后的 release CLI（commit `ab16817`）对主 corpus 6 份**完整重跑**，验证静态推演与生产代码 `VideoAnalyzer → FlowMetricsCalculator → VideoSummary → JSON/Report` 全链路数值精确一致。产物归档于 [testvideo/_tick4_gated/](file:///Users/mingsen/Project/FallLine/testvideo/_tick4_gated)（6 份 JSON + 6 份 MD）。
+
+**JSON `summary.flowModulationGated` 端到端实测**：
+
+| Video | boardC | coh | capped | flowFactor 实测 | `flowModulationGated` 实测 | 综合分实测 | 预期综合分（§5/§10.2）| 匹配 |
+|---|---:|---:|---:|---:|:---:|---:|---:|:---:|
+| 1 | 0.239 | 86.59 | 57.78 | **×1.05** | **false**（方案 c 保护）| 60.67 中级 | 60.67（保护保留 ×1.05）| ✅ |
+| 2 | 0.292 | 52.95 | 86.53 | ×1.00 | **false**（coh≤70，无 boost）| 86.53 专业 | 86.53（假阳性零影响）| ✅ |
+| 3 | 0.552 | 42.37 | 88.13 | ×1.00 | **false**（boardC≥0.30）| 88.13 专业 | 88.13（不变）| ✅ |
+| 4 | 0.157 | 98.54 | 78.80 | **×1.00** | **true** | 78.80 高级 | 78.80 | ✅ |
+| 5 | 0.510 | 51.88 | 73.86 | ×1.00 | **false**（boardC≥0.30）| 73.86 中级 | 73.86（不变）| ✅ |
+| 6 | 0.280 | 70.73 | 90.16 | **×1.00** | **true** | 90.16 专业 | 90.16 | ✅ |
+
+- **`gated=true` 集合 = {v4, v6}**，与设计目标精确一致，无多计 / 漏计边界样本。
+- **video 1 保护路径验证**：静态无保护推演为 60.67 → 57.78（跨档）；生产代码因方案 (c)（`capped=57.78 < 60`）关闭门控，实测 **60.67 保持不变、不掉档**，且 `flowModulationGated=false`（报告不误标）。
+- **报告 tag 渲染验证**（[testvideo/_tick4_gated/](file:///Users/mingsen/Project/FallLine/testvideo/_tick4_gated)）：
+  - v1：`光流系数 ×1.05`（无 tag）
+  - v4：`光流系数 ×1.00（走刃证据不足，未加成）`
+  - v6：`光流系数 ×1.00（走刃证据不足，未加成）`
+- **阈值无需微调**：§5.1 扫描显示 [0.30, 0.50] 为同一门控组（触发集完全相同），0.30 处于稳定平台中央，且是覆盖 v6（boardC=0.280）的最小有效阈值。
+- **验证手段**：`swift build -c release` 0 warning；`swift test` 全量 **235/235** 通过（含 19 条门控契约 + 7 条报告透明度契约，共 26 条新增）；静态 replay 与端到端 CLI 数值精确一致。
 
 ---
 
 ## 6. 实施 Tick
 
-### Tick 1 — FlowMetricsCalculator 接口扩展
-- 新增 `edgeConfidenceGateThreshold` 常量 = 0.30
-- 新增 5-param `computeModulation(coherence:stability:smoothness:poseScore:edgeConfidence:)`
-- 4-param 版本内部转发到 5-param 并传 `edgeConfidence: 1.0`（等价无门控，保留旧行为）
-- 新增测试文件 `FlowMetricsEdgeGatingTests.swift`：
-  - `test_edgeConfidence_1_0_matchesLegacyBehavior`：edgeC=1.0 时 5-param 输出 == 4-param 旧输出
-  - `test_edgeConfidence_below_0_30_disablesUpwardModulation`：edgeC=0.20 + coherence=90 → factor ≤ 1.0
-  - `test_edgeConfidence_below_0_30_preservesDownwardModulation`：edgeC=0.20 + smoothness=30 → factor 依然 −0.05
-  - `test_edgeConfidence_at_0_30_isBoundary`：edgeC=0.30（含边界值）→ 加成正常
-  - `test_edgeConfidence_gate_isMonotonic`：edgeC 从 0.0 → 1.0 时上行加成从"禁用 → 生效"，无跳变（除阈值处）
+> 落地状态（2026-09-15，commit `ab16817`）：Tick 1-3 已全部实现并提交，Tick 4 端到端复核完成（见 §5.4）。下方保留原始 tick 设计；实际命名 / 测试数与实现对齐处已注明。
 
-### Tick 2 — VideoAnalyzer 集成
-- [VideoAnalyzer.generateSummary](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L378-L389) 传入 `edgeConfidence`
-- 若 [SkiMetricsCalculator.average](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/SkiMetricsCalculator.swift#L80-L116) 未在 flow 上游调用，复用/新增单次调用
-- Corpus replay 主 6 份，比对表 §5 数据
+### Tick 1 — FlowMetricsCalculator 接口扩展 ✅
+- 新增 `boardKinematicConfidenceGateThreshold` 常量 = 0.30、`flowGateLowScoreProtectionThreshold` = 60.0（实际命名以 [FlowMetricsCalculator](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift) 为准）
+- 扩展 6-param `computeModulation(coherence:stability:smoothness:poseScore:boardKinematicConfidence:evidenceCappedScore:)`；3/4-param 旧签名内部转发 `boardC=1.0`（等价无门控，保留旧行为）
+- 门控语义：`boardC < 0.30` → `min(modulation, 1.0)`（仅禁上行）；方案 (c) `evidenceCappedScore < 60` 关闭门控
+- 测试落在 [FlowMetricsCalculatorTests](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/FlowMetricsCalculatorTests.swift)：19 条门控用例覆盖常量锚定、3/4-param 转发等价、门控触发/未触发、保护路径、clamp 边界、单调性
 
-### Tick 3 — Report Generator 透明度
-- 在 [ReportGenerator](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift) 的评分拆解行追加"（edge 置信不足，未加成）"标记
-- 新增测试 `ReportGeneratorFlowGatingTests`：门控触发 + 未触发两条契约
+### Tick 2 — VideoAnalyzer 集成 ✅
+- [VideoAnalyzer.generateSummary](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L378-L418) 新增私有 `computeBoardKinematicConfidence(from:flowTravelDirections:)`，下沉 [BoardDirectionAnalyzer](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardDirectionAnalyzer.swift) 取 `summary.confidence`
+- 切换到 6-param `computeModulation`；`framePairsUsed < 2` 时 `boardC=1.0` 回退（无光流不门控）
+- Corpus replay 主 6 份，与 §5 / §5.4 数据精确一致
 
-### Tick 4 — Spec 归档
-- 状态改 `Approved / Implemented`
-- 写入 [WORK_LOG.md](file:///Users/mingsen/Project/FallLine/WORK_LOG.md) 和 [delta_update.md](file:///Users/mingsen/Project/FallLine/delta_update.md)
-- 更新 [posescorer-edge-first-refactor-design.md](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-15-posescorer-edge-first-refactor-design.md) 的"下一 tick 候选"章节标记为"已落地"
+### Tick 3 — Report Generator 透明度 ✅
+- [Models.VideoSummary](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L703) 新增 `flowModulationGated: Bool?`（init 默认 nil，向后兼容历史 JSON）
+- [ReportGenerator.formatFlowFactorText](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift#L947-L953) 在门控实际 kill 上行加成时追加"（走刃证据不足，未加成）"
+- 新增 [ReportGeneratorFlowGatingTests](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/ReportGeneratorFlowGatingTests.swift) 7 条契约（gated=true/false/nil × 数值格式化）
+
+### Tick 4 — Spec 归档与端到端复核 ✅
+- 端到端 release CLI 重跑主 corpus 6 份，`gated=true` 集合 = {v4, v6}，v1 保护路径不掉档（见 §5.4）
+- 实测产物归档于 [testvideo/_tick4_gated/](file:///Users/mingsen/Project/FallLine/testvideo/_tick4_gated)（JSON + MD）
+- 状态由 Draft v3 → **Landed**
+- WORK_LOG / delta_update / 关联 spec 状态更新按仓库节奏另行处理
 
 ---
 
@@ -474,23 +496,23 @@ gate      v1      v2      v3      v4      v5      v6    累计Δ  kill数  跨�
 | R6 | edge 置信度受"低姿态遮挡"（false negative）误伤 | 中 | 中 | 本 spec 只**限制加成**，不做扣分，符合 [annotations/calibration_anchors.md](file:///Users/mingsen/Project/FallLine/annotations/calibration_anchors.md) 保护规则 |
 | R7 | 阈值 0.30 与 [ReportGenerator 显示阈值](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift) 语义耦合 | 低 | 低 | 若未来调整"走刃暂不评分" 阈值需同步 review；将常量注释明确标记语义链一致性 |
 
-### 8.2 待 review 决策
+### 8.2 决策记录（已 review / 已落地，commit `ab16817`）
 
-1. **阈值**：`boardKinematicConfidenceGateThreshold = 0.30` — 由 §5.1 阈值向量图证明为最小有效阈值：
+1. **阈值**：`boardKinematicConfidenceGateThreshold = 0.30` ✅ 已采用 — 由 §5.1 阈值向量图证明为最小有效阈值：
    - 0.20 只触发 v4（漏 v1/v6，无法解决"扫雪场景 flow 加成"问题）
    - 0.25 / 0.28 只触发 v1/v4（漏 v6，无法解决"专业档极端高分"）
    - 0.30 / 0.32 / 0.35 / 0.40 / 0.50 触发集完全相同（同一 4 样本，v1/v2/v4/v6）
    - **选 0.30**：与 [ReportGenerator "走刃暂不评分" 显示阈值](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift) 对齐，避免多阈值并存
-2. **video 1 保护**：R1 三选一。**推荐主选方案 (c) 加 `evidenceCapped ≥ 60` AND 条件**（v3 实测校验，见 §5.3）：
+2. **video 1 保护**：✅ 已采用**方案 (c)**（`evidenceCappedScore < 60` 关闭门控），Tick 4 实测 v1 保持 60.67 不掉档、v4/v6 门控效果保留（§5.3 / §5.4）：
    - 语义精准（与 evidence cap 语义链一致）
    - v1 保护成功（60.67 → 60.67，不跨档）
    - v4/v6 门控完全保留（capped=78.80/90.16 均 ≥ 60，保护对它们不触发 → 门控继续 kill flow ×1.05）
    - 累计 Δ 从 −11.34 变为 −8.45（v1 从 −2.89 变为 0）
-   - 备选：若 review 不接受方案 (c) 的"低分保护"语义，也可用 (b) `rawPose ≥ 60`（v1 rawPose=48.81 < 60，同样保护 v1）
-3. **是否同时收敛 smoothness penalty**：现有 `smoothness < 40 → −0.05` 是否也应受门控？本 spec 建议**不动**——下行修正即"检测崩塌降级"是保守方向，不产生"抬分"风险。
-4. **报告文案措辞**：`（走刃证据不足，未加成）` 与业务语义对齐（不用 `edge 置信不足`，因为门控信号是 `boardKinematicConfidence` 而非 `edgeQualityConfidence`）
-5. **是否合并 Tick 3 到 Tick 2**：报告文案是纯 UI 变化，独立 tick 或并入 Tick 2 都可，建议独立便于回滚
-6. **Tick 2 是否 replay 后暂缓落地**：R3 boardC 稳定性风险需要 3+ 次 replay 抽样后再决策；建议先落 Tick 1（接口 + 单测，flow 未启用门控），Tick 2 拆分为 2a (集成) + 2b (启用) 两步
+   - 备选 (b) `rawPose ≥ 60` 未采用（避免引入 rawPose 作为新分数约束语义）
+3. **是否同时收敛 smoothness penalty**：✅ 决策**不动**——下行修正即"检测崩塌降级"是保守方向，不产生"抬分"风险。
+4. **报告文案措辞**：✅ 已采用 `（走刃证据不足，未加成）`（门控信号是 `boardKinematicConfidence` 而非 `edgeQualityConfidence`）。
+5. **Tick 3 独立**：✅ 报告透明度作为独立 Tick 3 提交，便于回滚。
+6. **Tick 2 拆分**：实际未拆分，Tick 1-3 一次性落地并由 26 条单测 + Tick 4 端到端复核兜底；R3 boardC 稳定性经 §1.4 跨 7 baseline 扫描 + §5.4 release CLI 复核确认无运行时抖动。
 
 ### 8.3 v3 变更摘要（vs v2）
 
@@ -500,6 +522,15 @@ gate      v1      v2      v3      v4      v5      v6    累计Δ  kill数  跨�
 - **修正 §1.5** video 4 档位描述（"专业档 82.74" → "高级档 82.74"）
 - **新增 [scripts/flow_gating_replay.py](file:///Users/mingsen/Project/FallLine/scripts/flow_gating_replay.py)** 可重复实测脚本
 - **R1 缓解措施** 从"待决策"升级为"方案 (c) 实测校验完成，推荐主选"
+
+### 8.4 Landed 变更摘要（commit `ab16817` + Tick 4）
+
+- **方案 (c) 落地**：`flowGateLowScoreProtectionThreshold = 60.0`，v1 保护路径实测 60.67 不掉档
+- **数据契约**：[VideoSummary](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L703) 新增 `flowModulationGated: Bool?`，init 默认 nil 向后兼容
+- **报告透明度**：抽出 [ReportGenerator.formatFlowFactorText](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift#L947-L953)，gated=true 追加"（走刃证据不足，未加成）"
+- **门控判定单点权威**：gated 三态（true/false/nil）在 [VideoAnalyzer](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L405-L418) 计算，阈值复用 [FlowMetricsCalculator](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift) 公开常量，报告端只渲染不二次计算
+- **新增 §5.4** Tick 4 release CLI 端到端实测（gated=true 集合精确 = {v4, v6}）
+- **测试**：19 条门控契约 + 7 条透明度契约；全量 235/235 通过
 
 ---
 
@@ -515,36 +546,38 @@ gate      v1      v2      v3      v4      v5      v6    累计Δ  kill数  跨�
 ## 10. 落地后自检清单
 
 ### 10.1 编译与单测
-- [ ] `swift test` 全绿（新增 5-6 条 flow gating 契约）
-- [ ] `swift build -c release` 无 warning
+- [x] `swift test` 全绿（新增 19 条门控契约 + 7 条透明度契约 = 26 条；全量 235/235）
+- [x] `swift build -c release` 无 warning
 
-### 10.2 Corpus 精确 replay（Tick 2 落地后）
-Corpus 6 份 replay 数据与 §5.1 阈值向量图一致（精确 replay：flow modulation 是纯函数）：
-- [ ] **video 1** 综合分：
-  - 若采用 R1 方案 (a)：∈ [57.7, 57.9]（预期 57.78）——跨档，接受
-  - **若采用 R1 方案 (c)** evidenceCapped ≥ 60 保护：∈ [60.6, 60.7]（预期 60.67，保留 ×1.05）✅ 推荐
-- [ ] **video 2** 综合分：∈ [86.5, 86.6]（预期 86.53，假阳性零影响）
-- [ ] **video 3** 综合分：∈ [88.1, 88.2]（预期 88.13，不变）
-- [ ] **video 4** 综合分：∈ [78.7, 78.9]（预期 78.80）
-- [ ] **video 5** 综合分：∈ [73.8, 73.9]（预期 73.86，不变）
-- [ ] **video 6** 综合分：∈ [90.0, 90.3]（预期 90.16）
+### 10.2 Corpus 精确 replay（Tick 4 端到端实测，见 §5.4）
+Corpus 6 份 release CLI 重跑与 §5.1 阈值向量图 / §10.2 预期精确一致：
+- [x] **video 1** 综合分：60.67 ∈ [60.6, 60.7]（方案 (c) 保护保留 ×1.05，不跨档）✅
+- [x] **video 2** 综合分：86.53 ∈ [86.5, 86.6]（假阳性零影响）
+- [x] **video 3** 综合分：88.13 ∈ [88.1, 88.2]（不变）
+- [x] **video 4** 综合分：78.80 ∈ [78.7, 78.9]
+- [x] **video 5** 综合分：73.86 ∈ [73.8, 73.9]（不变）
+- [x] **video 6** 综合分：90.16 ∈ [90.0, 90.3]
 
 ### 10.3 稳定性 & 序列化
-- [ ] boardKinematicConfidence 抽样方差 <0.02（R3 检查，v6 边界样本；建议连跑 3 次取 max-min）
-- [ ] 报告文本正确显示"（走刃证据不足，未加成）"标记（仅 v1/v4/v6 触发，v2 不显示因原本无 boost）
-- [ ] `flowModulationGated: Bool?` 字段序列化到 JSON
+- [x] boardKinematicConfidence 跨版本稳定：§1.4 跨 7 baseline 扫描 + §5.4 release CLI 复核，v6 边界样本（boardC=0.280）α on 下稳定触发
+- [x] 报告文本正确显示"（走刃证据不足，未加成）"标记（**仅 v4/v6**；v1 因方案 (c) 保护 `gated=false` 不显示；v2 无 boost 不显示）
+- [x] `flowModulationGated: Bool?` 字段序列化到 JSON（§5.4 归档覆盖 true（v4/v6）与 false（v1/v2/v3/v5）；null 态对应 `framePairsUsed < 2` 无光流场景，由 [ReportGeneratorFlowGatingTests](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/ReportGeneratorFlowGatingTests.swift) 契约守护）
 
 ### 10.4 复核脚本
-落地后建议执行：
+落地后复核命令（产物见 [testvideo/_tick4_gated/](file:///Users/mingsen/Project/FallLine/testvideo/_tick4_gated)）：
 ```bash
-# 主 corpus 精确 replay（预计与 §5 表格一致）
+# 主 corpus 精确 replay（与 §5 表格一致）
 /usr/bin/python3 scripts/flow_gating_replay.py
 
-# 阈值向量扫描（预计与 §5.1 一致）
+# 阈值向量扫描（与 §5.1 一致）
 /usr/bin/python3 scripts/flow_gating_replay.py --thresholds 0.20 0.25 0.30 0.35
 
-# 跨 baseline 稳定性（预计与 §1.4 一致）
+# 跨 baseline 稳定性（与 §1.4 一致）
 /usr/bin/python3 scripts/flow_gating_replay.py --baselines _edgefirst_c40 baseline_alpha_on baseline_alpha_off
+
+# 端到端复核（release CLI 全量重跑，与 §5.4 一致；v5 扩展名为小写 .mp4）
+for id in 1 2 3 4 6; do swift run -c release FallLineCLI "testvideo/${id}.MP4"; done
+swift run -c release FallLineCLI "testvideo/5.mp4"
 ```
 
 ---
