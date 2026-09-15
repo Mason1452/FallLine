@@ -297,12 +297,18 @@ public struct ReportGenerator {
 
     public static func generate(output: AnalysisOutput) -> String {
         let ctx = buildContext(output: output)
-        let supportsBoardQuality = output.boardAnalysis.summary?.averageSideslipAngle != nil
         let ski = output.skiMetrics
-        let edgeQualityName = supportsBoardQuality ? "走刃质量" : "走刃倾向"
-        let edgeConfidence = supportsBoardQuality
-            ? min(ski.edgeQualityConfidence, output.boardAnalysis.summary?.confidence ?? ski.edgeQualityConfidence)
-            : ski.edgeQualityConfidence
+        // P0-α (2026-09-15)：走刃结论正式由 skiMetrics.edgeQuality 承担。
+        // 旧实现用 boardAnalysis 几何置信度（已被 foot-plant 诊断证伪，
+        // 见 scripts/footplant_diagnose.py）压制 edgeQuality：把 edgeConfidence 与
+        // boardKinematicConfidence 取 min，导致 v1/v2/v4/v6 走刃行恒为"暂不评分"，
+        // 并据 averageSideslipAngle 是否存在切换"走刃质量/走刃倾向"命名。
+        // 现统一：命名恒定"走刃质量"，置信度只取姿态派生的 edgeQualityConfidence；
+        // sideslip/travel 几何量降级为板身方向原始诊断，不再充当走刃语义。
+        // 注意：edgeConfidence 仅用于报告渲染，不回流综合分（flow 门控与 62 分 cap
+        // 仍独立使用 boardKinematicConfidence，见 VideoAnalyzer / Utilities）。
+        let edgeQualityName = "走刃质量"
+        let edgeConfidence = ski.edgeQualityConfidence
         let edgeJudgmentIsReliable = edgeConfidence >= lowConfidenceThreshold
         let weakEdgeEvidence = hasWeakEdgeEvidence(ctx)
         let insufficientBoardEvidence = ctx.stableCarvingBaseline == nil
@@ -414,11 +420,11 @@ public struct ReportGenerator {
         lines.append(makeSkiScoreLine("左右一致性", ctx.sym, symLabel(ctx.sym), confidence: ctx.symConfidence))
         lines.append("")
 
-        // 板身方向与横滑分析
+        // 板身方向（原始几何诊断）
         if let boardSummary = output.boardAnalysis.summary {
-            lines.append("  🏂 板身方向与横滑")
+            lines.append("  🏂 板身方向（几何诊断）")
             lines.append(boardSummaryLine(boardSummary))
-            lines.append("    说明：当前用左右脚踝连线代理板身，侧面画面更可靠；正面、背面或遮挡时置信度会下降。")
+            lines.append("    说明：左右脚踝连线代理板身的几何方向，仅作诊断参考；走刃/搓雪结论以“走刃质量”为准，本段不参与评分。")
             lines.append("")
         }
 
@@ -474,8 +480,8 @@ public struct ReportGenerator {
         if !output.keyMoments.isEmpty {
             lines.append("  🔍 关键时刻")
             for km in output.keyMoments {
-                let title = edgeQualityLanguage(km.title, supportsBoardQuality: supportsBoardQuality)
-                let description = edgeQualityLanguage(km.description, supportsBoardQuality: supportsBoardQuality)
+                let title = km.title
+                let description = km.description
                 if km.type == "best_edge" {
                     lines.append("  ⭐ \(km.time) · \(title)")
                 } else {
@@ -491,7 +497,7 @@ public struct ReportGenerator {
         if !strengths.isEmpty {
             lines.append("  ✅ 优势")
             for s in strengths {
-                lines.append("    • \(edgeQualityLanguage(s, supportsBoardQuality: supportsBoardQuality))")
+                lines.append("    • \(s)")
             }
             lines.append("")
         }
@@ -501,14 +507,14 @@ public struct ReportGenerator {
         if !problems.isEmpty {
             lines.append("  ⚠️ 主要问题")
             for p in problems {
-                lines.append("    • \(edgeQualityLanguage(p, supportsBoardQuality: supportsBoardQuality))")
+                lines.append("    • \(p)")
             }
             lines.append("")
         }
 
         // 训练建议
         lines.append("  🎯 训练建议")
-        lines.append(edgeQualityLanguage(trainingAdvice(ctx: ctx, seed: seed), supportsBoardQuality: supportsBoardQuality))
+        lines.append(trainingAdvice(ctx: ctx, seed: seed))
         lines.append("")
 
         // 波动提示
@@ -962,18 +968,14 @@ public struct ReportGenerator {
     private static func boardSummaryLine(_ summary: BoardAnalysisSummary) -> String {
         let source = boardSourceLabel(summary.source)
         let confidence = String(format: "%.0f", summary.confidence * 100)
-        guard let sideslip = summary.averageSideslipAngle,
-              let carving = summary.carvingConfidence else {
-            return "    识别到 \(summary.frameCount) 帧板身线条代理 · 数据来源：\(source) · 置信度 \(confidence)/100；画面位移不足，暂不估计横滑角。"
+        guard let sideslip = summary.averageSideslipAngle else {
+            return "    识别到 \(summary.frameCount) 帧板身线条代理 · 数据来源：\(source) · 置信度 \(confidence)/100；画面位移不足，暂不估计板身-行进夹角。"
         }
 
-        if summary.confidence < lowConfidenceThreshold {
-            return "    横滑角暂不评分 · 数据来源：\(source) · 置信度 \(confidence)/100；当前画面角度不足以稳定判断走刃/横滑。"
-        }
-
-        // P8-A (2026-09-08)：横滑角派生的评分 cap 已退役（测量带系统性偏差），
-        // 此处仅作展示并标注不参与评分。
-        return "    平均横滑角 \(String(format: "%.0f", sideslip))° · 走刃置信 \(String(format: "%.0f", carving))/100 · \(boardKinematicsLabel(sideslip)) · 数据来源：\(source) · 置信度 \(confidence)/100 · 不参与评分"
+        // P0-α (2026-09-15)：sideslip 已证实带 ~40-50° 系统偏差（foot-plant 诊断，
+        // scripts/footplant_diagnose.py），不再派生走刃置信/横滑定性，仅保留为
+        // “板身方向-2D 行进方向夹角”的原始几何诊断量。走刃结论统一看“走刃质量”。
+        return "    板身-行进夹角（2D 几何）\(String(format: "%.0f", sideslip))° · 数据来源：\(source) · 几何置信度 \(confidence)/100 · 原始诊断，不代表走刃/搓雪"
     }
 
     private static func boardSourceLabel(_ source: BoardObservationSource) -> String {
@@ -985,18 +987,6 @@ public struct ReportGenerator {
         case .mixed:
             return "混合候选"
         }
-    }
-
-    private static func boardKinematicsLabel(_ sideslip: Double) -> String {
-        if sideslip <= AnalysisReliability.alignedBoardTravelAngle { return "沿板身移动明显" }
-        if sideslip <= AnalysisReliability.highSideslipAngle { return "有走刃倾向" }
-        if sideslip <= AnalysisReliability.dominantSideslipAngle { return "横滑偏多" }
-        return "以横滑为主"
-    }
-
-    private static func edgeQualityLanguage(_ text: String, supportsBoardQuality: Bool) -> String {
-        guard !supportsBoardQuality else { return text }
-        return text.replacingOccurrences(of: "走刃质量", with: "走刃倾向")
     }
 
     private static func isUsableConfidence(_ confidence: Double) -> Bool {
