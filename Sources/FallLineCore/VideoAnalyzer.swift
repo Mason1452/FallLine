@@ -247,7 +247,19 @@ public class VideoAnalyzer {
 
         // 时序平滑：对全部帧的姿态角度应用 1€ Filter，再重新计算评分
         // 消除 Vision 逐帧检测抖动，避免 motionStability 惩罚被抖动放大
-        let smoothed = PoseSmoother.smooth(results, scorer: poseScorer)
+        //
+        // 方案 α（2026-09-11 默认开）：confidence-aware 滤波已翻为默认路径
+        // （把 smoothConfidenceWeight(m.confidence) 传给 OneEuroFilter 的 weight
+        // 参数）。历史行为可通过 `FALLLINE_CONFIDENCE_AWARE=0/false/off/no` 强制回退。
+        // 主 corpus A/B 表明本开关对 evidenceCap 阈值命中样本影响集中在 video 4/ON
+        // 附近，配合上一轮 [edge evidence cap ramp](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-11-evidence-cap-ramp-softening-design.md)
+        // 后 -13 分掉档被软化到 -4.7 分（“中级 → 高级”）。
+        let smoothingConfig: PoseSmoother.Config = {
+            let raw = ProcessInfo.processInfo.environment["FALLLINE_CONFIDENCE_AWARE"] ?? ""
+            let disabled = ["0", "false", "off", "no"].contains(raw.lowercased())
+            return PoseSmoother.Config(useConfidenceAwareFiltering: !disabled)
+        }()
+        let smoothed = PoseSmoother.smooth(results, scorer: poseScorer, config: smoothingConfig)
         return smoothed
     }
 

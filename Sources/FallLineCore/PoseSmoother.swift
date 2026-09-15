@@ -19,17 +19,33 @@ public enum PoseSmoother {
         public let angleBeta: Double
         public let coordinateMinCutoff: Double
         public let coordinateBeta: Double
+        /// Confidence-aware 平滑总开关（方案 α，2026-09-11 翻默认 on）。
+        ///
+        /// - `true`（**新默认**）：把每个 `MetricWithConfidence.confidence` 通过
+        ///   [AnalysisReliability.smoothConfidenceWeight](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L115-L119)
+        ///   映射为权重后传给底层 [OneEuroFilter.filter](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/OneEuroFilter.swift#L89-L146)，
+        ///   让 1€ Filter 的信任度与下游 confidence-weighted 聚合层对齐。
+        /// - `false`：`filterMetric` 忽略 `m.confidence`，与 α 落地前的历史行为
+        ///   字节等价；仅用于 A/B 对照或紧急回退。
+        ///
+        /// 主 corpus 6 份 A/B（配合上一轮 evidence cap ramp）确认无回归后，本轮把
+        /// 默认从 `false` 翻到 `true`。历史行为仍可通过环境变量
+        /// `FALLLINE_CONFIDENCE_AWARE=0/false/off/no` 强制关闭（见
+        /// [VideoAnalyzer.smoothingConfig](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L257-L261)）。
+        public let useConfidenceAwareFiltering: Bool
 
         public init(
             angleMinCutoff: Double = 1.2,
             angleBeta: Double = 0.02,
             coordinateMinCutoff: Double = 1.5,
-            coordinateBeta: Double = 0.03
+            coordinateBeta: Double = 0.03,
+            useConfidenceAwareFiltering: Bool = true
         ) {
             self.angleMinCutoff = angleMinCutoff
             self.angleBeta = angleBeta
             self.coordinateMinCutoff = coordinateMinCutoff
             self.coordinateBeta = coordinateBeta
+            self.useConfidenceAwareFiltering = useConfidenceAwareFiltering
         }
 
         public static let `default` = Config()
@@ -65,32 +81,51 @@ public enum PoseSmoother {
         let angleFilters = MultiOneEuroFilter { OneEuroFilter(minCutoff: config.angleMinCutoff, beta: config.angleBeta) }
         let coordFilters = MultiOneEuroFilter { OneEuroFilter(minCutoff: config.coordinateMinCutoff, beta: config.coordinateBeta) }
 
+        // 方案 α：把 Config 开关捕获进闭包，避免给 17 处 filterMetric 调用点都加参数。
+        // useConfidenceAwareFiltering=false → 旧路径字节等价；true → 走 confidence-aware。
+        let useConfidenceAware = config.useConfidenceAwareFiltering
+
         return imputed.map { detection in
             let pose = detection.bodyPose
             guard pose.detected else { return detection }
 
             let t = detection.time
 
+            // 局部闭包捕获 t + 开关，简化每个字段的调用
+            func flt(
+                _ metric: MetricWithConfidence<Double>?,
+                key: String,
+                using filters: MultiOneEuroFilter
+            ) -> MetricWithConfidence<Double>? {
+                return filterMetric(
+                    metric,
+                    key: key,
+                    t: t,
+                    using: filters,
+                    useConfidenceAware: useConfidenceAware
+                )
+            }
+
             let smoothed = BodyPoseData(
                 detected: pose.detected,
                 visibility: pose.visibility,
-                bodyLeanAngle: filterMetric(pose.bodyLeanAngle, key: "bodyLean", t: t, using: angleFilters),
-                leftBodyLeanAngle: filterMetric(pose.leftBodyLeanAngle, key: "leftBodyLean", t: t, using: angleFilters),
-                rightBodyLeanAngle: filterMetric(pose.rightBodyLeanAngle, key: "rightBodyLean", t: t, using: angleFilters),
-                leftKneeBendAngle: filterMetric(pose.leftKneeBendAngle, key: "leftKnee", t: t, using: angleFilters),
-                rightKneeBendAngle: filterMetric(pose.rightKneeBendAngle, key: "rightKnee", t: t, using: angleFilters),
-                leftCalfLeanAngle: filterMetric(pose.leftCalfLeanAngle, key: "leftCalf", t: t, using: angleFilters),
-                rightCalfLeanAngle: filterMetric(pose.rightCalfLeanAngle, key: "rightCalf", t: t, using: angleFilters),
-                centerOfGravity: filterMetric(pose.centerOfGravity, key: "cog", t: t, using: coordFilters),
-                signedBodyLeanAngle: filterMetric(pose.signedBodyLeanAngle, key: "signedBodyLean", t: t, using: angleFilters),
-                signedCalfLeanAngle: filterMetric(pose.signedCalfLeanAngle, key: "signedCalf", t: t, using: angleFilters),
-                hipCenterX: filterMetric(pose.hipCenterX, key: "hipX", t: t, using: coordFilters),
-                ankleCenterX: filterMetric(pose.ankleCenterX, key: "ankleX", t: t, using: coordFilters),
-                bodyCenterX: filterMetric(pose.bodyCenterX, key: "bodyX", t: t, using: coordFilters),
-                hipCenterY: filterMetric(pose.hipCenterY, key: "hipY", t: t, using: coordFilters),
-                ankleCenterY: filterMetric(pose.ankleCenterY, key: "ankleY", t: t, using: coordFilters),
-                bodyCenterY: filterMetric(pose.bodyCenterY, key: "bodyY", t: t, using: coordFilters),
-                ankleProxyBoardAngle: filterMetric(pose.ankleProxyBoardAngle, key: "boardAngle", t: t, using: angleFilters),
+                bodyLeanAngle: flt(pose.bodyLeanAngle, key: "bodyLean", using: angleFilters),
+                leftBodyLeanAngle: flt(pose.leftBodyLeanAngle, key: "leftBodyLean", using: angleFilters),
+                rightBodyLeanAngle: flt(pose.rightBodyLeanAngle, key: "rightBodyLean", using: angleFilters),
+                leftKneeBendAngle: flt(pose.leftKneeBendAngle, key: "leftKnee", using: angleFilters),
+                rightKneeBendAngle: flt(pose.rightKneeBendAngle, key: "rightKnee", using: angleFilters),
+                leftCalfLeanAngle: flt(pose.leftCalfLeanAngle, key: "leftCalf", using: angleFilters),
+                rightCalfLeanAngle: flt(pose.rightCalfLeanAngle, key: "rightCalf", using: angleFilters),
+                centerOfGravity: flt(pose.centerOfGravity, key: "cog", using: coordFilters),
+                signedBodyLeanAngle: flt(pose.signedBodyLeanAngle, key: "signedBodyLean", using: angleFilters),
+                signedCalfLeanAngle: flt(pose.signedCalfLeanAngle, key: "signedCalf", using: angleFilters),
+                hipCenterX: flt(pose.hipCenterX, key: "hipX", using: coordFilters),
+                ankleCenterX: flt(pose.ankleCenterX, key: "ankleX", using: coordFilters),
+                bodyCenterX: flt(pose.bodyCenterX, key: "bodyX", using: coordFilters),
+                hipCenterY: flt(pose.hipCenterY, key: "hipY", using: coordFilters),
+                ankleCenterY: flt(pose.ankleCenterY, key: "ankleY", using: coordFilters),
+                bodyCenterY: flt(pose.bodyCenterY, key: "bodyY", using: coordFilters),
+                ankleProxyBoardAngle: flt(pose.ankleProxyBoardAngle, key: "boardAngle", using: angleFilters),
                 leftShoulderPoint: pose.leftShoulderPoint,
                 rightShoulderPoint: pose.rightShoulderPoint,
                 leftHipPoint: pose.leftHipPoint,
@@ -384,14 +419,26 @@ public enum PoseSmoother {
 
 
     /// 对单个 MetricWithConfidence 做滤波，nil 值直传，置信度保持不变。
+    ///
+    /// - Parameter useConfidenceAware: 方案 α 开关。`false` 时忽略 `m.confidence`，
+    ///   与历史行为字节等价；`true` 时把 `smoothConfidenceWeight(m.confidence)`
+    ///   传给底层 [OneEuroFilter](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/OneEuroFilter.swift#L12)，
+    ///   让低置信度样本对滤波器状态的影响按权重降级。
     private static func filterMetric(
         _ metric: MetricWithConfidence<Double>?,
         key: String,
         t: Double,
-        using filters: MultiOneEuroFilter
+        using filters: MultiOneEuroFilter,
+        useConfidenceAware: Bool
     ) -> MetricWithConfidence<Double>? {
         guard let m = metric else { return nil }
-        let filtered = filters.filter(m.value, key: key, timestamp: t)
+        let filtered: Double
+        if useConfidenceAware {
+            let weight = AnalysisReliability.smoothConfidenceWeight(m.confidence)
+            filtered = filters.filter(m.value, key: key, timestamp: t, weight: weight)
+        } else {
+            filtered = filters.filter(m.value, key: key, timestamp: t)
+        }
         return MetricWithConfidence(value: filtered, confidence: m.confidence)
     }
 }

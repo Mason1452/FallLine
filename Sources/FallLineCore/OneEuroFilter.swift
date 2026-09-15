@@ -59,15 +59,51 @@ public final class OneEuroFilter {
     ///   - timestamp: 时间（秒）
     /// - Returns: 滤波后的值
     public func filter(value: Double, timestamp: Double) -> Double {
+        return filter(value: value, timestamp: timestamp, weight: 1.0)
+    }
+
+    /// Confidence-aware 滤波入口（方案 α，2026-09-11 落地）。
+    ///
+    /// 让低置信度样本对滤波器状态的影响按 `weight ∈ [0, 1]` 降级：
+    /// - `weight = 1.0` → 与不带 weight 的旧路径**字节等价**（`OneEuroFilterConfidenceAwareTests` 锁死）
+    /// - `weight = 0.0`（非首帧）→ 输出 = `lastFilteredValue`，滤波器状态**完全不更新**
+    ///   （lastRaw/lastFiltered/derivative 保持不动），等价于"丢弃这一帧"
+    /// - `weight ∈ (0, 1)` → 把 α 缩放为 `weight × α`；状态按 weight 凸组合更新
+    ///   → 输出永远在 [prevFiltered, value] 之间（fuzz 断言）
+    ///
+    /// **首帧**：任何 weight 都退回旧初始化路径。首帧没有 prevFiltered，
+    /// 无论选择"丢弃"还是"接受"都是主观决定，选择保守的"接受"以避免整段序列
+    /// 因首帧低置信度被延迟启动。
+    ///
+    /// 设计动机：当前 PoseSmoother 在 `smoothConfidenceWeight` 下游做 confidence-weighted
+    /// 聚合（softFloor 0.15 / softCeiling 0.75 二次曲线），但滤波层平等吸收所有样本。
+    /// Corpus 审计（scripts/confidence_smoothing_audit.py）显示 5/6 视频有 36-44% 帧
+    /// 落在 0.30-0.75 段，且视频 2/3/4/5/6 都存在 ≥15 帧连续 conf<0.30 段，1€ Filter
+    /// 状态会被这些段拽偏。此 overload 让滤波层的信任度与聚合层对齐。
+    ///
+    /// - Parameters:
+    ///   - value: 原始信号值
+    ///   - timestamp: 时间（秒）
+    ///   - weight: [0, 1] 区间的置信度权重。默认 1.0 保持向后兼容。
+    /// - Returns: 滤波后的值
+    public func filter(value: Double, timestamp: Double, weight: Double) -> Double {
+        let clampedWeight = min(1.0, max(0.0, weight))
+
         guard let prevTime = lastTimestamp,
               let prevFiltered = lastFilteredValue else {
-            // 首帧：不滤波，仅初始化状态
+            // 首帧：不滤波，仅初始化状态（保持与旧行为完全一致）
             lastTimestamp = timestamp
             lastRawValue = value
             lastFilteredValue = value
             lastRawDerivative = 0
             lastFilteredDerivative = 0
             return value
+        }
+
+        // weight = 0：状态完全不更新，直接返回 prevFiltered
+        // （lastRaw/lastFiltered/derivative/timestamp 全部保持）
+        if clampedWeight <= 0 {
+            return prevFiltered
         }
 
         let dt = max(timestamp - prevTime, 1.0 / 240.0)
@@ -81,16 +117,29 @@ public final class OneEuroFilter {
 
         // Step 3: 根据速度动态调整信号的截止频率
         let adaptiveCutoff = minCutoff + beta * abs(filteredDerivative)
-        let alpha = smoothingFactor(cutoff: adaptiveCutoff, dt: dt)
+        let baseAlpha = smoothingFactor(cutoff: adaptiveCutoff, dt: dt)
 
         // Step 4: 低通滤波信号
+        // 关键差异：把 weight 直接乘到 α 上。weight=1 → alpha=baseAlpha（等价旧路径）；
+        // weight=0 → alpha=0，filtered=prevFiltered。中间值 → filtered 在
+        // [prevFiltered, value] 的凸组合上，靠近 prevFiltered 的程度与 weight 线性挂钩。
+        let alpha = clampedWeight * baseAlpha
         let filtered = alpha * value + (1 - alpha) * prevFiltered
 
-        // Step 5: 更新状态
-        lastRawValue = value
+        // Step 5: 状态更新
+        // - clampedWeight = 1：状态直接跳到新值（等价旧路径）
+        // - clampedWeight = 0：上文已 early return，不会到这里
+        // - clampedWeight ∈ (0, 1)：状态按 weight 凸组合更新，避免低置信度样本主导
+        //   raw/filtered derivative（否则相当于把 weight 从"输出降权"退化为
+        //   "状态延迟污染"，等下一次 weight=1 时仍会被拽偏）。
+        let prevRaw = lastRawValue ?? value
+        let prevRawDeriv = lastRawDerivative ?? 0
+        let prevFilteredDeriv = lastFilteredDerivative ?? 0
+
+        lastRawValue = clampedWeight * value + (1 - clampedWeight) * prevRaw
         lastFilteredValue = filtered
-        lastRawDerivative = rawDerivative
-        lastFilteredDerivative = filteredDerivative
+        lastRawDerivative = clampedWeight * rawDerivative + (1 - clampedWeight) * prevRawDeriv
+        lastFilteredDerivative = clampedWeight * filteredDerivative + (1 - clampedWeight) * prevFilteredDeriv
         lastTimestamp = timestamp
 
         return filtered
@@ -127,10 +176,16 @@ public final class MultiOneEuroFilter {
 
     /// 对键 key 对应的信号做滤波，若首次遇见自动创建滤波器
     public func filter(_ value: Double, key: String, timestamp: Double) -> Double {
+        return filter(value, key: key, timestamp: timestamp, weight: 1.0)
+    }
+
+    /// Confidence-aware overload：把 `weight ∈ [0, 1]` 转发给底层 [OneEuroFilter.filter](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/OneEuroFilter.swift#L89-L146)。
+    /// weight=1.0 与旧方法字节等价。
+    public func filter(_ value: Double, key: String, timestamp: Double, weight: Double) -> Double {
         if filters[key] == nil {
             filters[key] = makeFilter()
         }
-        return filters[key]!.filter(value: value, timestamp: timestamp)
+        return filters[key]!.filter(value: value, timestamp: timestamp, weight: weight)
     }
 
     /// 可选辅助：过滤 nil 保持传播（None 时不喂入滤波器，避免破坏时序）
