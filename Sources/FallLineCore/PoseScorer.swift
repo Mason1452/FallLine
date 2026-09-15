@@ -13,12 +13,46 @@ public struct PoseScorer {
 
     // MARK: - 权重配置
 
-    /// 默认权重（经验值，总计 1.0）
+    /// 五维姿态评分权重（[forwardLean, kneeBend, calfLean, gravity, symmetry]）。
+    ///
+    /// Tick 1 (2026-09-15)：把原先散在 `defaultWeights` / `partialWeights` 的 tuple
+    /// 常量升级为具名 struct，方便后续 Tick 落地 edge-first 权重与 iOS 副本同步。
+    /// 数值保持与旧 tuple 完全一致，纯类型重构，无行为差异。
+    ///
+    /// 详见 [docs/superpowers/specs/2026-09-15-posescorer-edge-first-refactor-design.md](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-15-posescorer-edge-first-refactor-design.md)。
+    public struct Weights: Equatable {
+        public let forwardLean: Double
+        public let kneeBend: Double
+        public let calfLean: Double
+        public let gravity: Double
+        public let symmetry: Double
+
+        public init(
+            forwardLean: Double,
+            kneeBend: Double,
+            calfLean: Double,
+            gravity: Double,
+            symmetry: Double
+        ) {
+            self.forwardLean = forwardLean
+            self.kneeBend = kneeBend
+            self.calfLean = calfLean
+            self.gravity = gravity
+            self.symmetry = symmetry
+        }
+
+        /// 五维权重和，供契约测试或调试断言使用。
+        public var sum: Double {
+            forwardLean + kneeBend + calfLean + gravity + symmetry
+        }
+    }
+
+    /// 默认权重（经验值，总计 1.0）。
     ///
     /// 膝盖弯曲权重最高（0.25）：腿部弹性是滑雪所有动作的基础。
     /// 前倾、小腿、重心各 0.20：三者共同决定姿态质量。
     /// 对称性 0.15：相对次要——不对称通常是其他问题的表现而非根源。
-    public static let defaultWeights = (
+    public static let defaultWeights = Weights(
         forwardLean: 0.20,
         kneeBend: 0.25,
         calfLean: 0.20,
@@ -26,9 +60,9 @@ public struct PoseScorer {
         symmetry: 0.15
     )
 
-    /// 在 partial 可见性下，对称性权重被重新分配
-    /// 对称性 0.15 → 前倾 +0.05, 膝盖 +0.05, 小腿 +0.05
-    public static let partialWeights = (
+    /// 在 partial 可见性下，对称性权重被重新分配。
+    /// 对称性 0.15 → 前倾 +0.05, 膝盖 +0.05, 小腿 +0.05。
+    public static let partialWeights = Weights(
         forwardLean: 0.25,
         kneeBend: 0.30,
         calfLean: 0.25,
@@ -170,13 +204,7 @@ public struct PoseScorer {
 
     // MARK: - 评分计算
 
-    private func computeScore(pose: BodyPoseData, weights: (
-        forwardLean: Double,
-        kneeBend: Double,
-        calfLean: Double,
-        gravity: Double,
-        symmetry: Double
-    )) -> PoseScore {
+    private func computeScore(pose: BodyPoseData, weights: Weights) -> PoseScore {
         let forwardLeanScore = scoreForwardLean(pose)
         let kneeBendScore = scoreKneeBend(pose)
         let calfLeanScore = scoreCalfLean(pose)
