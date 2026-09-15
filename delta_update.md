@@ -1,6 +1,6 @@
 # Delta Update
 
-最后更新：2026-09-10
+最后更新：2026-09-15
 
 本文档只记录每轮工作的增量变化，不记录项目全量背景。需要项目当前状态、目标和长期上下文时，先看 `WORK_LOG.md`；需要文件职责时，看 `file_manifest.md`。
 
@@ -13,6 +13,40 @@
 - 同一轮没有代码变更时，明确写”仅文档变更”或”未运行测试”的原因。
 
 ## 变更
+
+### 2026-09-15（PoseScorer edge-first 重构收尾 + flow 走刃置信度门控）
+
+**本轮性质**：两条关联的评分线在同一天闭环并推送 origin/main。前半段是更早开始、此前未写 delta 的 **PoseScorer edge-first 重构**（Tick 1-4 + 一次 sigmoid 中点微调 + spec 归档）；后半段是 edge-first 完成后补上的**下游护栏**——flow modulation 走刃置信度门控。两份 spec 均转 Landed。
+
+**A. PoseScorer edge-first 重构（把 calfLean 从"外部 cap"升级为评分主导维度）**
+- Tick 1-4 commit：`ce751a4`（[PoseScorer.Weights](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseScorer.swift) struct 前置重构）→ `06f5ed7`（权重重分配 lean/knee/calf/gravity/symmetry = 0.15/0.25/0.35/0.15/0.10）→ `48ea262`（calfLean 改 sigmoid，初版 k=0.10 c=35）→ `b584b12`（edge cap 放宽为 fallback-only ramp）。
+- **c=40 微调 `fbeb1da`（本轮重点）**：[calfSigmoidMidpoint](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseScorer.swift#L170) 35→40（k 不变）。动机：c=35 让 30° 就跨过中点得 37.8 分，导致专业档普涨 4-5 分、video 5 中级→高级、video 4 中级→专业，与教练分档不符。中点右移到"入门—中级刻滑分界（40°=50 分及格）"后，30-50° 段陡度保留（~2.31 分/°）。
+- edge cap 现状（[edgeEvidenceCapValue](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L509-L513)）：`edge<30 → 62` 兜底，`30–42` 分段线性放行，`≥42 → 100`；纯扫雪防误抬，不再是分档悬崖。
+- 测试：[PoseScorerCalfSigmoidTests](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/PoseScorerCalfSigmoidTests.swift) 8 采样锚点 + 中点 + 参数契约按 c=40 更新；另有 weights-sum 与 edge-cap-ramp 契约。
+- Corpus 对照（无 gating，md 归档 [_review_tick4](file:///Users/mingsen/Project/FallLine/testvideo/_review_tick4) = c=35、[_edgefirst_c40](file:///Users/mingsen/Project/FallLine/testvideo/_edgefirst_c40) = c=40）：v1 63→61、v2 88→87、v3 89→88、v4 86→83、v5 78→74（高级退回中级）、v6 96→95。12 份 md 与 spec 表逐值一致；JSON 按 `*.json` ignore 约定仅本地。
+- Spec：[2026-09-15-posescorer-edge-first-refactor-design.md](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-15-posescorer-edge-first-refactor-design.md) 转 Landed（`21a24f8`）。
+
+**B. Flow modulation 走刃置信度门控（edge-first 的下游护栏，Tick 1-4）**
+- 动机：edge-first 后 flow ×1.05 coherence 加成成为高分样本关键抬升器，但走刃证据不足时该高分主要来自相机/全画面平移，会放大噪声。
+- 实现 `ab16817`：
+  - [FlowMetricsCalculator.computeModulation](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift) 扩展 6-param：新增 `boardKinematicConfidence` 与 `evidenceCappedScore`；门控 `boardC < 0.30 → min(modulation,1.0)`（**只禁上行、不扣分**）；方案 (c) 低分保护 `evidenceCappedScore < 60` 时关闭门控（避免 video 1 跨"中级/初级"档）。常量 `boardKinematicConfidenceGateThreshold=0.30`、`flowGateLowScoreProtectionThreshold=60`。
+  - [VideoAnalyzer](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift) 新增私有 `computeBoardKinematicConfidence`（下沉 BoardDirectionAnalyzer 取 `summary.confidence`），`framePairsUsed<2` 时回退 boardC=1.0 不门控。
+  - [VideoSummary](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift) 新增 `flowModulationGated: Bool?`（init 默认 nil，向后兼容历史 JSON）；[ReportGenerator.formatFlowFactorText](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift) 在门控实际 kill 上行加成时追加"（走刃证据不足，未加成）"。
+- 测试：19 条门控契约（[FlowMetricsCalculatorTests](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/FlowMetricsCalculatorTests.swift)）+ 7 条透明度契约（[ReportGeneratorFlowGatingTests](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/ReportGeneratorFlowGatingTests.swift)）。
+- Tick 4 端到端复核（release CLI 全量重跑，md 归档 [_tick4_gated](file:///Users/mingsen/Project/FallLine/testvideo/_tick4_gated)，spec 见 §5.4）：`gated=true` 集合精确 = **{v4, v6}**；v1 走方案 (c) 保护保持 60.67 不掉档、`gated=false`；阈值 [0.30,0.50] 为同一门控组，0.30 是覆盖 v6（boardC=0.280）的最小有效阈值，无需微调。
+- 静态证据链脚本 [scripts/flow_gating_replay.py](file:///Users/mingsen/Project/FallLine/scripts/flow_gating_replay.py)（注：其 baseline 扫描建模的是**无方案 c 保护**的纯门控，故不把 landed 的 `_tick4_gated` 加入默认 baseline，以免 v1 行误报 kill）。
+- Spec：[2026-09-15-flow-modulation-edge-gating-design.md](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-15-flow-modulation-edge-gating-design.md) 转 Landed（`31950a5`）。
+
+**当前 corpus 顶层分数**（c=40 叠加 gating，[testvideo/1-6.md](file:///Users/mingsen/Project/FallLine/testvideo) 刷新于 `a60d93e`）：v1 61 · v2 87 · v3 88 · v4 79 · v5 74 · v6 90。基线（edge-first 前）61/83/85/74/70/92。
+
+**验证**：`swift build` 0 warning；`swift test` **235 tests, 0 failures**；两组对照归档与 spec 表逐值核对一致。
+
+**遗留**：
+- iOS 副本 [SkiAnaylze/Sources](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/Sources) 未同步 sigmoid/权重重构（该副本本就不含 sigmoid，Tick 3 起未同步），属 [AGENTS.md](file:///Users/mingsen/Project/FallLine/AGENTS.md) 已知 duplication debt，等 REFACTOR_PLAN Phase 2 SPM 迁移统一处理。
+- 主 corpus 仅 6 份；等级分布向"专业"迁移后建议对 [calibration_anchors.md](file:///Users/mingsen/Project/FallLine/annotations/calibration_anchors.md) 做一次教练标注校准复核。
+- 已推送 origin/main（`37932b5..21a24f8`）。
+
+---
 
 ### 2026-09-10（P9-B：修 CenterOfMass 主问题 tie-break 抖动）
 

@@ -1,6 +1,28 @@
 # FallLine Work Log
 
-## Current State (2026-09-10 P6-B / P6-B-r3 / P9-A / P9-B 已落地)
+## Current State (2026-09-15 PoseScorer edge-first 重构 + flow 走刃门控 已落地并推送)
+
+**PoseScorer edge-first 重构（把 calfLean 立刃证据从"外部 cap"升级为评分主导维度，commit `ce751a4`→`b584b12` + 微调 `fbeb1da`）**：
+- Tick 1 `ce751a4` [PoseScorer.Weights](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseScorer.swift) struct 前置重构（数值不变）；Tick 2 `06f5ed7` 权重重分配 lean/knee/calf/gravity/symmetry = 0.15/0.25/**0.35**/0.15/**0.10**（calf 主导、symmetry 降到 0.10）；Tick 3 `48ea262` calfLean 改 sigmoid；Tick 4 `b584b12` edge cap 放宽为 fallback-only ramp。
+- **sigmoid 中点 c=35→c=40（`fbeb1da`，corpus review 后微调）**：`calfSigmoidScore = 100/(1+exp(-0.10·(angle-40)))`，40°=50 分（及格，"入门—中级刻滑分界"），30-50° 段陡度 ~2.31 分/°，端点 0°→1.8/80°→98.2。c=35 曾让专业档普涨、v5 中级→高级、v4 中级→专业，c=40 后 v5 回落中级。
+- edge cap [edgeEvidenceCapValue](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L509-L513)：`edge<30→62` 兜底 / `30–42` 线性放行 / `≥42→100`，悬崖软化、纯扫雪防误抬。
+- Spec 已 Landed：[2026-09-15-posescorer-edge-first-refactor-design.md](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-15-posescorer-edge-first-refactor-design.md)。
+
+**Flow modulation 走刃置信度门控（edge-first 的下游护栏，`ab16817` + 归档 `31950a5`）**：
+- [computeModulation](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift) 扩 6-param：`boardKinematicConfidence < 0.30 → min(modulation,1.0)`（只禁上行 ×1.05、不扣分）；方案 (c) 低分保护 `evidenceCappedScore < 60` 关门控（防 v1 跨中/初档）。[VideoSummary](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift) 加 `flowModulationGated: Bool?`；报告 gated=true 追加"（走刃证据不足，未加成）"。
+- Tick 4 release CLI 复核：`gated=true` 集合精确 **{v4,v6}**，v1 保护不掉档；阈值 0.30 处 [0.30,0.50] 稳定平台且为覆盖 v6(boardC=0.280) 的最小值。Spec Landed：[2026-09-15-flow-modulation-edge-gating-design.md](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-15-flow-modulation-edge-gating-design.md)。
+
+**当前主 corpus 顶层分数**（c=40 叠加 gating，[testvideo/](file:///Users/mingsen/Project/FallLine/testvideo)）：v1 61 · v2 87 · v3 88 · v4 79 · v5 74 · v6 90（edge-first 前基线 61/83/85/74/70/92）。对照归档：[_review_tick4](file:///Users/mingsen/Project/FallLine/testvideo/_review_tick4)(c=35)、[_edgefirst_c40](file:///Users/mingsen/Project/FallLine/testvideo/_edgefirst_c40)(c=40 无门控)、[_tick4_gated](file:///Users/mingsen/Project/FallLine/testvideo/_tick4_gated)(c=40+门控)。
+
+**验证状态**：`swift build` 0 warning；`swift test` **235 tests, 0 failures**（新增 sigmoid/权重/edge-ramp/门控/透明度契约）。9 个 commit 已 fast-forward 推送 origin/main（`37932b5..21a24f8`）。
+
+**下一步候选**（不阻塞）：
+- 采样率 5fps → 视频原生 30fps（深度研究确认 200ms 帧间隔 → 20° 膝角误差）。
+- **calibration anchors 教练标注校准复核**：edge-first 后等级分布向"专业"迁移（v2 83→87、v3 85→88），需对照 [calibration_anchors.md](file:///Users/mingsen/Project/FallLine/annotations/calibration_anchors.md) 主观评级确认；建议扩主 corpus（仅 6 份）到 [SkiAnaylze/testvideo/](file:///Users/mingsen/Project/FallLine/SkiAnaylze/testvideo/)。
+- iOS 副本 [SkiAnaylze/Sources](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/Sources) 未同步 sigmoid/权重（已知 duplication debt），随 [REFACTOR_PLAN.md](file:///Users/mingsen/Project/FallLine/REFACTOR_PLAN.md) Phase 2 SPM 迁移统一处理。
+- travelAngle 输出链路精简（P8-A 已退役 sideslip 高分 cap，横滑角仅展示且标注"不参与评分"）。
+
+## Previous State (2026-09-10 P6-B / P6-B-r3 / P9-A / P9-B 已落地)
 
 **P6-B（光流窗采样，commit `3681dc2`）+ P6-B-r3（radius 2→3，commit `b25c082`）**：`FlowMetricsCalculator` hip/ankle 光流从单点采样改为 (2r+1)×(2r+1) 邻域均值，默认 radius=3（7×7 窗）。与 P6-A 时序 median 形成"空间+时序"双层抗噪；`averageFlowWindow` 作为纯函数供单测直接验证；radius=0 保留紧急回退。主 corpus 5 份重跑：视频 2 velocitySmoothness 81→84（+3），视频 3 43→47（+4），其他 3 份 coherence/smoothness/finalScore 全部稳定。
 
@@ -12,10 +34,11 @@
 
 **验证状态**：`swift test` **173 tests, 0 failures**（149 → 155 → 164 → 173）；`swift build -c release` PASS（未在当轮显式跑，P9-B 已过 diagnostics）。
 
-**下一步候选**（不阻塞）：
+**下一步候选（09-10 时点，部分已过时）**：
 - 采样率 5fps → 视频原生 30fps（WORK_LOG Next Steps #1，深度研究确认 200ms 帧间隔 → 20° 膝角误差）
 - travelAngle 输出链路精简（P8-A 已退役 sideslip 高分 cap，横滑角展示还留着）
-- confidence-weighted 时序平滑（WORK_LOG Next Steps #3）
+- ~~confidence-weighted 时序平滑~~：**已落地**——1€ Filter 的 α 方案（`useConfidenceAwareFiltering` 默认 true），见 [PoseSmoother](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseSmoother.swift)。
+- 最新候选以顶部 2026-09-15 Current State 为准。
 
 ## Previous State (2026-09-08 P6-A + P7-A 落地)
 
