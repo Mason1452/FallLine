@@ -135,13 +135,33 @@ knee 与综合分 r=0.894 看似同步，但权重仅 0.25 且不参与 `knee-ba
 
 **建议的三个动作**（按优先级）：
 
-### 4.1 【高优】edge cap 加双维兜底 — 修 BAD_ACC/MID_FP2 类
-在 [edgeEvidenceCapValue](../../Sources/FallLineCore/VideoAnalyzer.swift#L509-L513) 增加 calfLean 联合判定：
+### 4.1 【已落地 · 2026-09-15】edgeQuality 双维兜底 ✅
+
+**实现修正**：原 spec 静态规则 `edge≥42 && calfLean<40 → cap=72` 在真实字段上**无法触发**——BAD_ACC 真实 calfLeanScore=45（非<40）、MID_FP2=52。落地时用 18 份样本真实字段重新定位，发现唯一能干净分离 **GOOD_A（edgeQuality=61，须保护）与 BAD_ACC（edgeQuality=57，须下压）** 的轴是复合 **edgeQualityScore**（报告首屏"走刃质量"），故改为独立 ramp：
 
 ```
-if edge >= 42 且 calfLean < 40 → cap = 72  // 兜住"edge 中等但立刃真差"
+edgeQuality < 57        → cap = 72
+edgeQuality ∈ [57,61]   → linearRamp(72 → 100)
+edgeQuality ≥ 61        → 100（无 cap）
+nil                     → 100（由上游 65 cap 兜底）
 ```
-预期效果：BAD_ACC 83 → ~72，MID_FP2 82 → ~72，档位回到中级。不影响主 corpus（v2/v3/v6 的 calf ≥ 66）。
+
+触点：[VideoAnalyzer.edgeQualityCapValue(for:)](../../Sources/FallLineCore/VideoAnalyzer.swift#L540-L557) + [Utilities.averageEdgeQualityScore(from:stability:)](../../Sources/FallLineCore/Utilities.swift#L302-L329)（直接从 poseScore 现算，不依赖 `generateSummary` 之后才挂载的 skiMetrics，口径与 `SkiMetricsCalculator.average` 严格一致）。
+
+**实测 Δ（18 份，2026-09-15 release CLI）**：
+
+| 样本 | edgeQuality | 前分 | 现分 | 说明 |
+|---|---:|---:|---:|---|
+| BAD_ACC | 57.47 | 83 | **75** | 落 ramp 段（72+0.47/4×28=75.3），回到中级偏上 |
+| v4 | 55 | 79 | **72** | 触顶 |
+| v5 | 52 | 74 | **72** | 触顶 |
+| MID_ACC3 | 54 | 78 | **72** | 触顶，落回中级偏上 |
+| GOOD_A | 61 | 86 | **86** | 恰好放行，保持高质量档 |
+| MID_ACC8 | 71 | 90 | **90** | 无影响 |
+| v2/v3/v6 | 69-72 | 87/88/90 | **不变** | 专业档无影响 |
+| v1 | 37 | 61 | **61** | bestThird 57.8 已低于 cap，cap 非约束 |
+
+246 tests 全部通过（新增 6 条 edgeQuality ramp 契约，含锚点回放）。
 
 ### 4.2 【高优】knee<75 时动态加权 — 修 MID_FP1 类
 在 [PoseScorer.Weights](../../Sources/FallLineCore/PoseScorer.swift) 里增加 knee 弱势时的临时加权：

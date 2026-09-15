@@ -329,4 +329,66 @@ final class EvidenceCapRampTests: XCTestCase {
             t += step
         }
     }
+
+    // MARK: - EdgeQuality Cap（§4.1 双维兜底，2026-09-15）
+    //
+    // [VideoAnalyzer.edgeQualityCapValue(for:)](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift)
+    // 契约：
+    //  1. nil（无可靠数据）→ 100，不额外 cap（由上游 65 兜底）
+    //  2. edgeQuality < 57 → 72
+    //  3. [57, 61] 线性 72 → 100
+    //  4. ≥ 61 → 100
+    //  5. 单调不减、边界连续
+
+    func test_edgeQualityCap_nilReturnsHundred() {
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: nil), 100.0, accuracy: 1e-9)
+    }
+
+    func test_edgeQualityCap_lowPlateau() {
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 0.0), 72.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 40.0), 72.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 55.0), 72.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 56.99), 72.0, accuracy: 1e-6)
+    }
+
+    func test_edgeQualityCap_rampLinearInterpolation() {
+        // ramp [57, 61]：跨度 4 → 72 升到 100（跨度 28）
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 57.0), 72.0, accuracy: 1e-9)
+        // 中点 59：72 + 0.5 * 28 = 86
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 59.0), 86.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 61.0), 100.0, accuracy: 1e-9)
+    }
+
+    func test_edgeQualityCap_highPlateau() {
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 61.01), 100.0, accuracy: 1e-6)
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 72.0), 100.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 100.0), 100.0, accuracy: 1e-9)
+    }
+
+    func test_edgeQualityCap_monotonic_andContinuous() {
+        var x = -5.0
+        var previous = VideoAnalyzer.edgeQualityCapValue(for: x)
+        while x <= 105.0 {
+            let current = VideoAnalyzer.edgeQualityCapValue(for: x)
+            XCTAssertGreaterThanOrEqual(current, previous, "edgeQuality cap 非单调 at \(x)")
+            previous = current
+            x += 0.1
+        }
+        let eps = 1e-9
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 57.0 - eps), 72.0, accuracy: 1e-6)
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 61.0 - eps), 100.0, accuracy: 1e-6)
+    }
+
+    /// 锚点样本回放：锁死“保护 GOOD_A(61)、下压 BAD_ACC(57)”的实证边界。
+    func test_edgeQualityCap_anchorReplay() {
+        // BAD_ACC 57 → cap 72（83 → 72）
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 57.0), 72.0, accuracy: 1e-9)
+        // v4 55 → 72
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 55.0), 72.0, accuracy: 1e-9)
+        // GOOD_A 61 → 100 放行
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 61.0), 100.0, accuracy: 1e-9)
+        // 主 corpus 专业档
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 69.0), 100.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeQualityCapValue(for: 72.0), 100.0, accuracy: 1e-9)
+    }
 }
