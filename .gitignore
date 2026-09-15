@@ -10,3 +10,8 @@ xcuserdata/
 # 主线 B SPM 化产物：iOS 复制文件备份 + pbxproj 修改前快照
 .ios_migration_backup/
 *.pbxproj.bak_before_spm_link
+# outputs 复核产物：忽略视频符号链（大文件指向源目录），只保留 md/log/txt
+outputs/**/*.MP4
+outputs/**/*.MOV
+outputs/**/*.mp4
+outputs/**/*.mov
