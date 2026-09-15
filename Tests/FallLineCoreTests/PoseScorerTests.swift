@@ -282,16 +282,17 @@ final class PoseScorerTests: XCTestCase {
     /// kneeBend ≥ 60 → 无 cap，totalScore 走原 rawScore。
     /// 152° → dev=17 → hardDev=12 → kneeBend = 90 - 12/10*24 = 61.2
     /// rawScore = kneeBend*0.25 + fwdLean*0.15 + calfLean*0.35 + gravity*0.15 + sym*0.10
-    ///        ≈ 61.2*0.25 + 100*0.15 + 93.75*0.35 + 92.5*0.15 + 100*0.10 = 86.9875
-    /// Tick 2 (2026-09-15) 权重重分配后期望值从 87.55 → 86.9875。
+    /// Tick 3 (2026-09-15) sigmoid 后 calfLean(75°) 从线性 93.75 变为 98.20：
+    ///   ≈ 61.2*0.25 + 100*0.15 + 98.20*0.35 + 92.5*0.15 + 100*0.10 = 88.545
+    /// Tick 2 权重重分配后期望值从 87.55 → Tick 3 sigmoid 后 ≈ 88.55。
     func test_p5b_kneeBend61_noCap() {
         let pose = makeHighRawPose(knee: 152)
         let result = scorer.score(pose: pose)!
         XCTAssertGreaterThan(result.kneeBendScore, 60,
                              "152° 应对应 kneeBend > 60，实测 \(result.kneeBendScore)")
-        // kneeBend > 60 时无 cap，totalScore 应 = rawScore ≈ 86.99（未被截断到 88 或以下）
-        XCTAssertEqual(result.totalScore, 86.99, accuracy: 0.5,
-                       "kneeBend>60 无 cap，totalScore 应 = rawScore ≈ 86.99，实测 \(result.totalScore)")
+        // kneeBend > 60 时无 cap，totalScore 应 = rawScore ≈ 88.55（未被截断到 88 或以下）
+        XCTAssertEqual(result.totalScore, 88.55, accuracy: 0.5,
+                       "kneeBend>60 无 cap，totalScore 应 = rawScore ≈ 88.55，实测 \(result.totalScore)")
     }
 
     /// v6 t=6.80 场景（kneeBend=46.8）：

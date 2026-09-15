@@ -149,7 +149,22 @@ public struct PoseScorer {
     /// 小腿倾斜（立刃幅度）：0°=0分, 80°=100分（越高越好）
     /// 来源：滑雪教练经验——立刃角度越大，走刃质量越好。
     /// 80° 是现实中侧向立刃可达到的极限参考值。
-    public static let calfMaxScoreAngle = 80.0
+    ///
+    /// Tick 3 (2026-09-15) 落地 spec §4.2 sigmoid 曲线：
+    ///   score = clamp(100 / (1 + exp(-k * (avg - c))), 0, 100)，k = 0.10, c = 35
+    /// 目的：把 30°–50° 的分辨率从线性 1.25 分/° 提升到 ~2.2 分/°，
+    /// 让"扫雪 vs 刻滑"在 raw 分层就能显著分档，为退役 edge cap 让路。
+    /// 端点 (0° ≈ 3 分, 80° ≈ 99 分) 与旧线性版本近似对齐，避免全局漂移。
+    public static let calfSigmoidSlope = 0.10
+    public static let calfSigmoidMidpoint = 35.0
+
+    public static func calfLeanScore(fromAngle angle: Double) -> Double {
+        let x = calfSigmoidSlope * (angle - calfSigmoidMidpoint)
+        // exp() 在极端 |x| 时不会溢出（Double.infinity 参与 1/(1+inf) = 0），
+        // 但为了让 clamp 保持契约，仍然显式钳到 [0, 100]。
+        let raw = 100.0 / (1.0 + exp(-x))
+        return min(100, max(0, raw))
+    }
 
     /// 重心评分 —— 基于 hipRatio 连续值的线性映射
     ///
@@ -343,13 +358,15 @@ public struct PoseScorer {
     }
 
     /// 小腿倾斜评分（越高越好）
+    ///
+    /// Tick 3 (2026-09-15) 从线性映射改为 sigmoid（见 [calfLeanScore(fromAngle:)](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseScorer.swift)）。
     private func scoreCalfLean(_ pose: BodyPoseData) -> Double {
         let left = pose.leftCalfLeanAngle?.value
         let right = pose.rightCalfLeanAngle?.value
         let angles = [left, right].compactMap { $0 }
         guard !angles.isEmpty else { return 0 }
         let avg = angles.reduce(0, +) / Double(angles.count)
-        return min(avg / Self.calfMaxScoreAngle * 100, 100)
+        return Self.calfLeanScore(fromAngle: avg)
     }
 
     /// 重心评分（连续映射）
