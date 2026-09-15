@@ -378,15 +378,44 @@ public class VideoAnalyzer {
         // 光流调制
         let flowMetrics = await computeFlowMetrics()
         let flowCalculator = FlowMetricsCalculator(sampleInterval: sampleInterval)
+
+        // P0 (2026-09-15) Flow Modulation Edge-Confidence Gating：走刃证据置信度门控
+        // - boardKinematicConfidence < 0.30 时，令 modulation = min(mod, 1.0)——只允许向下修正
+        // - evidenceCappedScore < 60 时，方案 (c) 低分保护关闭门控，保留 flow ×1.05 加成
+        //   避免"中级 60 / 初级 58"跨档伤害（v1 corpus 场景）
+        let boardKinematicConfidence = flowMetrics.framePairsUsed >= 2
+            ? computeBoardKinematicConfidence(
+                from: reliableFrames,
+                flowTravelDirections: cachedTravelDirections
+            )
+            : 1.0
+
         let flowModulationFactor = flowMetrics.framePairsUsed >= 2
             ? flowCalculator.computeModulation(
                 coherence: flowMetrics.motionCoherence,
                 stability: flowMetrics.directionalStability,
                 smoothness: flowMetrics.velocitySmoothness,
-                poseScore: avg
+                poseScore: avg,
+                boardKinematicConfidence: boardKinematicConfidence,
+                evidenceCappedScore: avg
             )
             : 1.0
         let modulatedScore = clamp(avg * flowModulationFactor, lower: 0, upper: 100)
+
+        // P0 (2026-09-15) 报告透明度：仅在门控**实际 kill 了上行加成**时标记 gated=true。
+        // 判定 = boardC<0.30 && coherence>70 且未走方案 (c) 低分保护路径。
+        // 语义与 [FlowMetricsCalculator.computeModulation](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift#L325-L354) 内的 gateActive 决策严格一致。
+        // - v4/v6 场景（capped ≥60 且 coherence 高）：gated=true，报告端追加"（走刃证据不足，未加成）"
+        // - v1 场景（capped<60 触发低分保护）：flow ×1.05 实际保留 → gated=false，报告不误标
+        // - v2/v3/v5 场景：coherence 未越阈值或 boardC≥0.30 → gated=false
+        // - 无光流数据（framePairsUsed<2）：gated=nil，报告端不显示门控标记
+        let flowModulationGated: Bool? = {
+            guard flowMetrics.framePairsUsed >= 2 else { return nil }
+            let gateActive = boardKinematicConfidence < flowCalculator.boardKinematicConfidenceGateThreshold
+            let protectionActive = avg < flowCalculator.flowGateLowScoreProtectionThreshold
+            let hasUpwardBoost = flowMetrics.motionCoherence > flowCalculator.coherenceBoostThreshold
+            return gateActive && !protectionActive && hasUpwardBoost
+        }()
 
         // 找最佳/最差帧（仍基于原始姿态分，光流不改变帧级判断）
         var best = (time: 0.0, score: -1.0)
@@ -429,7 +458,8 @@ public class VideoAnalyzer {
             flowFramePairsUsed: flowMetrics.framePairsUsed,
             flowMotionCoherence: flowMetrics.framePairsUsed >= 2 ? flowMetrics.motionCoherence : nil,
             flowDirectionalStability: flowMetrics.framePairsUsed >= 2 ? flowMetrics.directionalStability : nil,
-            flowVelocitySmoothness: flowMetrics.framePairsUsed >= 2 ? flowMetrics.velocitySmoothness : nil
+            flowVelocitySmoothness: flowMetrics.framePairsUsed >= 2 ? flowMetrics.velocitySmoothness : nil,
+            flowModulationGated: flowModulationGated
         )
     }
 
@@ -690,6 +720,39 @@ public class VideoAnalyzer {
     /// 返回由 computeFlowMetrics() 缓存的光流行进方向。
     public func flowTravelDirections() -> [(time: Double, angle: Double, confidence: Double)] {
         return cachedTravelDirections
+    }
+
+    // MARK: - 走刃证据置信度（P0 2026-09-15）
+
+    /// P0 (2026-09-15) Flow Modulation Edge-Confidence Gating：计算走刃证据置信度。
+    ///
+    /// 复用 [BoardDirectionAnalyzer.analyze](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardDirectionAnalyzer.swift#L17-L47) → [summary(from:)](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardDirectionAnalyzer.swift#L231-L258) 得到的 confidence 字段
+    /// （kinematics.confidence 的均值 = center × travel confidence 均值）作为门控信号。
+    ///
+    /// **调用顺序取舍（spec §4.2 方案 A）**：
+    /// - CLI 层 [main.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCLI/main.swift#L140-L143) 仍在 `generateSummary` 之后再次调用 `BoardDirectionAnalyzer.analyze`
+    ///   以取得包括每帧 sideslip / smoothed frames 的完整 `BoardAnalysis`。
+    /// - 这里我们只需要 summary.confidence 一个标量，且 Tick 2 目标是最小侵入切换到 6-param modulator。
+    /// - 因此接受"两次 analyze"作为 P0 成本；下游可将 board 分析下沉到 VideoAnalyzer 时机重构（P1）。
+    ///
+    /// **回退策略**：
+    /// - `flowTravelDirections` 为空或 `summary` 为 nil → 返回 `1.0`（等价无门控，与 Tick 1 旧调用路径行为一致）。
+    /// - 明确不返回 0.0：0.0 会**误触发**门控 kill 上行加成，破坏"缺信号 = 不做判断"的保守语义。
+    ///
+    /// - Parameters:
+    ///   - reliableFrames: 已过滤的可靠姿态帧（由 generateSummary 预计算）。
+    ///   - flowTravelDirections: [computeFlowMetrics](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L663-L688) 缓存的行进方向；生产路径下始终非空（`framePairsUsed >= 2` 已保证）。
+    /// - Returns: `[0.0, 1.0]` 的置信度；无信号时返回 1.0。
+    private func computeBoardKinematicConfidence(
+        from reliableFrames: [DetectionResult],
+        flowTravelDirections: [(time: Double, angle: Double, confidence: Double)]
+    ) -> Double {
+        let analysis = BoardDirectionAnalyzer.analyze(
+            frames: reliableFrames,
+            flowTravelDirections: flowTravelDirections
+        )
+        guard let summary = analysis.summary else { return 1.0 }
+        return summary.confidence
     }
 
     // MARK: - 图像缩放

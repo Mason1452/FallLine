@@ -724,6 +724,13 @@ public struct VideoSummary: Codable {
     public let flowDirectionalStability: Double?
     /// 光流速度平滑度 0-100（Phase 1 实验指标）
     public let flowVelocitySmoothness: Double?
+    /// P0 (2026-09-15) Flow Modulation Edge-Confidence Gating：走刃证据门控是否实际 kill 了上行加成。
+    /// - `true`：`boardKinematicConfidence < 0.30 && coherence > 70` 且未走方案 (c) 低分保护路径，
+    ///   flow ×1.05 加成已被门控钳制到 ×1.00（v4/v6 场景）。
+    /// - `false`：门控条件未满足或无上行加成可 kill（v2/v3/v5 场景，以及 v1 因低分保护实际未被 kill）。
+    /// - `nil`：无光流数据（`framePairsUsed < 2`）或历史归档，报告端不显示门控标记。
+    /// 报告端 [ReportGenerator](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift) 根据此字段追加"（走刃证据不足，未加成）"标记，避免二次计算门控条件。
+    public let flowModulationGated: Bool?
 
     public init(
         averageScore: Double,
@@ -740,7 +747,8 @@ public struct VideoSummary: Codable {
         flowFramePairsUsed: Int? = nil,
         flowMotionCoherence: Double? = nil,
         flowDirectionalStability: Double? = nil,
-        flowVelocitySmoothness: Double? = nil
+        flowVelocitySmoothness: Double? = nil,
+        flowModulationGated: Bool? = nil
     ) {
         self.averageScore = averageScore
         self.bestFrame = bestFrame
@@ -757,6 +765,7 @@ public struct VideoSummary: Codable {
         self.flowMotionCoherence = flowMotionCoherence
         self.flowDirectionalStability = flowDirectionalStability
         self.flowVelocitySmoothness = flowVelocitySmoothness
+        self.flowModulationGated = flowModulationGated
     }
 }
 
