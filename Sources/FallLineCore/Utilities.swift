@@ -299,6 +299,35 @@ public func averageEdgeEvidenceScore(from frames: [DetectionResult]) -> Double? 
     return weightedAverage(values)
 }
 
+/// 全视频复合“走刃质量”加权均值，直接从 poseScore 现算，**不依赖**
+/// 事后才挂到帧上的 `skiMetrics`（CLI 在 `generateSummary` 之后才赋值）。
+///
+/// 计算口径与 [SkiMetricsCalculator.average](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/SkiMetricsCalculator.swift#L82-L117)
+/// 完全一致（calf 0.50 / gravity 0.20 / knee 0.15 / sym 0.10 / stability 0.05），
+/// 因此数值与报告首屏“走刃质量”严格对齐，可直接用于 edge cap 双维兜底。
+/// 返回 nil 表示无可靠 pose 数据。
+public func averageEdgeQualityScore(
+    from frames: [DetectionResult],
+    stability: Double
+) -> Double? {
+    let scores = reliablePoseFrames(from: frames).compactMap(\.poseScore)
+    guard !scores.isEmpty else { return nil }
+    let stabilityConfidence = min(1.0, Double(scores.count) / 5.0)
+    let metrics = scores.map {
+        SkiMetricsCalculator.compute(
+            from: $0,
+            stability: stability,
+            stabilityConfidence: stabilityConfidence
+        )
+    }
+    return weightedAverage(
+        metrics.map {
+            ($0.edgeQualityScore,
+             max(0.001, AnalysisReliability.smoothConfidenceWeight($0.edgeQualityConfidence)))
+        }
+    )
+}
+
 public func stableCarvingBaseline(
     from frames: [DetectionResult],
     motionStability: Double

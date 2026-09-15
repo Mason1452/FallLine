@@ -363,7 +363,8 @@ public class VideoAnalyzer {
         let techniqueCappedAverage = applyEdgeEvidenceCaps(
             score: uncappedAverage,
             reliableFrames: reliableFrames,
-            stableBaseline: stableBaseline
+            stableBaseline: stableBaseline,
+            stability: stabilityScore
         )
         let boardCappedAverage = applyBoardEvidenceCaps(
             score: techniqueCappedAverage,
@@ -478,7 +479,8 @@ public class VideoAnalyzer {
     private func applyEdgeEvidenceCaps(
         score: Double,
         reliableFrames: [DetectionResult],
-        stableBaseline: StableCarvingBaseline?
+        stableBaseline: StableCarvingBaseline?,
+        stability: Double
     ) -> Double {
         // 稳定刻滑基线是低姿态/大倒伏误识别的保护通道，不再用小腿代理二次封顶。
         guard stableBaseline == nil else { return score }
@@ -487,7 +489,17 @@ public class VideoAnalyzer {
             return min(score, 65)
         }
 
-        return min(score, VideoAnalyzer.edgeEvidenceCapValue(for: averageEdgeEvidence))
+        let evidenceCap = VideoAnalyzer.edgeEvidenceCapValue(for: averageEdgeEvidence)
+
+        // §4.1 双维兜底：即便 calfLean 越过 [30,42] ramp（>=42 放行），若复合
+        // “走刃质量”仍低于阈值，说明重心/膝盖/对称拖累，不能直通高分档。
+        let averageEdgeQuality = averageEdgeQualityScore(
+            from: reliableFrames,
+            stability: stability
+        )
+        let edgeQualityCap = VideoAnalyzer.edgeQualityCapValue(for: averageEdgeQuality)
+
+        return min(score, evidenceCap, edgeQualityCap)
     }
 
     /// Piecewise linear ramp 替代旧的 4 档阶梯 cap（P2 悬崖软化，2026-09-11 落地）。
@@ -511,6 +523,38 @@ public class VideoAnalyzer {
         if edge < 42 { return linearRamp(edge, x0: 30, x1: 42, y0: 62, y1: 100) }
         return 100
     }
+
+    /// §4.1 edgeQuality 双维兜底 ramp（2026-09-15 落地）。
+    ///
+    /// 背景：edge-first + sigmoid c=40 后，`calfLeanScore`（即上方 edge 输入）
+    /// 单独越过 [30,42] ramp 就能把综合分拉到 80+，但教练视角的“搓雪弯”样本
+    /// （BAD_ACC）其复合“走刃质量”仅 57 却被放到 83。引入复合 edgeQuality
+    /// 作为第二道独立护栏：
+    ///   - `edgeQuality < 57` → 72（典型搓雪弯，封顶回中级偏上）
+    ///   - `edgeQuality ∈ [57, 61]` → linearRamp(72 → 100)（4 分窄过渡带）
+    ///   - `edgeQuality ≥ 61` → 100（已具备稳定走刃，不额外限制）
+    ///
+    /// 阈值由 18 份样本（12 锚点 + 主 corpus 6）实测分离得到：BAD_ACC=57、
+    /// v4=55 触发兜底，GOOD_A=61 恰好放行保持 86；v2/v3/v6（69-72）无影响。
+    /// `nil`（无可靠数据）不施加额外 cap，由上游 65 cap 兜底。
+    static func edgeQualityCapValue(for edgeQuality: Double?) -> Double {
+        guard let edgeQuality else { return 100 }
+        if edgeQuality < edgeQualityCapLowThreshold { return edgeQualityCapValueLow }
+        if edgeQuality < edgeQualityCapHighThreshold {
+            return linearRamp(
+                edgeQuality,
+                x0: edgeQualityCapLowThreshold,
+                x1: edgeQualityCapHighThreshold,
+                y0: edgeQualityCapValueLow,
+                y1: 100
+            )
+        }
+        return 100
+    }
+
+    static let edgeQualityCapLowThreshold = 57.0
+    static let edgeQualityCapHighThreshold = 61.0
+    static let edgeQualityCapValueLow = 72.0
 
     /// Duration evidence cap 的 piecewise linear ramp（P2 悬崖软化，2026-09-11 落地）。
     ///
