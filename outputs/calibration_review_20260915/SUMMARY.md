@@ -163,13 +163,29 @@ nil                     → 100（由上游 65 cap 兜底）
 
 246 tests 全部通过（新增 6 条 edgeQuality ramp 契约，含锚点回放）。
 
-### 4.2 【高优】knee<75 时动态加权 — 修 MID_FP1 类
-在 [PoseScorer.Weights](../../Sources/FallLineCore/PoseScorer.swift) 里增加 knee 弱势时的临时加权：
+### 4.2 【已分析 · 2026-09-15】knee 动态加权方向错误 + 无稳健分离规则 ⛔（不落地）
+
+把 spec 的 knee 动态加权放到 18 份真实数据上，发现三重问题（分析脚本：[scripts/knee_separability_analysis.py](../../scripts/knee_separability_analysis.py)）：
+
+**(a) 权重转移方向相反**：规则 `knee<75 → w.knee +0.10 / w.calf −0.10` 的单帧效应是 `0.10×(knee−calf)`。目标样本里 knee 反而**高于** calf：
+
+| 样本 | knee | calf | 转移后 Δ | 期望 |
+|---|---:|---:|---:|---|
+| MID_FP1 | 74 | 47 | **+2.7（升到 ~80）** | 应下降 |
+| MID_ACC5 | 72 | 58 | **+1.4（升到 ~83）** | 应回中级 |
+
+**(b) 修正分组后，唯一的分离结构是"析取放行"**：正确语义是"立刃或承压任一证据强即放行，两者皆弱才 cap"（因为教练专业样本 GOOD_A 靠 pressure=79.1，而主 corpus 刻滑样本 v2/v3/v6 靠 edgeQuality=69~72）。网格搜索确实找到 324 组可行阈值（Te≈66.8, Tp≈76.4），模拟结果完美：GOOD_A/MID_ACC8/v2/v3/v6 全保留，BAD_ACC/MID_FP1/MID_ACC5→72，MID_FP2/MID_ACC6/MID_ACC7→75.6，低分样本不被抬分。
+
+**(c) 但该规则不可辩护（故不落地）**：可行窗口极窄、margin 极小——
 
 ```
-if knee < 75 → weights.knee += 0.10, weights.calf -= 0.10
+edge 阈值可行域：     Te ∈ (64.92, 68.62]   宽 3.69
+pressure 阈值可行域： Tp ∈ (75.90, 76.84]   宽 0.94   ← 最小单边 margin 仅 0.44
 ```
-预期效果：MID_FP1 77 → ~72，v4 79 → ~76（可接受，v4 教练无锚点）。
+
+也就是说，"压 BAD_ACC（pressure=75.9）"与"保 v6（pressure=76.8）"取决于 **0.9 分的测量差**，这在 2D 光流/姿态测量的噪声范围内，属对 18 份样本的过拟合。任何 cap 若压 MID_ACC7（教练=中级），其姿态特征在每一维都 ≥ GOOD_A（教练=专业），只能靠这 0.9 分的 pressure 缝隙区分。
+
+**结论**：在当前特征集下不存在稳健的多维硬规则；该问题应留到 §4.4 扩样本（拿到统计分布、而非单点阈值）后再解决。knee 维度本身并非漏判根源（直腿严重的样本 edgeQuality 都已很差、分数已低）。
 
 ### 4.3 【中优】stage classifier 收紧
 把 `avg≥80 → qualitySkiing` 阈值改为 `avg≥82 且 calf≥55 且 sym≥70`，把 advanced 门槛从 `calf≥65` 提到 `calf≥65 && knee≥85 && sym≥75`。预期效果：MID_ACC3/5/6 落回中级偏上，MID_ACC7 也可能被压回高质量档。
