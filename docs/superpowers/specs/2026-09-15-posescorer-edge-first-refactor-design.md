@@ -1,13 +1,21 @@
-# PoseScorer Edge-First 重构设计（草案）
+# PoseScorer Edge-First 重构设计
 
 > 作者：agent  
 > 日期：2026-09-15  
-> 状态：**Approved / Implemented (Tick 1-4)**——所有 tick 已按 spec 落地并通过 corpus replay + 209/209 单测。  
+> 状态：**Landed（2026-09-15）**——Tick 1-4 全部落地并通过 corpus replay；落地后又做了一次 sigmoid 中点微调（c=35 → c=40，见 §5.2）。全量 `swift test` **235/235** 通过，`swift build -c release` 0 warning。  
+> Commit 链：  
+> - Tick 1 权重变量化 `ce751a4`（refactor: PoseScorer.Weights struct）  
+> - Tick 2 权重重分配 `06f5ed7`（feat: edge-first weight redistribution）  
+> - Tick 3 sigmoid 曲线 `48ea262`（feat: sigmoid calfLean score curve，初版 c=35）  
+> - Tick 4 edge cap 放宽 `b584b12`（feat: edge cap fallback-only ramp）  
+> - c=40 微调 `fbeb1da`（feat: retune calfLean sigmoid midpoint 35→40）  
+> - 顶层 corpus 报告刷新 `a60d93e`（chore baseline，c=40 叠加 flow edge-gating）  
 > 关联：  
 > - [Sources/FallLineCore/PoseScorer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseScorer.swift)  
 > - [Sources/FallLineCore/VideoAnalyzer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift)  
 > - [Sources/FallLineCore/Utilities.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift)  
 > - [docs/superpowers/specs/2026-09-11-evidence-cap-ramp-softening-design.md](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-11-evidence-cap-ramp-softening-design.md)  
+> - [docs/superpowers/specs/2026-09-15-flow-modulation-edge-gating-design.md](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-15-flow-modulation-edge-gating-design.md)（edge-first 完成后的下游 flow 门控）  
 > - [annotations/calibration_anchors.md](file:///Users/mingsen/Project/FallLine/annotations/calibration_anchors.md)
 
 ---
@@ -236,28 +244,28 @@ Tick 4 落地后跑真实 Swift 分析器（[.build/release/FallLineCLI](file://
 
 ## 6. 实施 Tick
 
-按 4 个 tick 拆分，每个 tick 都可独立提交、独立回归：
+> 落地状态（2026-09-15）：4 个 tick 全部提交并回归通过；落地后追加一次 c=35→c=40 中点微调（`fbeb1da`，见 §5.2）。下方保留原 tick 设计并标注对应 commit。
 
-### Tick 1 — 权重变量化 + 双入口对齐（前置重构）
+### Tick 1 — 权重变量化 + 双入口对齐（前置重构）✅ `ce751a4`
 - 引入 [`PoseScorer.Weights`](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseScorer.swift) struct，替换 tuple `defaultWeights`/`partialWeights`。
 - 保持现有数值不变，纯类型重构。
 - Test：既有 [PoseScorerTests](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests) 全绿。
 - Corpus：Δ = 0 严格 assert。
 
-### Tick 2 — 新权重落地（0.15/0.25/0.35/0.15/0.10）
+### Tick 2 — 新权重落地（0.15/0.25/0.35/0.15/0.10）✅ `06f5ed7`
 - 只改权重常量。
 - Test：新增 `PoseScorerWeightsSumTests` 断言 5 维权重和恒 = 1.0。
 - Corpus：跑 6 份 replay，验证 P0 指标绿。
 
-### Tick 3 — calfLean sigmoid 曲线
+### Tick 3 — calfLean sigmoid 曲线 ✅ `48ea262`（初版 c=35）→ 微调 c=40 `fbeb1da`
 - [scoreCalfLean](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseScorer.swift#L312-L319) 改为 sigmoid。
-- 新增 `PoseScorerCalfSigmoidTests`：8 个采样点断言（表 §4.2）。
-- Corpus：Δ 在 §5 表格 ±2 范围内。
+- 新增 `PoseScorerCalfSigmoidTests`：8 个采样点断言（表 §4.2，c=40 锚点）。
+- Corpus：Δ 在 §5 表格 ±2 范围内；c=40 微调后见 §5.1 / §5.2 完整对照。
 
-### Tick 4 — Edge cap 放宽 + spec 归档
-- [edgeEvidenceCapValue(for:)](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L475-L482) 改为 §4.3 简化版。
+### Tick 4 — Edge cap 放宽 + spec 归档 ✅ `b584b12`
+- [edgeEvidenceCapValue(for:)](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L475-L482) 改为 §4.3 简化版（fallback-only ramp）。
 - 新增 `EdgeEvidenceCapRelaxedTests` 5 条契约（阈值/单调/连续/兜底/上界）。
-- 更新本 spec `状态: Approved`，写入 [WORK_LOG.md](file:///Users/mingsen/Project/FallLine/WORK_LOG.md) / [delta_update.md](file:///Users/mingsen/Project/FallLine/delta_update.md)。
+- 状态已更新为 Landed（见头部）；corpus 基线报告见 [testvideo/](file:///Users/mingsen/Project/FallLine/testvideo) 顶层与 [_edgefirst_c40/](file:///Users/mingsen/Project/FallLine/testvideo/_edgefirst_c40) / [_review_tick4/](file:///Users/mingsen/Project/FallLine/testvideo/_review_tick4) 归档。
 
 ---
 
@@ -281,13 +289,14 @@ Tick 4 落地后跑真实 Swift 分析器（[.build/release/FallLineCLI](file://
 | symmetry 权重降到 0.10 后 `symmetryScore < 45 → cap 72` 的触发率下降 | 低 | 低 | Symmetry cap 保留原语义，实际触发靠 [calibration_anchors](file:///Users/mingsen/Project/FallLine/annotations/calibration_anchors.md) 复核 |
 | iOS App 的 `SkiAnaylze/SkiAnaylze/Sources/` 复制的 PoseScorer 与 Core 版本漂移 | 中 | 中 | 参考 [REFACTOR_PLAN.md](file:///Users/mingsen/Project/FallLine/REFACTOR_PLAN.md) Phase 2，同步更新 |
 
-### 8.2 待 review 决策
+### 8.2 决策记录（已落地）
 
-1. **权重表**：0.15/0.25/0.35/0.15/0.10 是否可接受？（是否 calfLean 0.35 太激进？备选：0.30）
-2. **Sigmoid 参数**：k/c 是否需要更多样本再定？（备选：先落 Tick 1/2，Tick 3 pending）
-3. **Edge cap 命运**：Tick 4 是"放宽到 30 分兜底"还是"完全移除"？
-4. **iOS App 同步**：本次是否顺手把 SkiAnaylze 复制目录也更新，还是等 SPM 迁移完成？
-5. **Tick 3/4 是否合并**：如果 Tick 3 replay 显示 raw 分区分度足够，Tick 4 可以顺势删除 edge cap；否则 Tick 4 保留兜底。
+1. **权重表**：✅ 采用 0.15/0.25/0.35/0.15/0.10（calfLean 0.35，未用备选 0.30），落地于 Tick 2 `06f5ed7`。
+2. **Sigmoid 参数**：✅ k=0.10，中点经 corpus review 由 c=35 微调为 **c=40**（Tick 3 `48ea262` → 微调 `fbeb1da`，见 §5.2）；中点语义定为"入门—中级刻滑分界（40°=50 分及格）"。
+3. **Edge cap 命运**：✅ Tick 4 选择"**放宽为 fallback-only ramp**"而非完全移除——`edge < 30` 时返回 62 兜底（纯扫雪防误抬），`30–42` 分段线性放行，`≥42` 返回 100 完全放行，见 [edgeEvidenceCapValue(for:)](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L509-L513)。
+4. **iOS App 同步**：⏸️ **本次未同步** [SkiAnaylze/Sources](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/Sources) 复制目录。该副本不含 sigmoid 曲线（Tick 3 起即未同步），属 [AGENTS.md](file:///Users/mingsen/Project/FallLine/AGENTS.md) 记载的已知 duplication debt，等 [REFACTOR_PLAN.md](file:///Users/mingsen/Project/FallLine/REFACTOR_PLAN.md) Phase 2 SPM 迁移统一处理。
+5. **Tick 3/4 是否合并**：未合并，4 个 tick 各自独立提交（`ce751a4`/`06f5ed7`/`48ea262`/`b584b12`），便于 `git revert` 与 bisect。
+6. **后续下游**：edge-first 让 calfLean 成为主导维度后，flow modulation 的 ×1.05 加成在走刃证据不足时缺少护栏，已由独立 spec [flow-modulation-edge-gating](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-15-flow-modulation-edge-gating-design.md)（commit `ab16817`，已 Landed）补齐。
 
 ---
 
