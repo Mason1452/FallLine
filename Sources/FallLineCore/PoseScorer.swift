@@ -47,26 +47,32 @@ public struct PoseScorer {
         }
     }
 
-    /// 默认权重（经验值，总计 1.0）。
+    /// 默认权重（edge-first 重构后，总计 1.0）。
     ///
-    /// 膝盖弯曲权重最高（0.25）：腿部弹性是滑雪所有动作的基础。
-    /// 前倾、小腿、重心各 0.20：三者共同决定姿态质量。
-    /// 对称性 0.15：相对次要——不对称通常是其他问题的表现而非根源。
+    /// Tick 2 (2026-09-15) 落地 spec §4.1：把 `calfLean`（唯一立刃证据）从 0.20
+    /// 升到 0.35，成为最重要单项；对称性 0.15 → 0.10（对称性是表现根源的映射
+    /// 而非根源本身）；`forwardLean` / `gravity` 各 0.20 → 0.15（2D 里区分度
+    /// 有限）；`kneeBend` 维持 0.25（屈膝质量仍是姿态之王）。
+    ///
+    /// 目标：让 `calfLeanScore` 在原始评分里直接主导"扫雪 vs 刻滑"分档，
+    /// 为后续退役 [edgeEvidenceCapValue(for:)](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L475-L482) 让位。
     public static let defaultWeights = Weights(
-        forwardLean: 0.20,
+        forwardLean: 0.15,
         kneeBend: 0.25,
-        calfLean: 0.20,
-        gravity: 0.20,
-        symmetry: 0.15
+        calfLean: 0.35,
+        gravity: 0.15,
+        symmetry: 0.10
     )
 
-    /// 在 partial 可见性下，对称性权重被重新分配。
-    /// 对称性 0.15 → 前倾 +0.05, 膝盖 +0.05, 小腿 +0.05。
+    /// 在 partial 可见性下，对称性权重被均分回其余三维姿态项。
+    ///
+    /// symmetry 0.10 / 3 = 0.0333… 均分到 forwardLean / kneeBend / calfLean。
+    /// gravity 单独走 confidence 通道，不参与对称性再分配。
     public static let partialWeights = Weights(
-        forwardLean: 0.25,
-        kneeBend: 0.30,
-        calfLean: 0.25,
-        gravity: 0.20,
+        forwardLean: 0.15 + 0.10 / 3.0,
+        kneeBend: 0.25 + 0.10 / 3.0,
+        calfLean: 0.35 + 0.10 / 3.0,
+        gravity: 0.15,
         symmetry: 0.0
     )
 
