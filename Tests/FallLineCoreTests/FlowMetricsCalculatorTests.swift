@@ -326,4 +326,289 @@ final class FlowMetricsCalculatorTests: XCTestCase {
         let negativeCalc = FlowMetricsCalculator(sampleInterval: 1.0 / 30.0, flowSampleRadius: -1)
         XCTAssertEqual(negativeCalc.flowSampleRadius, 0, "负值应 clip 到 0（等价 radius=0 回退）")
     }
+
+    // MARK: - P0 (2026-09-15) Flow Modulation Edge-Confidence Gating
+
+    // MARK: 常量与兼容签名
+
+    /// P0: 常量锚定 —— 门控阈值 0.30 与低分保护阈值 60.0 是 spec §4.3 的核心决策数值。
+    /// 若这两个数字被改动，需同步更新 spec §4.3 / §5.1 / §5.3 与所有 replay 脚本。
+    func testEdgeGating_thresholdConstants_matchSpec() {
+        XCTAssertEqual(calculator.boardKinematicConfidenceGateThreshold, 0.30, accuracy: 1e-9,
+                       "门控阈值必须 = 0.30（spec §4.3）；若调整需同步 flow_gating_replay.py")
+        XCTAssertEqual(calculator.flowGateLowScoreProtectionThreshold, 60.0, accuracy: 1e-9,
+                       "低分保护阈值必须 = 60.0（spec §4.3）；若调整需同步 spec §5.3 保护表")
+    }
+
+    /// P0 向后兼容：4-param `computeModulation` 内部转发 `boardKinematicConfidence=1.0`（等价无门控），
+    /// 与旧 4-param 结果字节等价——保证既有 15+ 测试用例与生产调用点（VideoAnalyzer.generateSummary）不受影响。
+    func testEdgeGating_4param_forwardsAsUnGated_legacyEquivalent() {
+        // 覆盖 4 组典型输入：高 coherence / 低 smoothness / 双正 / 中性
+        let cases: [(coh: Double, sm: Double, pose: Double)] = [
+            (85, 60, 60),   // coherence boost only
+            (50, 25, 80),   // smoothness penalty only
+            (85, 25, 60),   // 双负
+            (50, 60, 80)    // 中性
+        ]
+        for c in cases {
+            let legacy = calculator.computeModulation(
+                coherence: c.coh, stability: 50, smoothness: c.sm, poseScore: c.pose
+            )
+            let gated6 = calculator.computeModulation(
+                coherence: c.coh, stability: 50, smoothness: c.sm, poseScore: c.pose,
+                boardKinematicConfidence: 1.0
+            )
+            XCTAssertEqual(legacy, gated6, accuracy: 1e-9,
+                           "boardC=1.0 时 4/6-param 输出必须字节等价，输入 \(c) 实测 legacy=\(legacy) gated=\(gated6)")
+        }
+    }
+
+    /// P0 向后兼容：3-param `computeModulation` 同样转发无门控路径（boardC=1.0, capped=nil），行为不变。
+    func testEdgeGating_3param_forwardsAsUnGated_legacyEquivalent() {
+        let mod3 = calculator.computeModulation(coherence: 85, stability: 50, smoothness: 25)
+        let mod6 = calculator.computeModulation(
+            coherence: 85, stability: 50, smoothness: 25, poseScore: 0,
+            boardKinematicConfidence: 1.0
+        )
+        XCTAssertEqual(mod3, mod6, accuracy: 1e-9)
+        // coherence 85 > 70 → +0.05；smoothness 25 < 40 → -0.05；净 = 1.0
+        XCTAssertEqual(mod3, 1.0, accuracy: 1e-9)
+    }
+
+    // MARK: 门控触发 / 未触发
+
+    /// P0: boardC < 0.30 时上行加成被钳制到 1.0（v4 场景：coherence=98.5 但 boardC=0.157）。
+    func testEdgeGating_boardCBelowThreshold_clampsUpwardBoost() {
+        let mod = calculator.computeModulation(
+            coherence: 98.5, stability: 50, smoothness: 60, poseScore: 80,
+            boardKinematicConfidence: 0.157
+        )
+        // 未 gate 时 coherence>70 → +0.05 → 1.05；gate 后 min(1.05, 1.0) = 1.0
+        XCTAssertEqual(mod, 1.0, accuracy: 1e-9,
+                       "boardC=0.157<0.30 应把 +0.05 加成钳制到 1.0，实测 \(mod)")
+    }
+
+    /// P0: boardC ≥ 0.30 时门控不触发，上行加成正常保留（v3/v5 场景：boardC 0.552/0.510）。
+    func testEdgeGating_boardCAboveThreshold_preservesBoost() {
+        for boardC in [0.30, 0.510, 0.552, 0.751, 1.0] {
+            let mod = calculator.computeModulation(
+                coherence: 85, stability: 50, smoothness: 60, poseScore: 80,
+                boardKinematicConfidence: boardC
+            )
+            XCTAssertEqual(mod, 1.05, accuracy: 1e-9,
+                           "boardC=\(boardC)≥0.30 门控不应触发，应保留 +0.05 加成，实测 \(mod)")
+        }
+    }
+
+    /// P0: 边界值 boardC=0.30 恰好 **未触发**门控（严格 `<`），阈值单调性守护。
+    /// 该测试直接锁定 `<` 而非 `<=` 语义——若未来改成 `<=` 会引入不易发现的边界回归。
+    func testEdgeGating_atExactThreshold_isNotGated() {
+        let mod = calculator.computeModulation(
+            coherence: 85, stability: 50, smoothness: 60, poseScore: 80,
+            boardKinematicConfidence: 0.30
+        )
+        XCTAssertEqual(mod, 1.05, accuracy: 1e-9, "boardC=0.30 恰好等于阈值不触发（严格 <）")
+    }
+
+    /// P0: 门控**保留下行修正** —— boardC 低时 smoothness penalty 仍然生效。
+    /// 语义：走刃证据不足时禁止加分，但不阻止塌陷降级信号扣分（保守原则，spec §3 非目标）。
+    func testEdgeGating_gateOnlyBlocksUpward_preservesDownwardPenalty() {
+        let mod = calculator.computeModulation(
+            coherence: 50, stability: 50, smoothness: 25, poseScore: 80,
+            boardKinematicConfidence: 0.20
+        )
+        // coherence 50 无 boost；smoothness 25<40 → -0.05；gate 触发但 min(0.95, 1.0) = 0.95
+        XCTAssertEqual(mod, 0.95, accuracy: 1e-9,
+                       "门控只钳制上行加成，下行 penalty 必须保留，实测 \(mod)")
+    }
+
+    /// P0: 双负叠加时门控无副作用 —— coherence 加成 + smoothness penalty 相互抵消到 1.0，
+    /// gate 触发后 min(1.0, 1.0) 仍是 1.0，验证 gate 逻辑在"非严格上行"边界处的正确行为。
+    func testEdgeGating_neutralModulation_gateIsNoOp() {
+        let mod = calculator.computeModulation(
+            coherence: 85, stability: 50, smoothness: 25, poseScore: 80,
+            boardKinematicConfidence: 0.20
+        )
+        // +0.05 - 0.05 = 1.0；gate 触发但 min(1.0, 1.0) 无变化
+        XCTAssertEqual(mod, 1.0, accuracy: 1e-9)
+    }
+
+    // MARK: 方案 (c) 低分保护
+
+    /// P0 方案 (c)：`evidenceCappedScore < 60` 时禁用门控，保留上行加成（v1 场景）。
+    /// v1 corpus：coherence=86.59, smoothness=78.82, boardC=0.239, capped=57.78 → 保护生效 → 1.05
+    func testEdgeGating_lowScoreProtection_disablesGate() {
+        let mod = calculator.computeModulation(
+            coherence: 86.593, stability: 50, smoothness: 78.821, poseScore: 48.807,
+            boardKinematicConfidence: 0.239,
+            evidenceCappedScore: 57.78
+        )
+        XCTAssertEqual(mod, 1.05, accuracy: 1e-9,
+                       "capped=57.78<60 应关闭门控，保留 +0.05 加成（v1 保护场景）")
+    }
+
+    /// P0 方案 (c)：`evidenceCappedScore ≥ 60` 时保护不触发，门控继续 kill（v4/v6 场景）。
+    /// v4 corpus：capped=78.80 ≥60 → 保护关闭 → 门控 kill；v6 corpus 同理。
+    func testEdgeGating_highScore_protectionInactive_gateStillKills() {
+        // v4: capped=78.80
+        let modV4 = calculator.computeModulation(
+            coherence: 98.539, stability: 50, smoothness: 58.075, poseScore: 64.010,
+            boardKinematicConfidence: 0.157,
+            evidenceCappedScore: 78.80
+        )
+        XCTAssertEqual(modV4, 1.0, accuracy: 1e-9,
+                       "v4 capped=78.80≥60 保护关闭，门控 kill +0.05 加成")
+
+        // v6: capped=90.16
+        let modV6 = calculator.computeModulation(
+            coherence: 70.727, stability: 50, smoothness: 63.240, poseScore: 79.315,
+            boardKinematicConfidence: 0.280,
+            evidenceCappedScore: 90.16
+        )
+        // coherence 70.727 > 70 → +0.05；boardC 0.280<0.30；capped=90.16≥60 保护不触发；gate → 1.0
+        XCTAssertEqual(modV6, 1.0, accuracy: 1e-9,
+                       "v6 capped=90.16≥60 保护关闭，门控 kill +0.05 加成")
+    }
+
+    /// P0 方案 (c)：低分保护阈值恰好边界 `capped=60` **不触发保护**（严格 `<`）。
+    func testEdgeGating_protectionAtExactThreshold_isInactive() {
+        let mod = calculator.computeModulation(
+            coherence: 85, stability: 50, smoothness: 60, poseScore: 60,
+            boardKinematicConfidence: 0.20,
+            evidenceCappedScore: 60.0
+        )
+        // capped=60 严格不 <60，保护不触发 → gate 生效 → 加成被 kill
+        XCTAssertEqual(mod, 1.0, accuracy: 1e-9, "capped=60 边界值不触发保护（严格 <）")
+    }
+
+    /// P0 方案 (c)：`evidenceCappedScore=nil` 关闭低分保护路径 —— 与仅 5-param 严格门控等价。
+    /// 供 4-param 与旧 `applyModulation` 转发使用；测试锁定"nil 语义 = 严格门控"契约。
+    func testEdgeGating_nilCappedScore_equalsStrictGating() {
+        let modNil = calculator.computeModulation(
+            coherence: 85, stability: 50, smoothness: 60, poseScore: 80,
+            boardKinematicConfidence: 0.20,
+            evidenceCappedScore: nil
+        )
+        let modOmitted = calculator.computeModulation(
+            coherence: 85, stability: 50, smoothness: 60, poseScore: 80,
+            boardKinematicConfidence: 0.20
+        )
+        XCTAssertEqual(modNil, modOmitted, accuracy: 1e-9, "nil 与省略参数应完全等价")
+        XCTAssertEqual(modNil, 1.0, accuracy: 1e-9, "nil 应走严格门控路径（无保护），boardC=0.20 → kill 到 1.0")
+    }
+
+    // MARK: applyModulation 新签名端到端
+
+    /// P0 端到端：新签名 `applyModulation(poseScore:metrics:boardKinematicConfidence:evidenceCappedScore:)`
+    /// 复现 v4 corpus 数值 —— capped=78.80 × gated_factor=1.0 = 78.80（spec §5 门控后综合分）。
+    func testApplyModulation_endToEnd_v4Corpus_gatedToBaseScore() {
+        let metrics = FlowMetrics(
+            motionCoherence: 98.539, directionalStability: 50,
+            velocitySmoothness: 58.075, framePairsUsed: 10
+        )
+        let result = calculator.applyModulation(
+            poseScore: 78.80,
+            metrics: metrics,
+            boardKinematicConfidence: 0.157,
+            evidenceCappedScore: 78.80
+        )
+        // v4: gate 生效，保护不触发 → factor=1.0 → 78.80 × 1.0 = 78.80
+        XCTAssertEqual(result, 78.80, accuracy: 0.01,
+                       "v4 端到端复现 spec §5：capped 78.80 × ×1.000 = 78.80")
+    }
+
+    /// P0 端到端：v1 低分保护复现 —— capped=57.78 × 1.05 = 60.669（spec §5.3 方案 (c) 主选值）。
+    func testApplyModulation_endToEnd_v1Corpus_protectionKeepsBoost() {
+        let metrics = FlowMetrics(
+            motionCoherence: 86.593, directionalStability: 50,
+            velocitySmoothness: 78.821, framePairsUsed: 10
+        )
+        let result = calculator.applyModulation(
+            poseScore: 57.78,
+            metrics: metrics,
+            boardKinematicConfidence: 0.239,
+            evidenceCappedScore: 57.78
+        )
+        // v1 保护：capped<60 → 保护开 → factor=1.05 → 57.78 × 1.05 = 60.669
+        XCTAssertEqual(result, 60.669, accuracy: 0.01,
+                       "v1 端到端复现 spec §5.3 方案 (c)：capped 57.78 × ×1.050 = 60.669")
+    }
+
+    /// P0 端到端：v6 门控生效复现 —— capped=90.16 × 1.0 = 90.16（spec §5 门控后综合分）。
+    func testApplyModulation_endToEnd_v6Corpus_gatedToBaseScore() {
+        let metrics = FlowMetrics(
+            motionCoherence: 70.727, directionalStability: 50,
+            velocitySmoothness: 63.240, framePairsUsed: 10
+        )
+        let result = calculator.applyModulation(
+            poseScore: 90.16,
+            metrics: metrics,
+            boardKinematicConfidence: 0.280,
+            evidenceCappedScore: 90.16
+        )
+        XCTAssertEqual(result, 90.16, accuracy: 0.01,
+                       "v6 端到端复现 spec §5：capped 90.16 × ×1.000 = 90.16")
+    }
+
+    /// P0 端到端：framePairsUsed<2 早退兜底 —— 门控参数不影响早退路径。
+    func testApplyModulation_fewFramesGuard_precedesGate() {
+        let metrics = FlowMetrics(
+            motionCoherence: 100, directionalStability: 100,
+            velocitySmoothness: 100, framePairsUsed: 1
+        )
+        let result = calculator.applyModulation(
+            poseScore: 78.80,
+            metrics: metrics,
+            boardKinematicConfidence: 0.05,   // 极低 boardC 但应先早退
+            evidenceCappedScore: 78.80
+        )
+        XCTAssertEqual(result, 78.80, accuracy: 0.01,
+                       "framePairsUsed<2 必须早退，门控参数不参与计算")
+    }
+
+    /// P0 端到端：塌陷双 0 熔断优先于门控 —— stability=0 且 smoothness=0 → 直接返回原分。
+    func testApplyModulation_collapsedFlowMeltdown_precedesGate() {
+        let metrics = FlowMetrics(
+            motionCoherence: 90, directionalStability: 0,
+            velocitySmoothness: 0, framePairsUsed: 10
+        )
+        let result = calculator.applyModulation(
+            poseScore: 80,
+            metrics: metrics,
+            boardKinematicConfidence: 0.05,
+            evidenceCappedScore: 80
+        )
+        XCTAssertEqual(result, 80, accuracy: 0.01,
+                       "flow 塌陷双 0 熔断先于门控生效，返回原分")
+    }
+
+    /// P0 端到端：新签名的 clamp 上下界与旧签名一致。
+    func testApplyModulation_clampBoundaries_unchanged() {
+        // 极端上界：coherence 极高 + 保护开 → 1.05 × 95 = 99.75 (未超 100)
+        let boostMetrics = FlowMetrics(
+            motionCoherence: 100, directionalStability: 100,
+            velocitySmoothness: 100, framePairsUsed: 10
+        )
+        let boostResult = calculator.applyModulation(
+            poseScore: 95,
+            metrics: boostMetrics,
+            boardKinematicConfidence: 0.10,   // gate 触发
+            evidenceCappedScore: 55.0         // 但保护开
+        )
+        // 保护关闭门控 → factor=1.05 → 95 × 1.05 = 99.75
+        XCTAssertEqual(boostResult, 99.75, accuracy: 0.01)
+    }
+
+    /// P0 端到端：旧签名 `applyModulation(poseScore:metrics:)` 转发到新签名后行为字节等价。
+    /// 覆盖历史测试契约：`testApplyModulation_normalCase` 期望 73.5 的行为不能被 P0 破坏。
+    func testApplyModulation_legacySignature_stillReturns73_5() {
+        let metrics = FlowMetrics(
+            motionCoherence: 85, directionalStability: 85,
+            velocitySmoothness: 60, framePairsUsed: 10
+        )
+        // 旧签名内部 boardC=1.0 + capped=nil → 门控不触发 → factor=1.05
+        let result = calculator.applyModulation(poseScore: 70, metrics: metrics)
+        XCTAssertEqual(result, 73.5, accuracy: 0.01,
+                       "旧签名 P0 转发后必须与 P7-A 时代行为字节等价（73.5）")
+    }
 }

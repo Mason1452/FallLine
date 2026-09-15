@@ -74,6 +74,25 @@ public struct FlowMetricsCalculator {
     public let stabilityBoostScoreCap: Double = 75.0
     public let stabilityPenaltyScoreFloor: Double = 75.0
 
+    /// P0 (2026-09-15) Flow Modulation Edge-Confidence Gating：走刃证据门控阈值。
+    /// 与 [ReportGenerator](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift) 显示"走刃暂不评分"的行为边界对齐 = 0.30。
+    /// 依据（主 corpus 6 份实测，见 spec §1.2）：
+    ///   - 触发 flow ×1.05 加成的 v1/v4/v6：boardKinematicConfidence 分别为 0.239/0.157/0.280，全部 <0.30。
+    ///   - 未触发加成的 v3/v5（boardKinematicConfidence 0.552/0.510）不受影响。
+    ///   - v2 (boardC=0.292 触发门控但 flow=×1.000) 为零成本假阳性，门控无副作用。
+    /// 阈值敏感度扫描（spec §5.1）显示 0.30/0.32/0.35/0.40/0.50 触发集完全相同——0.30 是最小有效阈值。
+    public let boardKinematicConfidenceGateThreshold: Double = 0.30
+
+    /// P0 R1 (2026-09-15) 方案 (c) 低分保护阈值：当 `evidenceCappedScore < 60` 时禁用门控，
+    /// 允许 flow ×1.05 加成保留，避免"中级 60 → 初级 58"的跨档伤害。
+    /// 依据（spec §5.3 实测）：
+    ///   - v1 capped=57.78 <60 → 保护生效，60.67 → 60.67（保留 flow ×1.05）
+    ///   - v4 capped=78.80 ≥60 → 保护不触发 → 门控继续 kill flow ×1.05
+    ///   - v6 capped=90.16 ≥60 → 保护不触发 → 门控继续 kill flow ×1.05
+    /// 语义：`evidenceCapped` 已是 evidence cap 语义链下游产物，与 gating 决策同根，
+    /// 优于用 `rawPose` 作为分数约束语义。
+    public let flowGateLowScoreProtectionThreshold: Double = 60.0
+
     /// 光流置信度分母（帧率归一化后的像素位移基准）。
     ///
     /// 原实现使用 `magnitude / 8.0`，其中 8.0 是在 5fps（sampleInterval=0.2s）下经验值。
@@ -207,15 +226,36 @@ public struct FlowMetricsCalculator {
 
     // MARK: - 调制公式
 
-    /// 应用光流调制到原始姿态评分。
-    /// 内部调用带 poseScore 上下文的 computeModulation（P7-A 后两者行为一致）。
+    /// 应用光流调制到原始姿态评分（**旧签名，无门控**）。
+    /// 内部转发到新签名 `applyModulation(poseScore:metrics:boardKinematicConfidence:evidenceCappedScore:)`，
+    /// `boardKinematicConfidence` 默认传 1.0（等价无门控），`evidenceCappedScore` 传 nil（禁用低分保护）。
+    /// 保留仅为兼容既有调用点与历史测试；生产路径应改用带 boardKinematicConfidence 的版本。
+    public func applyModulation(poseScore: Double, metrics: FlowMetrics) -> Double {
+        return applyModulation(
+            poseScore: poseScore,
+            metrics: metrics,
+            boardKinematicConfidence: 1.0,
+            evidenceCappedScore: nil
+        )
+    }
+
+    /// P0 (2026-09-15) 应用光流调制到原始姿态评分（**带走刃证据门控**）。
     ///
     /// 塌陷熔断（2026-09-01 稳定性收敛，配合 scripts/stability_audit.py 量化基线）：
     /// 当 directionalStability 与 velocitySmoothness 同时为 0 时视为
     /// FlowMetricsCalculator 内部降级信号（见 computeCircularStability 的
     /// count>=2 门以及 velocitySmoothness 空样本回落），不参与调制。
     /// 单个指标为 0 由 computeModulation 内部的 > 0 守卫处理。
-    public func applyModulation(poseScore: Double, metrics: FlowMetrics) -> Double {
+    ///
+    /// - Parameters:
+    ///   - boardKinematicConfidence: [BoardDirectionAnalyzer.summary(from:)](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardDirectionAnalyzer.swift#L231-L258) 的 `confidence` 字段（center × travel confidence 均值）。
+    ///   - evidenceCappedScore: 走过 evidence cap 后的分数；`nil` 关闭方案 (c) 低分保护，等价严格门控。
+    public func applyModulation(
+        poseScore: Double,
+        metrics: FlowMetrics,
+        boardKinematicConfidence: Double,
+        evidenceCappedScore: Double? = nil
+    ) -> Double {
         guard metrics.framePairsUsed >= 2 else { return poseScore }
         if metrics.directionalStability == 0 && metrics.velocitySmoothness == 0 {
             return poseScore
@@ -224,40 +264,75 @@ public struct FlowMetricsCalculator {
             coherence: metrics.motionCoherence,
             stability: metrics.directionalStability,
             smoothness: metrics.velocitySmoothness,
-            poseScore: poseScore
+            poseScore: poseScore,
+            boardKinematicConfidence: boardKinematicConfidence,
+            evidenceCappedScore: evidenceCappedScore
         )
         return clamp(poseScore * factor, lower: 0, upper: 100)
     }
 
-    /// 根据三个光流指标计算调制系数（不含稳定性阈值——P7-A 起 stability 不再参与调制）。
-    /// 供基础测试使用；生产环境使用带 poseScore 的重载版本（行为一致）。
+    /// 根据三个光流指标计算调制系数（**基础测试入口，无 poseScore/boardKinematicConfidence 语义**）。
+    /// P7-A 起 stability 不再参与调制；本方法保留仅作单测基础契约验证。
+    /// 生产环境应使用 5-param（含 poseScore）或 6-param（含 boardKinematicConfidence）版本。
     public func computeModulation(
         coherence: Double,
         stability: Double,
         smoothness: Double
     ) -> Double {
-        var modulation = 1.0
-        if coherence > coherenceBoostThreshold {
-            modulation += coherenceBoostAmount
-        }
-        if smoothness > 0 && smoothness < smoothnessPenaltyThreshold {
-            modulation -= smoothnessPenaltyAmount
-        }
-        return clamp(modulation, lower: 0.87, upper: 1.13)
+        return computeModulation(
+            coherence: coherence,
+            stability: stability,
+            smoothness: smoothness,
+            poseScore: 0,
+            boardKinematicConfidence: 1.0,
+            evidenceCappedScore: nil
+        )
     }
 
-    /// 带姿态分上下文的完整调制系数（生产环境使用此版本）。
+    /// 带姿态分上下文的调制系数（**4-param 兼容签名**）。
     ///
-    /// P7-A (2026-09-08)：stability 分支已退役（见常量区注释），本函数与
-    /// 3-param 版本行为一致，stability / poseScore 参数仅为 API 兼容保留。
-    /// smoothness = 0 视为塌陷降级信号：penalty 分支加 > 0 守卫，
-    /// 避免"工具坏了所以扣分"的错误逻辑。塌陷双 0 由 applyModulation 早退熔断兜底。
+    /// P7-A (2026-09-08)：stability 分支已退役（见常量区注释），stability / poseScore 参数仅为 API 兼容保留。
+    /// P0 (2026-09-15) 之后本签名不含门控，`boardKinematicConfidence` 默认传 1.0（等价无门控）——
+    /// 生产路径应改用 6-param 版本以启用走刃证据门控。
     public func computeModulation(
         coherence: Double,
         stability: Double,
         smoothness: Double,
         poseScore: Double
     ) -> Double {
+        return computeModulation(
+            coherence: coherence,
+            stability: stability,
+            smoothness: smoothness,
+            poseScore: poseScore,
+            boardKinematicConfidence: 1.0,
+            evidenceCappedScore: nil
+        )
+    }
+
+    /// P0 (2026-09-15) Flow Modulation Edge-Confidence Gating 核心：带走刃证据门控的调制系数。
+    ///
+    /// 逻辑（spec §4.3）：
+    /// 1. `coherence > 70` → +0.05（上行加成）
+    /// 2. `0 < smoothness < 40` → −0.05（塌陷降级信号）
+    /// 3. **门控**：`boardKinematicConfidence < 0.30` 且 (evidenceCappedScore 未提供 或 ≥ 60) 时，
+    ///    令 `modulation = min(modulation, 1.0)`——只允许向下修正，不允许向上加成。
+    /// 4. 最终 clamp 到 [0.87, 1.13]。
+    ///
+    /// **方案 (c) 低分保护**：当 `evidenceCappedScore < 60` 时禁用门控——低分样本保留 flow 平滑修正，
+    /// 避免跨"中级 60 / 初级 58"档位边界。语义：`evidenceCapped` 是 evidence cap 语义链下游，
+    /// 与 gating 决策同根；`nil` 值等价严格门控（无低分保护，用于基础测试与旧调用点转发）。
+    ///
+    /// smoothness = 0 视为塌陷降级信号：penalty 分支加 `> 0` 守卫，避免"工具坏了所以扣分"的错误逻辑。
+    /// 塌陷双 0 由 applyModulation 早退熔断兜底。
+    public func computeModulation(
+        coherence: Double,
+        stability: Double,
+        smoothness: Double,
+        poseScore: Double,
+        boardKinematicConfidence: Double,
+        evidenceCappedScore: Double? = nil
+    ) -> Double {
         var modulation = 1.0
         if coherence > coherenceBoostThreshold {
             modulation += coherenceBoostAmount
@@ -265,6 +340,17 @@ public struct FlowMetricsCalculator {
         if smoothness > 0 && smoothness < smoothnessPenaltyThreshold {
             modulation -= smoothnessPenaltyAmount
         }
+
+        // P0 (2026-09-15) Edge-confidence gating + 方案 (c) 低分保护
+        var gateActive = boardKinematicConfidence < boardKinematicConfidenceGateThreshold
+        if let capped = evidenceCappedScore,
+           capped < flowGateLowScoreProtectionThreshold {
+            gateActive = false
+        }
+        if gateActive {
+            modulation = min(modulation, 1.0)
+        }
+
         return clamp(modulation, lower: 0.87, upper: 1.13)
     }
 

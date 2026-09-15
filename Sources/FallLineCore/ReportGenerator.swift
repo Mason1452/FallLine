@@ -339,7 +339,11 @@ public struct ReportGenerator {
            let bestThird = output.summary.bestThirdAverageScore,
            let capped = output.summary.evidenceCappedScore,
            let flowFactor = output.summary.flowModulationFactor {
-            lines.append("  🧪 评分拆解：原始均分 \(String(format: "%.1f", raw)) · 最佳前1/3 \(String(format: "%.1f", bestThird)) · 证据封顶后 \(String(format: "%.1f", capped)) · 光流系数 ×\(String(format: "%.2f", flowFactor))")
+            let flowText = ReportGenerator.formatFlowFactorText(
+                flowFactor: flowFactor,
+                gated: output.summary.flowModulationGated
+            )
+            lines.append("  🧪 评分拆解：原始均分 \(String(format: "%.1f", raw)) · 最佳前1/3 \(String(format: "%.1f", bestThird)) · 证据封顶后 \(String(format: "%.1f", capped)) · 光流系数 \(flowText)")
         }
         if weakEdgeEvidence {
             lines.append("  ⚠️ 持续立刃证据不足：前倾和屈膝不能单独推高综合分，已按初中级表现封顶")
@@ -930,6 +934,22 @@ public struct ReportGenerator {
         case TurnPhase.transition.rawValue: return 3
         default: return .max
         }
+    }
+
+    /// P0 (2026-09-15) Flow Modulation Edge-Confidence Gating 报告透明度。
+    /// 将"光流系数字段"抽为纯静态帮助函数，便于单测直接验证 3 个语义分支：
+    /// - `gated == true`：`×1.05（走刃证据不足，未加成）`——走刃证据不足场景（v4/v6）
+    /// - `gated == false`：`×1.05`——未触发门控或走低分保护路径
+    /// - `gated == nil`：`×1.05`——无光流数据 / 历史归档
+    /// 门控判定的 truth-source 是 [VideoAnalyzer.generateSummary](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L405-L418)，
+    /// 报告端仅根据字段渲染文案，避免二次计算导致语义漂移。
+    /// internal 以供 [ReportGeneratorFlowGatingTests](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/ReportGeneratorFlowGatingTests.swift) 直接验证。
+    static func formatFlowFactorText(flowFactor: Double, gated: Bool?) -> String {
+        var text = "×\(String(format: "%.2f", flowFactor))"
+        if gated == true {
+            text += "（走刃证据不足，未加成）"
+        }
+        return text
     }
 
     private static func highlightMomentLine(_ moment: HighlightMoment) -> String {
