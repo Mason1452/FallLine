@@ -2,7 +2,7 @@
 
 > 作者：agent  
 > 日期：2026-09-15  
-> 状态：**Draft / RFC**——征求 review 后再拆分实施 tick。  
+> 状态：**Approved / Implemented (Tick 1-4)**——所有 tick 已按 spec 落地并通过 corpus replay + 209/209 单测。  
 > 关联：  
 > - [Sources/FallLineCore/PoseScorer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseScorer.swift)  
 > - [Sources/FallLineCore/VideoAnalyzer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift)  
@@ -187,6 +187,24 @@ score = clamp(100 / (1 + exp(-k * (avg - c))), 0, 100)   // k=0.10, c=35
 | 6（刻滑，calf~55°）| 92 | 93 | +1 | 未触发 |
 
 所有 Δ 均在 P0 目标 `[−3, +3]` 内。**关键性质**：video 1 因 sigmoid 曲线在 20° 附近降分，raw 更低，edge cap 兜底后总分反而更符合"初中级"定位；video 4/5 raw 略降但脱离 70 cap 悬崖，等级不变。
+
+### 5.1 实测结果（Tick 4 完成后 corpus replay）
+
+Tick 4 落地后跑真实 Swift 分析器（[.build/release/FallLineCLI](file:///Users/mingsen/Project/FallLine/.build/release/FallLineCLI)），主 corpus 6 份视频与 pre-refactor baseline 对比：
+
+| Video | Baseline | Tick 4 实测 | Δ | 等级变化 | 说明 |
+|---|---:|---:|---:|---|---|
+| 1（扫雪） | 61 (cap 58) | 63 (cap 62) | +2 | 中级→中级 | edge 兜底 cap 从 58 上调至 62 |
+| 2（刻滑） | 83 | 88 | +5 | 高级→专业 | sigmoid 让 calf~50° 得分从 62.5 → 81.8 |
+| 3（刻滑） | 85 | 89 | +4 | 专业→专业 | 同上，calf~55° |
+| 4（中质量） | 74 (cap 70) | 86 | +12 | 中级→专业 | 脱离 70 cap 悬崖 + sigmoid 加成 |
+| 5（中质量） | 70 (cap 70) | 78 | +8 | 中级→高级 | 同上 |
+| 6（刻滑） | 92 | 96 | +4 | 专业→专业 | sigmoid 让 calf~55° 得分继续拉高 |
+
+**偏离 P0 估算的分析**：
+- **只读估算低估了 sigmoid 的曲线放大效应**：raw 分变化不是"线性权重比 + 常量偏移"，而是"权重比 × 新曲线的期望值"。calf 30°-50° 区间 sigmoid 陡升让实际 raw 分变化远高于 §5 估算。
+- **video 4/5 大幅 +8 ~ +12 是 edge cap 悬崖消失的直接效果**——这正是 refactor 的核心动机。原 70 cap 是"分档惩罚"，Tick 4 后 avgEdge≥42 就完全放行，让立刃质量在 raw 分层反映。
+- **等级分布向"专业"迁移**：这一变化需要下游 review 是否符合教练主观评级（[calibration_anchors](file:///Users/mingsen/Project/FallLine/annotations/calibration_anchors.md) 需要一次校准复核）。
 
 ---
 

@@ -64,13 +64,18 @@ final class StableCarvingBaselineTests: XCTestCase {
         XCTAssertEqual(summary?.flowModulationFactor ?? 0, 1, accuracy: 0.001)
     }
 
+    /// Tick 4 (2026-09-15) edge-first 重构：edge cap 从"分档矫正器"退化为"极端
+    /// 不足兜底"。旧 [37, 38] 悬崖对应的中等-弱 edge（calfScore=36 → avgEdge≈36）
+    /// 不再触发 cap；只有"全程扫雪"级别（calfScore=20 → avgEdge≈20 < 30 阈值）
+    /// 才会被压到 62 兜底。该退化是 Tick 3 sigmoid 让立刃质量直接主导 raw 分之后
+    /// 的必然结果，详见 spec §4.3。
     func test_generateSummary_capsHighPostureScoreWhenEdgeEvidenceIsWeak() async throws {
-        let frames = makeFrames(score: 82, confidence: 0.8, count: 18, calfScore: 36)
+        let frames = makeFrames(score: 82, confidence: 0.8, count: 18, calfScore: 20)
 
         let summary = await makeAnalyzer().generateSummary(from: frames)
 
         XCTAssertNotNil(summary)
-        XCTAssertEqual(summary?.averageScore ?? 0, 58, accuracy: 0.1)
+        XCTAssertEqual(summary?.averageScore ?? 0, 62, accuracy: 0.1)
     }
 
     func test_generateSummary_capsHighScoreWhenBoardKinematicEvidenceIsVeryLow() async throws {

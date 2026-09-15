@@ -3,17 +3,20 @@ import XCTest
 
 /// EvidenceCapRampTests
 ///
-/// 锁死 P2 悬崖软化的 edge evidence cap piecewise linear 契约：
-/// [VideoAnalyzer.edgeEvidenceCapValue(for:)](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L482-L494)。
+/// 锁死 edge evidence cap 与 duration evidence cap 的 piecewise linear 契约。
 ///
-/// 契约来源（同 [设计文档 §4.2](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-11-evidence-cap-ramp-softening-design.md)）：
+/// Edge cap（Tick 4 edge-first 重构版）：[VideoAnalyzer.edgeEvidenceCapValue(for:)](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L479-L483)。
+///
+/// Tick 4 (2026-09-15) 之后的契约（同 [设计文档 §4.3](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-15-posescorer-edge-first-refactor-design.md)）：
 ///  1. 单调不减：edge 升高不会让 cap 降低
-///  2. 平台点等价：`cap(38)=65`, `cap(42)=70`, `cap(50)=100`，即阈值命中样本得分与旧阶梯完全一致
-///  3. 过渡带中点：`cap(37.5)=61.5`, `cap(41)=67.5`, `cap(46)=85`
-///  4. 边界钳位：edge < 37 均为 58；edge ≥ 50 均为 100
-///  5. corpus replay 兜底：主 corpus 6 份的 (edge, ramp_cap) 与设计文档 §5.1 对齐
+///  2. 平台点：`cap(30 - ε) = 62`, `cap(42) = 100`
+///  3. 过渡带中点：`cap(36) = 81`（介于 62 与 100 之间线性插值）
+///  4. 边界钳位：edge < 30 均为 62；edge ≥ 42 均为 100
+///  5. 连续：段与段的交接点严格连续（无 jump）
+///  6. 斜率上界：全域 ≤ (100-62)/12 = 3.1667 分/edge 分
 ///
-/// 单测策略参考：[OneEuroFilterConfidenceAwareTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/OneEuroFilterConfidenceAwareTests.swift)。
+/// Duration cap（P2 悬崖软化，2026-09-11 落地）：[VideoAnalyzer.durationCapValue(for:)](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L499-L528)
+/// 契约保持不变，见下半区。
 final class EvidenceCapRampTests: XCTestCase {
 
     // MARK: - Contract 1：单调不减
@@ -33,59 +36,57 @@ final class EvidenceCapRampTests: XCTestCase {
         }
     }
 
-    // MARK: - Contract 2：平台点等价（阈值命中样本与旧阶梯完全一致）
+    // MARK: - Contract 2：平台点（阈值命中样本）
 
-    func test_plateauValues_matchStairStep() {
-        // 阈值右侧的平台点：值必须与旧阶梯完全相等
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 38.0), 65.0, accuracy: 1e-9)
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 39.0), 65.0, accuracy: 1e-9)
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 40.0), 65.0, accuracy: 1e-9)
+    func test_plateauValues_matchTickFourSpec() {
+        // 下平台：`edge < 30` → 62
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: -1.0), 62.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 0.0), 62.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 15.94), 62.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 29.99), 62.0, accuracy: 1e-6)
 
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 42.0), 70.0, accuracy: 1e-9)
+        // ramp 起点 30 → 62（含）
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 30.0), 62.0, accuracy: 1e-9)
 
+        // 上平台：`edge >= 42` → 100
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 42.0), 100.0, accuracy: 1e-9)
         XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 50.0), 100.0, accuracy: 1e-9)
         XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 65.0), 100.0, accuracy: 1e-9)
         XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 100.0), 100.0, accuracy: 1e-9)
-
-        // 平台平坦区（非 ramp 段）：应严格等于本段 cap
-        let epsilon = 1e-6
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 37.0 - epsilon), 58.0, accuracy: 1e-6)
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 38.0 + epsilon), 65.0, accuracy: 1e-6)
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 40.0 - epsilon), 65.0, accuracy: 1e-6)
-        // 注意：42 - epsilon 处于 [40, 42] ramp 末端，≈ 70（不是旧阶梯的 65），
-        //       这正是 P2 悬崖软化的设计意图（阈值内侧向下延伸的连续过渡）。
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 42.0 - epsilon), 70.0, accuracy: 1e-5)
     }
 
     // MARK: - Contract 3：过渡带中点（线性插值验证）
 
     func test_rampMidpoints_arePreciseLinearInterpolation() {
-        // [37, 38] 中点：(58 + 65) / 2 = 61.5
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 37.5), 61.5, accuracy: 1e-9)
+        // ramp 段 [30, 42]，跨度 12 → cap 从 62 升到 100（跨度 38）
+        // 中点 36：62 + 0.5 * 38 = 81
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 36.0), 81.0, accuracy: 1e-9)
 
-        // [40, 42] 中点：(65 + 70) / 2 = 67.5
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 41.0), 67.5, accuracy: 1e-9)
+        // 25%（x=33）：62 + 0.25 * 38 = 71.5
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 33.0), 71.5, accuracy: 1e-9)
 
-        // [42, 50] 中点：(70 + 100) / 2 = 85
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 46.0), 85.0, accuracy: 1e-9)
+        // 75%（x=39）：62 + 0.75 * 38 = 90.5
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 39.0), 90.5, accuracy: 1e-9)
 
-        // [42, 50] 早段 25%：70 + 0.25 * 30 = 77.5
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 44.0), 77.5, accuracy: 1e-9)
+        // 早段小步长 x=31：62 + (1/12) * 38 = 65.1667
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 31.0), 62.0 + 38.0 / 12.0, accuracy: 1e-9)
 
-        // [42, 50] 晚段 75%：70 + 0.75 * 30 = 92.5
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 48.0), 92.5, accuracy: 1e-9)
+        // 晚段小步长 x=41：62 + (11/12) * 38 = 96.8333
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 41.0), 62.0 + 38.0 * 11.0 / 12.0, accuracy: 1e-9)
     }
 
     // MARK: - Contract 4：边界钳位
 
     func test_boundaryClamping_belowMinPlateau_returnsMinCap() {
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: -1.0), 58.0, accuracy: 1e-9)
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 0.0), 58.0, accuracy: 1e-9)
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 15.94), 58.0, accuracy: 1e-9) // 主 corpus video 1/OFF
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 36.99), 58.0, accuracy: 1e-6)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: -1.0), 62.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 0.0), 62.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 15.94), 62.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 25.0), 62.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 29.99), 62.0, accuracy: 1e-6)
     }
 
     func test_boundaryClamping_aboveMaxPlateau_returnsHundred() {
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 42.0), 100.0, accuracy: 1e-9)
         XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 50.0), 100.0, accuracy: 1e-9)
         XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 63.7), 100.0, accuracy: 1e-9)
         XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 100.0), 100.0, accuracy: 1e-9)
@@ -94,92 +95,58 @@ final class EvidenceCapRampTests: XCTestCase {
 
     // MARK: - Contract 5：corpus replay 兜底
     //
-    // 数据来源：主 corpus 6 份视频（OFF + ON 各 6 份）的 `averageEdgeEvidenceScore`
-    // 与 P2 设计文档 §5.1 表格。当 ramp 曲线未来被再次调整时，这里的对齐值会立
-    // 即报警。
+    // 数据来源：Tick 3 corpus replay 的 raw `averageEdgeEvidenceScore`。sigmoid
+    // 让 edge 分整体上移，大多数样本已跨过 42 平台。旧版 [42, 50] ramp 段对现
+    // 有 corpus 的“惩罚”被 Tick 4 明确豁免。
 
-    func test_corpusReplay_matchesDesignSpec() {
-        // 平台样本：ramp 与 stair 完全等价 → cap = 100
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 65.01), 100.0, accuracy: 1e-9) // video 2/OFF
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 64.69), 100.0, accuracy: 1e-9) // video 2/ON
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 60.95), 100.0, accuracy: 1e-9) // video 3/OFF
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 61.48), 100.0, accuracy: 1e-9) // video 3/ON
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 63.70), 100.0, accuracy: 1e-9) // video 6/OFF
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 62.31), 100.0, accuracy: 1e-9) // video 6/ON
-
-        // 落在 [42, 50] 悬崖区的样本
-        // video 4/OFF: edge=50.06 → 已在平台，cap=100
+    func test_corpusReplay_matchesTickFourSpec() {
+        // 高分平台样本（Tick 3 后 corpus，edge >= 42 → cap = 100）
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 65.01), 100.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 63.70), 100.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 60.95), 100.0, accuracy: 1e-9)
         XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 50.06), 100.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 45.90), 100.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 42.47), 100.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 42.01), 100.0, accuracy: 1e-9)
 
-        // video 4/ON: edge=45.90 → 70 + (45.90-42)/8 * 30 = 70 + 14.625 = 84.625
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 45.90), 84.625, accuracy: 1e-6)
+        // 极端不足兜底样本（video 1 类型：Vision 长期只识别扫雪站姿）
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 15.94), 62.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 15.81), 62.0, accuracy: 1e-9)
 
-        // video 5/OFF: edge=42.47 → 70 + (42.47-42)/8 * 30 = 70 + 1.7625 = 71.7625
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 42.47), 71.7625, accuracy: 1e-6)
-
-        // video 5/ON: edge=42.01 → 70 + (42.01-42)/8 * 30 = 70 + 0.0375 = 70.0375
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 42.01), 70.0375, accuracy: 1e-6)
-
-        // 强 cap 段样本
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 15.94), 58.0, accuracy: 1e-9) // video 1/OFF
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 15.81), 58.0, accuracy: 1e-9) // video 1/ON
+        // 过渡带样本探针：如果未来出现 avgEdge=35 的样本，cap 应为
+        // 62 + (35-30)/12 * 38 = 62 + 15.833 = 77.833
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 35.0), 62.0 + 5.0 / 12.0 * 38.0, accuracy: 1e-6)
     }
 
     // MARK: - Contract 6：连续性（相邻段的边界值必须相等）
 
     func test_continuity_atSegmentBoundaries() {
-        // 段与段的交接点必须严格连续（无 jump）
         let epsilon = 1e-9
 
-        // 在 37 处：左极限 = 平台 58，右极限 = linear 起点 58
+        // 在 30 处：左极限 = 平台 62，右极限 = linear 起点 62
         XCTAssertEqual(
-            VideoAnalyzer.edgeEvidenceCapValue(for: 37.0 - epsilon),
-            VideoAnalyzer.edgeEvidenceCapValue(for: 37.0),
+            VideoAnalyzer.edgeEvidenceCapValue(for: 30.0 - epsilon),
+            62.0,
             accuracy: 1e-6
         )
-        // 在 38 处：左极限 = linear 终点 65，右极限 = 平台 65
-        XCTAssertEqual(
-            VideoAnalyzer.edgeEvidenceCapValue(for: 38.0 - epsilon),
-            65.0,
-            accuracy: 1e-6
-        )
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 38.0), 65.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 30.0), 62.0, accuracy: 1e-9)
 
-        // 在 40 处：左极限 = 平台 65，右极限 = linear 起点 65
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 40.0), 65.0, accuracy: 1e-9)
-        XCTAssertEqual(
-            VideoAnalyzer.edgeEvidenceCapValue(for: 40.0 + epsilon),
-            65.0,
-            accuracy: 1e-6
-        )
-
-        // 在 42 处：左极限 = linear 终点 70，右极限 = linear 起点 70
+        // 在 42 处：左极限 = linear 终点 100，右极限 = 平台 100
         XCTAssertEqual(
             VideoAnalyzer.edgeEvidenceCapValue(for: 42.0 - epsilon),
-            70.0,
-            accuracy: 1e-6
-        )
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 42.0), 70.0, accuracy: 1e-9)
-
-        // 在 50 处：左极限 = linear 终点 100，右极限 = 平台 100
-        XCTAssertEqual(
-            VideoAnalyzer.edgeEvidenceCapValue(for: 50.0 - epsilon),
             100.0,
             accuracy: 1e-6
         )
-        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 50.0), 100.0, accuracy: 1e-9)
+        XCTAssertEqual(VideoAnalyzer.edgeEvidenceCapValue(for: 42.0), 100.0, accuracy: 1e-9)
     }
 
     // MARK: - Contract 7：斜率上界（防止未来调参失控）
 
     func test_slope_isBounded() {
-        // 各 ramp 段的理论斜率：
-        //   [37, 38]  : (65-58)/1 = 7.0  ← 全曲线最大
-        //   [40, 42]  : (70-65)/2 = 2.5
-        //   [42, 50]  : (100-70)/8 = 3.75
-        // 平台段斜率恒为 0。允许 1e-3 数值误差，兜住未来调参不至于失控（>7）。
+        // 唯一 ramp 段 [30, 42] 的理论斜率：(100 - 62) / 12 = 3.1667
+        // 平台段斜率恒为 0。允许 1e-3 数值误差。
         let h = 1e-4
-        let maxAllowedSlope = 7.0 + 1e-3
+        let maxAllowedSlope = (100.0 - 62.0) / 12.0 + 1e-3
         let sampleStart = -1.0
         let sampleEnd = 60.0
         let step = 0.05
@@ -187,7 +154,7 @@ final class EvidenceCapRampTests: XCTestCase {
         var x = sampleStart
         while x <= sampleEnd {
             // 跳过段边界的“数值不可导”点，避开 h 邻域
-            let atBoundary = [37.0, 38.0, 40.0, 42.0, 50.0].contains(where: { abs(x - $0) < 2 * h })
+            let atBoundary = [30.0, 42.0].contains(where: { abs(x - $0) < 2 * h })
             if !atBoundary {
                 let dy = VideoAnalyzer.edgeEvidenceCapValue(for: x + h)
                     - VideoAnalyzer.edgeEvidenceCapValue(for: x - h)

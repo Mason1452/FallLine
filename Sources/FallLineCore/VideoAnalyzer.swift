@@ -462,22 +462,23 @@ public class VideoAnalyzer {
 
     /// Piecewise linear ramp 替代旧的 4 档阶梯 cap（P2 悬崖软化，2026-09-11 落地）。
     ///
-    /// 设计动机：旧阶梯在 `< 50 → 70` 与 `>= 50 → 100` 之间存在 30 分悬崖，任何
-    /// 使 `averageEdgeEvidence` 微幅越阈的改动（如 α 平滑）都会引发跨档突变。ramp
-    /// 版按“阈值右侧保持原 cap；阈值内侧向下延伸过渡带”原则重构：
-    ///   - 阈值 38（悬崖 7 分, 58→65）→ 过渡带 [37, 38]
-    ///   - 阈值 42（悬崖 5 分, 65→70）→ 过渡带 [40, 42]
-    ///   - 阈值 50（悬崖 30 分, 70→100）→ **整段跨越** [42, 50]
-    /// 保证：单调不减、导数有界（最大斜率 30/8 = 3.75 分/edge 分）、阈值命中点
-    /// 与旧函数完全一致，主 corpus 6 份 replay 中平台样本 Δ = 0。
+    /// Tick 4 (2026-09-15) edge-first 重构：Tick 2 权重重分配 + Tick 3 sigmoid
+    /// 让 `calfLeanScore` 已经在 raw 分层就主导"扫雪 vs 刻滑"，edge cap 不再充当
+    /// 分档矫正器，退居为**极端不足兜底**（仅在 avgEdge 极低时才启动）。
     ///
-    /// 详见 [docs/superpowers/specs/2026-09-11-evidence-cap-ramp-softening-design.md](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-11-evidence-cap-ramp-softening-design.md)。
+    /// 新曲线（旧 3 段悬崖 → 单段兜底 ramp）：
+    ///   - `edge < 30` → 62（保守封顶，等价旧 sparseReliableScoreCap）
+    ///   - `edge ∈ [30, 42]` → linearRamp(62 → 100)（12 分过渡带）
+    ///   - `edge ≥ 42` → 100（无 cap）
+    ///
+    /// 阈值 30 = sigmoid 下"平均 calf ≈ 27°"，代表全程扫雪；阈值 42 = "平均
+    /// calf ≈ 33°"，代表已经具备基础立刃能力。旧曲线（37/38/40/42/50）已被
+    /// Tick 3 sigmoid 的 raw 分变化淘汰。
+    ///
+    /// 详见 [docs/superpowers/specs/2026-09-15-posescorer-edge-first-refactor-design.md](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-15-posescorer-edge-first-refactor-design.md) §4.3。
     static func edgeEvidenceCapValue(for edge: Double) -> Double {
-        if edge < 37 { return 58 }
-        if edge < 38 { return linearRamp(edge, x0: 37, x1: 38, y0: 58, y1: 65) }
-        if edge < 40 { return 65 }
-        if edge < 42 { return linearRamp(edge, x0: 40, x1: 42, y0: 65, y1: 70) }
-        if edge < 50 { return linearRamp(edge, x0: 42, x1: 50, y0: 70, y1: 100) }
+        if edge < 30 { return 62 }
+        if edge < 42 { return linearRamp(edge, x0: 30, x1: 42, y0: 62, y1: 100) }
         return 100
     }
 
