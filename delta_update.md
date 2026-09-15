@@ -14,6 +14,77 @@
 
 ## 变更
 
+### 2026-09-15（方向 α：edgeQuality 正式取代 sideslip 走刃语义）
+
+**本轮性质**：Foot-Plant 诊断证伪（同日上一轮 [footplant_diagnose.py](file:///Users/mingsen/Project/FallLine/scripts/footplant_diagnose.py)）后落地的替代方向——把走刃结论从"依赖 sideslip 几何量"改为"由姿态派生的 edgeQuality 承担"。改动**只发生在报告展示/语义层**，综合分链路（flow 门控 + 62 分时长 cap 仍独立消费 `boardKinematicConfidence`）零改动。
+
+**A. 报告核心语义（[ReportGenerator.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift)）**
+- 走刃行命名从"走刃质量 / 走刃倾向"双轨**统一为恒定"走刃质量"**（[L302-L312](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift#L302-L312)），不再据 `averageSideslipAngle` 是否存在切换命名。
+- `edgeConfidence` 直接使用 `ski.edgeQualityConfidence`——不再与 `boardKinematicConfidence` 取 min。旧实现导致 v1/v2/v4/v6（几何置信度 0.16-0.29）的走刃行被错误压成"暂不评分"；现按姿态派生置信度正常展示。反向契约：`edgeQualityConfidence` 不足时仍"暂不评分"，几何高置信度不得补救。
+- 板身方向段（[L968-L979](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift#L968-L979)）：删除 `boardKinematicsLabel`（"沿板身移动/走刃倾向/横滑偏多/以横滑为主"）及 `carvingConfidence` 展示，sideslip 以中性的"**板身-行进夹角（2D 几何）**"保留为原始诊断，行末标注"原始诊断，不代表走刃/搓雪"，段末标注"结论以走刃质量为准，本段不参与评分"。段标题改"🏂 板身方向（几何诊断）"。
+- **JSON 字段保留承诺**：`averageSideslipAngle` / `carvingConfidence` 字段仍在 [BoardAnalysisSummary](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L626-L646) 产物中输出（供 debug / 诊断脚本消费），只是报告不再作走刃结论使用。
+
+**B. 契约测试（[ReportGeneratorEdgeQualitySemanticsTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/ReportGeneratorEdgeQualitySemanticsTests.swift)，5 条用例）**
+1. `test_edgeRow_isReliable_whenGeometryConfidenceIsLow`——姿态置信度 0.80、几何 0.10 时，走刃行必须正常给分（v1/v4/v6 修复场景）。
+2. `test_edgeRow_isNotScored_whenEdgeQualityConfidenceIsLow_evenIfGeometryIsHigh`——反向契约：edgeQualityConfidence=0.20 时几何 0.90 不得补救。
+3. `test_edgeName_isAlways走刃质量_whenBoardSummaryAbsent`——无 board summary 时命名仍恒定"走刃质量"（旧"走刃倾向"下线）。
+4. `test_boardSection_isRawGeometryDiagnostic_only`——板身段只保留中性几何夹角，不出现"横滑角/走刃置信/沿板身移动/以横滑为主/有走刃倾向"。
+5. `test_boardSection_withoutSideslip_saysAngleUnavailable`——sideslip 缺失时展示"暂不估计板身-行进夹角"，不出现"横滑角"。
+
+**C. 主 corpus 6 份 release 端到端回放（综合分不变契约）**
+
+| 视频 | avgScore 基线→新 | edgeScore | edgeConf | boardConf | sideslip° | gated |
+|---|---|---|---|---|---|---|
+| v1 | 60.67 → 60.67 | 36.60 | 0.75 | 0.24 | 44.2 | False |
+| v2 | 86.53 → 86.53 | 72.08 | 0.57 | 0.29 | 50.5 | False |
+| v3 | 88.13 → 88.13 | 68.62 | 0.69 | 0.55 | 50.3 | False |
+| v4 | 78.80 → 78.80 | 55.02 | 0.58 | 0.16 | 45.3 | True |
+| v5 | 73.86 → 73.86 | 52.15 | 0.65 | 0.51 | 39.4 | False |
+| v6 | 90.16 → 90.16 | 71.58 | 0.65 | 0.28 | 51.3 | True |
+
+- 全部 JSON 字段（rawPose/bestThird/evidenceCapped/flowFactor/gated/edgeScore/edgeConf/boardConf/sideslip 9 项）逐字段 bit-identical，gated 集合仍为 {v4, v6}。仅 `testvideo/{1..6}.md` 按新语义刷新——v1 走刃行由"暂不评分"恢复为"走刃质量 37/100 · 搓雪为主 · 置信度 75/100"；6 份板身段标题全部改为"🏂 板身方向（几何诊断）"，行文改为"板身-行进夹角（2D 几何）xx° · 几何置信度 xx/100 · 原始诊断，不代表走刃/搓雪"。
+
+**验证**：`swift build` 0 warning；`swift test` **240 tests, 0 failures**（新增 5 条 α 契约用例）；主 corpus 6 份 release 端到端回放综合分字段级 bit-identical。
+
+**遗留**：
+- iOS 副本 [SkiAnaylze/SkiAnaylze/Sources](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/Sources) 未同步 α 报告文案，随 [REFACTOR_PLAN.md](file:///Users/mingsen/Project/FallLine/REFACTOR_PLAN.md) Phase 2 处理。
+- 方向 α 只完成"从走刃语义中拆走 sideslip"，并未修复 sideslip 2D 几何本身的 42-53° 系统偏差；如需修复 sideslip 数值本身，需升级关键点拓扑（3D 骨架 / 板身分割），不在本轮范围。
+
+---
+
+### 2026-09-15（评分确定性 repeatability 探针 + 30fps 实验结论）
+
+**本轮性质**：先给出 30fps 采样实验结论（用户实测：**效果不好，暂缓**，未产生代码变更），随后落地对标 SportsReflector 方法的评分确定性探针。仅新增脚本 + 文档，无 FallLineCore 代码变更。
+
+**A. 30fps 原生采样实验：不采纳（暂缓）**
+- 此前 [Hard Constraint](file:///Users/mingsen/Project/FallLine/AGENTS.md) 登记"5fps → 30fps"，用户完成对照实验后反馈**效果不好**，本轮决定暂不切换默认采样率、代码维持 5fps。
+- 具体失败形态（抖动/耗时/分数漂移）及对照数据未留档；后续若重启该方向，需先补对照实验数据。
+
+**B. repeatability 探针（新增脚本，确定性基线 SD=0.000）**
+- 新增 [scripts/repeatability_probe.py](file:///Users/mingsen/Project/FallLine/scripts/repeatability_probe.py)：同一视频 N 次全新 release CLI 进程（独立临时目录 + symlink，不污染 testvideo/），抽取 averageScore/raw/bestThird/capped/flowMod/scoreStdDev/boardConfidence 等 9 字段统计 mean·sample-SD·range·uniq；对剔除 `videoPath` 的 JSON 算 SHA256 判 bit-level 确定性；`--deep` 逐帧对比 `frames[].poseScore.totalScore` 报首个分歧帧。对标 SportsReflector 公开基线 ±3.0 pts（10 次重复）。
+- 全量结果（主 corpus v1-v6 × 10 = 60 次 release 运行，单进程 17s/视频）：
+
+  | 视频 | mean | SD | range | 确定性 |
+  |---|---|---|---|---|
+  | v1 | 60.67 | 0.000 | 0.000 | bit-identical ✅ |
+  | v2 | 86.53 | 0.000 | 0.000 | bit-identical ✅ |
+  | v3 | 88.13 | 0.000 | 0.000 | bit-identical ✅ |
+  | v4 | 78.80 | 0.000 | 0.000 | bit-identical ✅ |
+  | v5 | 73.86 | 0.000 | 0.000 | bit-identical ✅ |
+  | v6 | 90.16 | 0.000 | 0.000 | bit-identical ✅ |
+
+- **最大跨次 SD = 0.000 pts（PASS，基线 ±3.0）**；6 份视频 10 次运行的完整 JSON（除 videoPath）SHA256 均只有 1 个唯一值；`--deep` 帧级 totalScore 全部一致。
+- 解释：[VideoAnalyzer](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L202) 的 task group 虽然并发分析帧批次，但结果按索引顺序回收、下游全部为顺序浮点归约；Vision 请求在固定输入上输出确定，熔断（3 连败）在相同输入序列下也确定。因此并发架构没有引入跨次非确定性。
+- 用法：`python3 scripts/repeatability_probe.py`（默认 6×10）、`-n 3 testvideo/1.MP4`（冒烟）、`--build`（先 release 构建）、`--deep --keep-workdir`（排查分歧帧）。完整日志：`/tmp/fallline_repeatability_20260915.log`（临时目录，不入库）。
+
+**验证**：探针脚本冒烟（v1 ×3 --deep）+ 全量 60 次运行 exit 0；无 Core 代码变更，未跑 swift test（测试数维持 235）。
+
+**遗留**：
+- SD=0 是"固定输入 + 同一二进制"的进程间确定性；尚未覆盖跨设备、跨 macOS 版本、跨 Xcode/Swift 工具链的维度。
+- 探针只验证了主 corpus 6 份；后续若引入自适应抽帧/多线程归约顺序变化，需重跑本探针守门。
+
+---
+
 ### 2026-09-15（PoseScorer edge-first 重构收尾 + flow 走刃置信度门控）
 
 **本轮性质**：两条关联的评分线在同一天闭环并推送 origin/main。前半段是更早开始、此前未写 delta 的 **PoseScorer edge-first 重构**（Tick 1-4 + 一次 sigmoid 中点微调 + spec 归档）；后半段是 edge-first 完成后补上的**下游护栏**——flow modulation 走刃置信度门控。两份 spec 均转 Landed。

@@ -1,6 +1,11 @@
 # FallLine Work Log
 
-## Current State (2026-09-15 PoseScorer edge-first 重构 + flow 走刃门控 已落地并推送)
+## Current State (2026-09-15 方向 α edgeQuality 取代 sideslip 语义 已落地)
+
+**方向 α（Foot-Plant 诊断证伪后的替代方向）**：走刃结论正式由姿态派生的 `edgeQualityScore/Confidence` 承担，sideslip 几何量降级为原始诊断（不参与走刃语义、不参与评分、报告显式标注）。改动**只发生在展示/语义层**，综合分链路（flow 门控 + 62 分时长 cap 仍独立消费 `boardKinematicConfidence`）零改动。
+- 触发依据：[scripts/footplant_diagnose.py](file:///Users/mingsen/Project/FallLine/scripts/footplant_diagnose.py) 证伪低速锚定假设——低速窗 sideslip 反而更大、boardAngle 帧跳无改善、sideslip 与 edgeQuality 弱相关；确认 2D 光流方向不携带质量信息，与 P8-A 退役 sideslip cap 同根因。
+- [ReportGenerator.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift#L302-L312)：命名恒定"走刃质量"（旧双轨"走刃质量/走刃倾向"下线），`edgeConfidence` 直接用 `ski.edgeQualityConfidence`（不再与 `boardKinematicConfidence` 取 min，v1/v2/v4/v6 走刃行从"暂不评分"恢复正常给分）；[boardSummaryLine](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift#L968-L979) 重写为"板身-行进夹角（2D 几何）· 原始诊断，不代表走刃/搓雪"，删除 `boardKinematicsLabel`。
+- 契约测试：[ReportGeneratorEdgeQualitySemanticsTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/ReportGeneratorEdgeQualitySemanticsTests.swift) 5 条用例锁定"几何低置信度不再压制走刃行"、"edgeQualityConfidence 低时几何高置信度不得补救"、命名恒定、sideslip 段无走刃语义。
 
 **PoseScorer edge-first 重构（把 calfLean 立刃证据从"外部 cap"升级为评分主导维度，commit `ce751a4`→`b584b12` + 微调 `fbeb1da`）**：
 - Tick 1 `ce751a4` [PoseScorer.Weights](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseScorer.swift) struct 前置重构（数值不变）；Tick 2 `06f5ed7` 权重重分配 lean/knee/calf/gravity/symmetry = 0.15/0.25/**0.35**/0.15/**0.10**（calf 主导、symmetry 降到 0.10）；Tick 3 `48ea262` calfLean 改 sigmoid；Tick 4 `b584b12` edge cap 放宽为 fallback-only ramp。
@@ -14,13 +19,16 @@
 
 **当前主 corpus 顶层分数**（c=40 叠加 gating，[testvideo/](file:///Users/mingsen/Project/FallLine/testvideo)）：v1 61 · v2 87 · v3 88 · v4 79 · v5 74 · v6 90（edge-first 前基线 61/83/85/74/70/92）。对照归档：[_review_tick4](file:///Users/mingsen/Project/FallLine/testvideo/_review_tick4)(c=35)、[_edgefirst_c40](file:///Users/mingsen/Project/FallLine/testvideo/_edgefirst_c40)(c=40 无门控)、[_tick4_gated](file:///Users/mingsen/Project/FallLine/testvideo/_tick4_gated)(c=40+门控)。
 
-**验证状态**：`swift build` 0 warning；`swift test` **235 tests, 0 failures**（新增 sigmoid/权重/edge-ramp/门控/透明度契约）。9 个 commit 已 fast-forward 推送 origin/main（`37932b5..21a24f8`）。
+**评分确定性基线（2026-09-15 探针，未提交）**：新增 [scripts/repeatability_probe.py](file:///Users/mingsen/Project/FallLine/scripts/repeatability_probe.py)，对标 SportsReflector ±3.0 pts 方法（同视频 ×10 次全新 release 进程）。主 corpus 6×10=60 次运行**全部 bit-identical**（JSON 剔除 videoPath 后 SHA256 唯一），最大跨次 **SD=0.000**，`--deep` 逐帧 totalScore 也全部一致。结论：task group 并发 + Vision 熔断在固定输入下不引入跨次非确定性；分数变化只能来自代码/输入/工具链变化，跨次实验对比可信。该基线作为后续重构（自适应抽帧、归约并行化等）的守门探针。
+
+**验证状态**：`swift build` 0 warning；`swift test` **240 tests, 0 failures**（本轮新增 [ReportGeneratorEdgeQualitySemanticsTests](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/ReportGeneratorEdgeQualitySemanticsTests.swift) 5 条契约用例）；主 corpus 6 份 release 重跑 → 综合分及 rawPose/bestThird/evidenceCapped/flowFactor/gated/edgeScore/edgeConf/boardConf/sideslip 全部字段与基线**逐字段 bit-identical**，仅 md 报告文案按 α 契约刷新。9 个 commit 已 fast-forward 推送 origin/main（`37932b5..21a24f8`）；本轮方向 α 提交待推送。
 
 **下一步候选**（不阻塞）：
-- 采样率 5fps → 视频原生 30fps（深度研究确认 200ms 帧间隔 → 20° 膝角误差）。
+- ~~采样率 5fps → 视频原生 30fps~~：**已实验，用户判定效果不好，暂缓**（2026-09-15），代码维持 5fps；重启需先补对照数据。
+- ~~Foot-Plant Stabilisation~~：**已诊断证伪**（2026-09-15，见 [footplant_diagnose.py](file:///Users/mingsen/Project/FallLine/scripts/footplant_diagnose.py)）——低速窗 sideslip 反而更大、与 edgeQuality 弱相关；改走**方向 α**（本轮落地，见 Current State），走刃语义正式移交 edgeQuality。
 - **calibration anchors 教练标注校准复核**：edge-first 后等级分布向"专业"迁移（v2 83→87、v3 85→88），需对照 [calibration_anchors.md](file:///Users/mingsen/Project/FallLine/annotations/calibration_anchors.md) 主观评级确认；建议扩主 corpus（仅 6 份）到 [SkiAnaylze/testvideo/](file:///Users/mingsen/Project/FallLine/SkiAnaylze/testvideo/)。
-- iOS 副本 [SkiAnaylze/Sources](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/Sources) 未同步 sigmoid/权重（已知 duplication debt），随 [REFACTOR_PLAN.md](file:///Users/mingsen/Project/FallLine/REFACTOR_PLAN.md) Phase 2 SPM 迁移统一处理。
-- travelAngle 输出链路精简（P8-A 已退役 sideslip 高分 cap，横滑角仅展示且标注"不参与评分"）。
+- iOS 副本 [SkiAnaylze/Sources](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/Sources) 未同步 sigmoid/权重 + 方向 α 报告文案（已知 duplication debt），随 [REFACTOR_PLAN.md](file:///Users/mingsen/Project/FallLine/REFACTOR_PLAN.md) Phase 2 SPM 迁移统一处理。
+- 关键点拓扑升级（3D 骨架 / 板身分割）以修复 sideslip 2D 几何偏差，方向 α 只是把 sideslip 从走刃语义中拆走、并未修复几何测量本身。
 
 ## Previous State (2026-09-10 P6-B / P6-B-r3 / P9-A / P9-B 已落地)
 
