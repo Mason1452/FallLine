@@ -442,16 +442,7 @@ public class VideoAnalyzer {
 
     private func applyEvidenceCaps(score: Double, reliableFrames: [DetectionResult]) -> Double {
         let reliableDuration = sampledDuration(fromTimes: reliableFrames.map(\.time))
-        if reliableDuration < AnalysisReliability.sparseReliableScoreDuration {
-            return min(score, 55)
-        }
-        if reliableDuration < AnalysisReliability.limitedReliableScoreDuration {
-            return min(score, 65)
-        }
-        if reliableDuration < AnalysisReliability.fullReliableScoreDuration {
-            return min(score, 78)
-        }
-        return score
+        return min(score, VideoAnalyzer.durationCapValue(for: reliableDuration))
     }
 
     private func applyEdgeEvidenceCaps(
@@ -466,16 +457,79 @@ public class VideoAnalyzer {
             return min(score, 65)
         }
 
-        if averageEdgeEvidence < 38 {
-            return min(score, 58)
+        return min(score, VideoAnalyzer.edgeEvidenceCapValue(for: averageEdgeEvidence))
+    }
+
+    /// Piecewise linear ramp 替代旧的 4 档阶梯 cap（P2 悬崖软化，2026-09-11 落地）。
+    ///
+    /// 设计动机：旧阶梯在 `< 50 → 70` 与 `>= 50 → 100` 之间存在 30 分悬崖，任何
+    /// 使 `averageEdgeEvidence` 微幅越阈的改动（如 α 平滑）都会引发跨档突变。ramp
+    /// 版按“阈值右侧保持原 cap；阈值内侧向下延伸过渡带”原则重构：
+    ///   - 阈值 38（悬崖 7 分, 58→65）→ 过渡带 [37, 38]
+    ///   - 阈值 42（悬崖 5 分, 65→70）→ 过渡带 [40, 42]
+    ///   - 阈值 50（悬崖 30 分, 70→100）→ **整段跨越** [42, 50]
+    /// 保证：单调不减、导数有界（最大斜率 30/8 = 3.75 分/edge 分）、阈值命中点
+    /// 与旧函数完全一致，主 corpus 6 份 replay 中平台样本 Δ = 0。
+    ///
+    /// 详见 [docs/superpowers/specs/2026-09-11-evidence-cap-ramp-softening-design.md](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-11-evidence-cap-ramp-softening-design.md)。
+    static func edgeEvidenceCapValue(for edge: Double) -> Double {
+        if edge < 37 { return 58 }
+        if edge < 38 { return linearRamp(edge, x0: 37, x1: 38, y0: 58, y1: 65) }
+        if edge < 40 { return 65 }
+        if edge < 42 { return linearRamp(edge, x0: 40, x1: 42, y0: 65, y1: 70) }
+        if edge < 50 { return linearRamp(edge, x0: 42, x1: 50, y0: 70, y1: 100) }
+        return 100
+    }
+
+    /// Duration evidence cap 的 piecewise linear ramp（P2 悬崖软化，2026-09-11 落地）。
+    ///
+    /// 与 [edgeEvidenceCapValue(for:)](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L475-L482)
+    /// 同型，但用户输入是“视频总时长”，短片段本身属于结构性证据不足，**不宜整段跨越**
+    /// （4s → 8s 匀速涨分会鼓励拍空镜）。折中方案：只在阈值**右侧** 0.5s 做小过渡带，
+    /// 消除 “5.00s ↔ 4.99s 差 10 分” 的极端悬崖：
+    ///   - 阈值 5.0s（悬崖 10 分, 55→65）→ 过渡带 [5.0, 5.5]
+    ///   - 阈值 8.0s（悬崖 13 分, 65→78）→ 过渡带 [8.0, 8.5]
+    ///   - 阈值 12.0s（悬崖 22 分, 78→100）→ 过渡带 [12.0, 12.5]
+    ///
+    /// 主 corpus 6 份视频最短时长 11.60s（video 5），与最近的过渡带 [12.0, 12.5]
+    /// 之间隔 0.40s，**没有样本落入 ramp 区**。本改动是**结构性防御**，不为当前
+    /// corpus 服务；预期 replay 全 delta = 0。
+    ///
+    /// 详见 [docs/superpowers/specs/2026-09-11-evidence-cap-ramp-softening-design.md](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-11-evidence-cap-ramp-softening-design.md) §4.2.A。
+    static func durationCapValue(for duration: Double) -> Double {
+        if duration < AnalysisReliability.sparseReliableScoreDuration { return 55 }
+        if duration < AnalysisReliability.sparseReliableScoreDuration + 0.5 {
+            return linearRamp(
+                duration,
+                x0: AnalysisReliability.sparseReliableScoreDuration,
+                x1: AnalysisReliability.sparseReliableScoreDuration + 0.5,
+                y0: 55, y1: 65
+            )
         }
-        if averageEdgeEvidence < 42 {
-            return min(score, 65)
+        if duration < AnalysisReliability.limitedReliableScoreDuration { return 65 }
+        if duration < AnalysisReliability.limitedReliableScoreDuration + 0.5 {
+            return linearRamp(
+                duration,
+                x0: AnalysisReliability.limitedReliableScoreDuration,
+                x1: AnalysisReliability.limitedReliableScoreDuration + 0.5,
+                y0: 65, y1: 78
+            )
         }
-        if averageEdgeEvidence < 50 {
-            return min(score, 70)
+        if duration < AnalysisReliability.fullReliableScoreDuration { return 78 }
+        if duration < AnalysisReliability.fullReliableScoreDuration + 0.5 {
+            return linearRamp(
+                duration,
+                x0: AnalysisReliability.fullReliableScoreDuration,
+                x1: AnalysisReliability.fullReliableScoreDuration + 0.5,
+                y0: 78, y1: 100
+            )
         }
-        return score
+        return 100
+    }
+
+    private static func linearRamp(_ x: Double, x0: Double, x1: Double, y0: Double, y1: Double) -> Double {
+        let t = (x - x0) / (x1 - x0)
+        return y0 + t * (y1 - y0)
     }
 
     private func applyBoardEvidenceCaps(

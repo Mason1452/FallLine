@@ -91,11 +91,16 @@ final class StableCarvingBaselineTests: XCTestCase {
     /// P8-A (2026-09-08)：sideslip 派生 cap 退役。boardAngle 90°（纯横滑测量值）+
     /// 高置信度不再触发 58 分封顶——该测量被证实带系统性偏差，cap 触发即误伤。
     /// 本用例守护退役语义：同参数在 P8-A 前断言 58，现在必须放行到原始 82。
+    ///
+    /// P2 (2026-09-11)：duration cap ramp 落地后，[12.0, 12.5] 秒被定义为过渡带
+    /// （见 [VideoAnalyzer.durationCapValue(for:)](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L499-L528)），
+    /// count=12 时 sampledDuration=12.0 会落在 ramp 起点被压到 78。为避开该过渡带、
+    /// 保持本用例专注 P8-A sideslip cap 退役契约，count 上调为 14 → duration=14.0s。
     func test_generateSummary_noSideslipCapAfterP8A() async throws {
         let frames = makeFrames(
             score: 82,
             confidence: 0.8,
-            count: 12,
+            count: 14,
             calfScore: 82,
             boardConfidence: 0.9,
             boardAngle: 90
