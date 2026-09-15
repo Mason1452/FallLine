@@ -4,9 +4,12 @@ import XCTest
 // MARK: - PoseScorer.calfLeanScore(fromAngle:) sigmoid 契约测试
 // Tick 3 (2026-09-15) 守护 edge-first sigmoid 曲线，见 spec §4.2：
 // docs/superpowers/specs/2026-09-15-posescorer-edge-first-refactor-design.md
+//
+// **c=40 微调（2026-09-15，Tick 4 corpus review 后）**：sigmoid 中点从 35 右移
+// 到 40（"入门刻滑"档），锚点表和陡度断言按新曲线同步更新。
 final class PoseScorerCalfSigmoidTests: XCTestCase {
 
-    // MARK: 8 采样点锚点（spec §4.2 表）
+    // MARK: 8 采样点锚点（spec §4.2 表 · c=40）
 
     private struct Anchor {
         let angle: Double
@@ -14,14 +17,14 @@ final class PoseScorerCalfSigmoidTests: XCTestCase {
     }
 
     private let anchors: [Anchor] = [
-        Anchor(angle:  0, expected:  3.0),   // sigmoid(-3.5) × 100 ≈ 2.93
-        Anchor(angle: 10, expected:  7.6),   // sigmoid(-2.5)
-        Anchor(angle: 20, expected: 18.2),   // sigmoid(-1.5)
-        Anchor(angle: 30, expected: 37.8),   // sigmoid(-0.5)
-        Anchor(angle: 40, expected: 62.2),   // sigmoid(+0.5)
-        Anchor(angle: 50, expected: 81.8),   // sigmoid(+1.5)
-        Anchor(angle: 60, expected: 92.4),   // sigmoid(+2.5)
-        Anchor(angle: 70, expected: 97.0),   // sigmoid(+3.5)
+        Anchor(angle:  0, expected:  1.8),   // sigmoid(-4.0) × 100 ≈ 1.799
+        Anchor(angle: 10, expected:  4.7),   // sigmoid(-3.0)
+        Anchor(angle: 20, expected: 11.9),   // sigmoid(-2.0)
+        Anchor(angle: 30, expected: 26.9),   // sigmoid(-1.0)
+        Anchor(angle: 40, expected: 50.0),   // sigmoid( 0.0) 中点
+        Anchor(angle: 50, expected: 73.1),   // sigmoid(+1.0)
+        Anchor(angle: 60, expected: 88.1),   // sigmoid(+2.0)
+        Anchor(angle: 70, expected: 95.3),   // sigmoid(+3.0)
     ]
 
     func test_calfSigmoid_matchesAnchorTable() {
@@ -62,7 +65,7 @@ final class PoseScorerCalfSigmoidTests: XCTestCase {
 
     // MARK: 中点契约
 
-    /// c = 35 是 sigmoid 中点，score(35) 必须严格 = 50.0
+    /// c = 40 是 sigmoid 中点，score(40) 必须严格 = 50.0
     func test_calfSigmoid_midpointIs50() {
         let score = PoseScorer.calfLeanScore(fromAngle: PoseScorer.calfSigmoidMidpoint)
         XCTAssertEqual(score, 50.0, accuracy: 1e-9,
@@ -72,7 +75,7 @@ final class PoseScorerCalfSigmoidTests: XCTestCase {
     // MARK: 陡度（斜率放大）
 
     /// spec §4.2 目标：30°–50° 段斜率显著大于旧线性 (1.25 分/°)。
-    /// sigmoid k=0.10 c=35 在 [30, 50] 段的平均斜率 = (81.8 - 37.8) / 20 = 2.2 分/°。
+    /// sigmoid k=0.10 c=40 在 [30, 50] 段的平均斜率 = (73.1 - 26.9) / 20 ≈ 2.31 分/°。
     /// 断言 [30, 50] 段总落差 ≥ 40，等价于平均斜率 ≥ 2.0 分/°（含容差）。
     func test_calfSigmoid_amplifies30to50Slope() {
         let s30 = PoseScorer.calfLeanScore(fromAngle: 30)
@@ -86,7 +89,7 @@ final class PoseScorerCalfSigmoidTests: XCTestCase {
     func test_calfSigmoid_parameterAnchors() {
         XCTAssertEqual(PoseScorer.calfSigmoidSlope,    0.10, accuracy: 1e-12,
                        "sigmoid k 应固定 = 0.10")
-        XCTAssertEqual(PoseScorer.calfSigmoidMidpoint, 35.0, accuracy: 1e-12,
-                       "sigmoid c 应固定 = 35.0")
+        XCTAssertEqual(PoseScorer.calfSigmoidMidpoint, 40.0, accuracy: 1e-12,
+                       "sigmoid c 应固定 = 40.0")
     }
 }

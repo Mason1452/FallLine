@@ -151,12 +151,23 @@ public struct PoseScorer {
     /// 80° 是现实中侧向立刃可达到的极限参考值。
     ///
     /// Tick 3 (2026-09-15) 落地 spec §4.2 sigmoid 曲线：
-    ///   score = clamp(100 / (1 + exp(-k * (avg - c))), 0, 100)，k = 0.10, c = 35
-    /// 目的：把 30°–50° 的分辨率从线性 1.25 分/° 提升到 ~2.2 分/°，
-    /// 让"扫雪 vs 刻滑"在 raw 分层就能显著分档，为退役 edge cap 让路。
-    /// 端点 (0° ≈ 3 分, 80° ≈ 99 分) 与旧线性版本近似对齐，避免全局漂移。
+    ///   score = clamp(100 / (1 + exp(-k * (avg - c))), 0, 100)，k = 0.10
+    ///
+    /// 中点 c 语义：`score(c) = 50`——教练视角下的"及格线"立刃角度。
+    ///
+    /// **c=40 微调（2026-09-15，Tick 4 corpus review 后落地）**：初版 c=35 让
+    /// video 2/6 sigmoid 加成过强、专业档普涨 4-5 分，且 30° 就跨过 sigmoid 中点
+    /// 意味着"入门刻滑直接得 40 分以上"，与教练分档预期不符。将 c 右移到 40 后：
+    ///   - calf 30°（扫雪→初刻滑过渡）：37.8 → 26.9（−10.9）
+    ///   - calf 40°（入门刻滑）：62.2 → 50.0（−12.2，落到中点）
+    ///   - calf 50°（中级刻滑）：81.8 → 73.1（−8.7，回归 70+）
+    ///   - calf 60°（专业刻滑）：92.4 → 88.1（−4.3）
+    /// 效果：把 sigmoid 中点从"扫雪—刻滑分界"右移到"入门—中级刻滑分界"，让整体
+    /// 曲线更贴合教练的分档语义，同时保持 30°-50° 段陡度（斜率 ~2.2 分/°）。
+    ///
+    /// 端点仍与旧线性版本近似对齐：0° → 1.8, 80° → 98.2。
     public static let calfSigmoidSlope = 0.10
-    public static let calfSigmoidMidpoint = 35.0
+    public static let calfSigmoidMidpoint = 40.0
 
     public static func calfLeanScore(fromAngle angle: Double) -> Double {
         let x = calfSigmoidSlope * (angle - calfSigmoidMidpoint)
