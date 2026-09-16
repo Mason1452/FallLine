@@ -33,12 +33,12 @@
   4. **MID_FP1（腿太直）未收敛**：仍 77 分，knee=74 但 knee 权重 0.25 无力压制。
   5. **文案-分数自相矛盾** 5 份（MID_ACC5/6/7、MID_FP1、BAD_ACC）：算法自动"主要问题"文本明确说"搓雪弯 / 走刃不稳定 / 立刃不一致"，但综合分给到 77-93，评分口径与语义口径分裂。
   6. **sym r=-0.657 反相关**：18 份里越高分样本对称性反而越低，怀疑运动幅度未归一化，需要单独排查。
-- **calibration follow-ups**（unblocked，按优先级）：
-  - **【高优 §4.1】edge cap 双维兜底**：`edge≥42 && calfLean<40 → cap=72`，预期 BAD_ACC 83→72、MID_FP2 82→72，不影响 v2/v3/v6（calf ≥ 66）。触点：[edgeEvidenceCapValue](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L509-L513)。
-  - **【高优 §4.2】knee<75 时动态加权**：`weights.knee += 0.10, weights.calf -= 0.10`，预期 MID_FP1 77→72、v4 79→76。触点：[PoseScorer.Weights](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseScorer.swift)。
-  - **【中优 §4.3】stage classifier 收紧**：`avg≥80→qualitySkiing` 加 `calf≥55 && sym≥70`；advanced 门槛加 `knee≥85 && sym≥75`。预期 MID_ACC3/5/6 落回中级偏上。
-  - **【新增 §4.5】排查 sym r=-0.657 反相关**：先跑 sym 分数 × 综合分散点、再判断是否引入"运动幅度归一化"或"低 sym 硬 cap"。
-  - **【长期 §4.4】扩样本 20-30 份 middle 边界**：从 [SkiAnaylze/testvideo/](file:///Users/mingsen/Project/FallLine/SkiAnaylze/testvideo/) 抽样二次标注，建立"中级顶=78/中级中=68/中级底=58"三级基准，为重训 sigmoid c 提供统计基础。
+- **calibration follow-ups 执行结果（2026-09-15/16）**：
+  - **【✅ §4.1 已落地】edge cap 双维兜底**：改为基于复合 edgeQualityScore 的 ramp（`<57→72` / `57–61 线性放行` / `≥61→100`），原 `edge≥42 && calfLean<40` 单条规则实证无法命中目标。BAD_ACC 83→75，专业样本保护。触点：[edgeQualityCapValue](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift)。
+  - **【⛔ §4.2 否决】knee 动态加权不落地**：[knee_separability_analysis.py](file:///Users/mingsen/Project/FallLine/scripts/knee_separability_analysis.py) 证明权重转移方向与预期压制相反；唯一能分离的析取规则 margin 仅 0.44（压 BAD_ACC pressure=75.9 vs 保 v6=76.8），在测量噪声内属过拟合。留待扩样本。
+  - **【✅ §4.3 已落地 · 缩小范围】stage classifier 收紧**：只改低边界 `avg≥75 → qualitySkiing` 为 `avg≥75 且 calf≥55`（BAD_ACC/MID_FP1 落回稳定滑行，~8 margin 稳健）；高边界 `avg≥80` 不硬分离（GOOD_A 与 MID_ACC6 avg/calf 仅差 2.1/1.7，过拟合）；撤销 sym 条件。删除 ReportGenerator 重复死副本。新增 [StageClassifierTests](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/StageClassifierTests.swift)。
+  - **【✅ §4.5 已排查】sym 反相关非 bug**：[symmetry_correlation_audit.py](file:///Users/mingsen/Project/FallLine/scripts/symmetry_correlation_audit.py) 拆 knee/calf/lean 三子分量全负；根源 `r(edgeQuality,sym)=-0.539`——初学者楔形站姿对称（sym 89-91）、刻滑内外腿分工天然不对称（GOOD_A sym63 为全场最低）。帧内 |L−R| 无法区分功能性不对称，**不做归一化/硬 cap**，真正修复待跨弯（左转 vs 右转）一致性特征。
+  - **【长期 §4.4】扩样本 20-30 份 middle 边界**：从 [SkiAnaylze/testvideo/](file:///Users/mingsen/Project/FallLine/SkiAnaylze/testvideo/) 抽样二次标注，建立"中级顶=78/中级中=68/中级底=58"三级基准，为重训 sigmoid c、确定高边界分离规则、跨弯对称特征提供统计基础。详见 [SUMMARY §4.4](file:///Users/mingsen/Project/FallLine/outputs/calibration_review_20260915/SUMMARY.md)。
 - iOS 端已 SPM 化（主线 B `94ce905` 起），[SkiAnaylze/SkiAnaylze/Views](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/Views) 通过 `import FallLineCore` 复用 Core，本轮方向 α 的 sigmoid/权重/edge cap/gating/α 报告文案会随下次 iOS 重编译自动同步。UI 卡片直接读 `output.skiMetrics.edgeQualityScore` 等字段，不消费 `boardAnalysis.summary` 那段板身诊断文案，因此 α 报告改写对 iOS UI 无副作用；仅 [ReportDetailView](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/Views/ReportDetailView.swift) 分享/导出用的 `ReportGenerator.generate` 长文会随之更新。仅有的旧代码副本残余是 [SkiAnaylze/SkiAnaylze/Sources/DemoData.swift](file:///Users/mingsen/Project/FallLine/SkiAnaylze/SkiAnaylze/Sources/DemoData.swift)（demo 用固定 AnalysisOutput），也不含 Core 逻辑。
 - 关键点拓扑升级（3D 骨架 / 板身分割）以修复 sideslip 2D 几何偏差，方向 α 只是把 sideslip 从走刃语义中拆走、并未修复几何测量本身。
 

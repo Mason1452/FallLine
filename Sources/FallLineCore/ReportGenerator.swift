@@ -586,17 +586,6 @@ public struct ReportGenerator {
         )
     }
 
-    /// 阶段判断逻辑
-    private static func determineStage(avg: Double, calf: Double, knee: Double, stability: Double) -> StageLabel {
-        if avg < 50 || avg == 0 { return .basicDetection }
-        if avg < 60 { return .basicControl }
-        if avg >= 80 { return calf >= 65 ? .advanced : .qualitySkiing }
-        if avg >= 70 && calf >= 55 && knee >= 70 { return .carvingEmerging }
-        if avg >= 75 { return .qualitySkiing }
-        if avg >= 70 && calf < 55 { return .stableSkiing }
-        return .stableSkiing
-    }
-
     // MARK: - 优势识别
 
     private static func buildStrengths(ctx: ReportContext, seed: Int) -> [String] {
