@@ -16,7 +16,7 @@ public struct StageClassifier {
         if averageScore < 60 { return .basicControl }
         if averageScore >= 80 { return calfScore >= 65 ? .advanced : .qualitySkiing }
         if averageScore >= 70 && calfScore >= 55 && kneeScore >= 70 { return .carvingEmerging }
-        if averageScore >= 75 { return .qualitySkiing }
+        if averageScore >= 75 && calfScore >= 55 { return .qualitySkiing }
         if averageScore >= 70 && calfScore < 55 { return .stableSkiing }
         return .stableSkiing
     }

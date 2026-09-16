@@ -187,8 +187,21 @@ pressure 阈值可行域： Tp ∈ (75.90, 76.84]   宽 0.94   ← 最小单边 
 
 **结论**：在当前特征集下不存在稳健的多维硬规则；该问题应留到 §4.4 扩样本（拿到统计分布、而非单点阈值）后再解决。knee 维度本身并非漏判根源（直腿严重的样本 edgeQuality 都已很差、分数已低）。
 
-### 4.3 【中优】stage classifier 收紧
-把 `avg≥80 → qualitySkiing` 阈值改为 `avg≥82 且 calf≥55 且 sym≥70`，把 advanced 门槛从 `calf≥65` 提到 `calf≥65 && knee≥85 && sym≥75`。预期效果：MID_ACC3/5/6 落回中级偏上，MID_ACC7 也可能被压回高质量档。
+### 4.3 【已落地 · 2026-09-15】stage classifier 收紧（仅低边界，高边界保留）✅
+
+**原方案**：`avg≥80 → qualitySkiing` 改为 `avg≥82 且 calf≥55 且 sym≥70`，advanced 提到 `calf≥65 && knee≥85 && sym≥75`。
+
+**实证复核后调整落地范围**（避免重蹈 §4.2 过拟合 + §4.5 sym 反相关）：
+
+1. **落地的收紧（低边界）**：`avg≥75 → qualitySkiing` 改为 `avg≥75 且 calf≥55`。
+   - 影响面：仅 BAD_ACC（avg75.3/calf46.1）与 MID_FP1（avg76.5/calf46.8），两者距阈值有 ~8 margin，稳健；阶段落回 **稳定滑行阶段**。
+   - release 重跑确认：BAD_ACC 75 分 · 稳定滑行阶段；MID_FP1 77 分 · 稳定滑行阶段。
+2. **高边界 `avg≥80` 不做硬分离**：想压的 MID_ACC5/6（81-83, calf47-59）与必须保护的 GOOD_A（avg85.6/calf48.5）在 avg 上仅差 2.1、calf 上仅差 1.7，任何硬阈值都属过拟合，留待 §4.4 扩样本。GOOD_A 经重跑保持 86 分 · **高质量滑行阶段**。
+3. **撤销 sym 条件**：§4.5 已证 sym 与立刃深度负相关，GOOD_A sym≈65、MID_ACC8 sym≈74.5，加 `sym≥70/75` 会把头号专业样本压档。
+4. 该 stage 只影响报告标签与重心适配展示分（`cogStageFitScore`），**不进入综合总分**（综合分仍用帧级旧 gravityScore）。
+5. 顺手删除了 [ReportGenerator.swift](../../Sources/FallLineCore/ReportGenerator.swift) 中与 StageClassifier 重复、已无调用的私有 `determineStage` 死副本，消除双份逻辑漂移。
+
+单测：[Tests/FallLineCoreTests/StageClassifierTests.swift](../../Tests/FallLineCoreTests/StageClassifierTests.swift)（7 用例，覆盖基础档 / 低边界收紧 / 高边界保留 / 阈值边界）。`swift test` 全量 253 通过。
 
 ### 4.4 【长期】扩样本 + 建立分档基准
 当前 12 锚点密度过低（middle 边界"中级 vs 高质量"几乎没有样本）。建议：
