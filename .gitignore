@@ -15,3 +15,5 @@ outputs/**/*.MP4
 outputs/**/*.MOV
 outputs/**/*.mp4
 outputs/**/*.mov
+# --debug-overlay 临时覆盖图（体量大，按需本地生成）
+*.debug_frames/

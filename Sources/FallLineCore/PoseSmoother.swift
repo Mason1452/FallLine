@@ -147,6 +147,7 @@ public enum PoseSmoother {
                 bodyPose: smoothed,
                 poseScore: newScore,
                 visualBoardObservation: detection.visualBoardObservation,
+                boardEdgeObservation: detection.boardEdgeObservation,
                 skiMetrics: detection.skiMetrics,
                 error: detection.error
             )
@@ -249,6 +250,7 @@ public enum PoseSmoother {
                 bodyPose: updatedPose,
                 poseScore: detection.poseScore,
                 visualBoardObservation: detection.visualBoardObservation,
+                boardEdgeObservation: detection.boardEdgeObservation,
                 skiMetrics: detection.skiMetrics,
                 error: detection.error
             )
@@ -376,6 +378,7 @@ public enum PoseSmoother {
                 bodyPose: updatedPose,
                 poseScore: detection.poseScore,
                 visualBoardObservation: detection.visualBoardObservation,
+                boardEdgeObservation: detection.boardEdgeObservation,
                 skiMetrics: detection.skiMetrics,
                 error: detection.error
             )

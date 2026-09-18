@@ -8,6 +8,7 @@ struct CLIOptions {
     let debugOverlayDirectory: String?
     let outputVideo: Bool
     let use3D: Bool
+    let boardEdge: Bool
 }
 
 func printUsage() {
@@ -17,6 +18,7 @@ func printUsage() {
     print("  指定输出目录: swift run FallLineCLI --debug-overlay --debug-overlay-dir /tmp/debug_frames 1.MP4")
     print("  输出标注视频: swift run FallLineCLI --output-video 1.MP4")
     print("  3D 姿态融合默认已开启；关闭方式: swift run FallLineCLI --no-3d 1.MP4")
+    print("  板身刃线诊断(不参与评分): swift run FallLineCLI --board-edge 1.MP4")
 }
 
 func parseOptions(arguments: [String]) -> CLIOptions? {
@@ -25,6 +27,7 @@ func parseOptions(arguments: [String]) -> CLIOptions? {
     var debugOverlayDirectory: String?
     var outputVideo = false
     var use3D = true
+    var boardEdge = false
 
     var index = 1
     while index < arguments.count {
@@ -45,6 +48,8 @@ func parseOptions(arguments: [String]) -> CLIOptions? {
             use3D = true
         case "--no-3d":
             use3D = false
+        case "--board-edge":
+            boardEdge = true
         default:
             guard !argument.hasPrefix("--"), videoPath == nil else { return nil }
             videoPath = argument
@@ -58,7 +63,8 @@ func parseOptions(arguments: [String]) -> CLIOptions? {
         debugOverlay: debugOverlay,
         debugOverlayDirectory: debugOverlayDirectory,
         outputVideo: outputVideo,
-        use3D: use3D
+        use3D: use3D,
+        boardEdge: boardEdge
     )
 }
 
@@ -87,7 +93,8 @@ do {
     let analyzer = VideoAnalyzer(
         videoURL: videoURL,
         sampleInterval: sampleInterval,
-        visionOptions: visionOptions
+        visionOptions: visionOptions,
+        enableBoardEdge: options.boardEdge
     )
     let duration = try await asset.load(.duration)
     let totalSeconds = CMTimeGetSeconds(duration)
