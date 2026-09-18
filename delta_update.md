@@ -14,6 +14,51 @@
 
 ## 变更
 
+### 2026-09-18（刃线/轨迹检测 Phase 2 起步 3：Gate-G1 reason audit 翻转下一步方向）
+
+**本轮性质**：紧接 Phase 2 起步 2（Gate-G1 三合一探针）向前推一格——落地 reason 分布 audit 脚本，对 §4.4 全 25 片跑通并**证伪 §12.5 结尾提出的"放宽板轴几何门控"路线**。**未改任何生产代码**，仅新增 audit 脚本 + 更新 spec / WORK_LOG / delta_update。
+
+**新增脚本 [scripts/board_edge_reason_audit.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_reason_audit.py)**（约 210 行，纯 stdlib）：
+- 单轮 CLI（`--board-edge`），从 JSON 逐帧解析 `boardEdgeObservation.status`，按 [`BoardEdgeStatus`](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L594-L617) 11 枚举（board / farShot / rejectVertical / rejectLength / rejectBlob / rejectOwnership / rejectPosture / ankleLowCnf / noAxis / noMask / disabled）做分片直方图。
+- 聚合层：全集总账 + 分档位（high/mid/low）对比 + 每片最大拒绝路径 + Top-5 拒绝路径。
+- 不做 bit-identical / 耗时对比（§12.5 已 PASS，不重复验证）；支持 `ONLY=<alias>,...` 单片过滤、`-n <k>` 前 k 片抽样。
+
+**25 片全量结果**（4146 帧）：
+- **Top-5 拒绝路径**：`farShot` **29.76%**（1234 帧）/ `ankleLowCnf` **27.59%**（1144 帧）/ `rejectLength` 5.79%（240）/ `rejectVertical` **4.80%**（199）/ `noMask` 4.51%（187）。其余 `rejectBlob` 3.59% / `rejectOwnership` 3.09% / `rejectPosture` 1.11% / `noAxis` 0.17%。
+- **分档位**：
+    - high 桶 2106 帧：board 15% / farShot **42%** / ankleLowCnf **28%** / noMask 7%（远拍专业滑手，人体像素占比与踝点稳定性双吃亏）
+    - mid 桶 1079 帧：board 24% / ankleLowCnf **28%** / rejectVertical **14%** / rejectLength **10%**（BND_M2 独家 rejectVertical 25% + rejectLength 16%）
+    - low 桶 961 帧：board 25% / farShot **27%** / ankleLowCnf **25%** / rejectOwnership 7%（雪场群拍背景他人板）
+- **每片最大拒绝路径归类**：`ankleLowCnf` 主导 **12 片**（近半，BND_L1 66% / BND_M3 65% / BND2_L4 63% / BND2_LB 57% / BND_HI2 57% / BND_L2 53% / BND_M1 48% / BND2_H2 47% / BND2_H1 39% / BND_L3 34% / BND2_L3 34% / BND2_TOP 28% / BND2_L1 21%）；`farShot` 主导 **7 片**（BND_HI1 74% / BND2_L6 63% / BND_HI3 62% / BND2_H3 58% / BND2_H0 40% / BND2_H4 34% / BND2_GM 31%）；`rejectOwnership` 主导 2 片（BND2_L2 37% / BND2_L5 29%）；`rejectVertical` 主导仅 1 片（BND_M2 25%，全集唯一）；`noMask`/`rejectBlob` 各 1 片；1 片纯 board。
+
+**方向翻转（关键结论）**：
+- §12.5 结尾曾提出"放宽 `farShot=0.02→0.01` / `rejectVertical=45°→55°` / 或重定义门槛"三条候选，本轮 audit **证伪前两条**：即使把 `farShot`(29.8%) + `rejectVertical`(4.8%) 完全砍掉，理论覆盖率上限只到 **54%**（19.6% + 34.6%），仍够不到 60% 门槛；而 **`ankleLowCnf` 27.6%** 是完全独立的踝点定位问题，与板轴几何门控无关。
+- 放宽 `farShot / rejectVertical` 不但收益 <5% 完成 Gate-G1 覆盖率闭环，还会**引入远景假阳/雪杖误识**（Phase 0 §10.4 已经做过决策，rejectVertical 拦下的正是雪杖/裤腿/竖直他人）。
+
+**Phase 2 主体方向重定义**（§12.6，评分零改动）：
+1. **优先方向 A：降级链路** — `status ∈ {ankleLowCnf, farShot, noMask}` 时，`BoardEdgeDetector` 用踝-膝矢量 + 髋高度先验合成 `boardEdgeObservation.fallbackAxis`（复用 [`BoardObservationSource.ankleProxy`](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L555-L557)）。**不新增模型推理，性能开销可忽略**；Gate-G1 覆盖率按 `status ∈ {board, fallbackAxis}` 重新度量。
+2. **优先方向 B：Gate-G1 覆盖率门槛重定义** — 从"全帧口径 ≥60%" 改为"每片可用性 = min(cov%, 60%)，加权平均 ≥40%" 或"片级 cov% ≥30% 的样本比例 ≥60%"（当前 §4.4 25 片中 cov% ≥30% 的样本 7/25 = 28%）。此路是纯统计约定，需在 §6 明确 ADR。
+3. **辅助方向 C：Phase 2 时序特征以"连续 board 片段"为输入** — 要求视频存在"连续 ≥5 帧板轴稳定"窗口（1 秒 @ 5fps），BND2_L1(75%) / BND2_LM(57%) / BND2_L3(50%) / BND_M4(38%) / BND2_L5(39%) 5 片已具备。
+
+**产物**：[outputs/board_edge_p2/reason_audit.log](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/reason_audit.log)（`.gitignore` 已排除，`outputs/board_edge_p2/*.log` 规则命中）。
+
+**spec 更新**（[2026-09-18-board-edge-trajectory-detection-design.md](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md)）：
+- §12.4 前置检查表新增 `[x] Phase 2 起步 3：Gate-G1 reason 分布 audit 完成` 与"覆盖率一行"更新链接指向 §12.6（原指向 §12.5 已废弃）。
+- 新增 §12.6 "Gate-G1 reason 分布 audit（2026-09-18，§4.4 全 25 片，4146 帧）"：脚本描述 + Top-5 拒绝路径 + 分档位对比 + 每片最大拒绝归类 + 方向翻转分析 + Phase 2 三方向重定义 + 不建议方向 + spec §6 决策要求。
+- §12.5 "Gate-G1 结论"补一句：`覆盖率被压低的主因初步猜测已被 §12.6 部分证伪`；"下一步"改为"由 §12.6 已完成第 1 项"。
+
+**验证**：
+- 3 片验证（BND_L1 + BND2_LB + BND2_L1）：小样本 top-reject 全是 `ankleLowCnf` 66% / 57% / 21%，与全量结论一致，格式 & 聚合逻辑正确。
+- 全量 25 片单轮，与 §12.5 三轮的 board 帧数总账完全对齐（811 帧），说明单轮 audit 与三轮探针在覆盖率维度上等价。
+- 本轮零 Sources 变更，`swift build` / `swift test` 未跑（release binary 复用 §12.5 build，Phase 1 274 通过基线不变）。
+
+**下一步（未开始，等确认）**：
+1. **spec §6 补 ADR "Gate-G1 覆盖率不是唯一门槛"**：把优先方向 A + B 组合作为 Gate-G1 v2 定义，v1 门槛 60% 降级为"理想覆盖率"仅供参考、不作为准入闸门；此 ADR 未落地前不动 [`BoardEdgeConfig.standard`](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift) 阈值。
+2. 起草 `BoardEdgeObservation.fallbackAxis` Codable 后向兼容改造（新增字段，评分零改动）。
+3. 教练判档 §12.2 优先次序 9 片 → §4.4 扩到 ≥34 → 重跑 §12.5 + §12.6 探针，验证降级链路 A 是否能把覆盖率推到 v2 门槛。
+
+---
+
 ### 2026-09-18（刃线/轨迹检测 Phase 2 起步 2：Gate-G1 三合一探针跑通 25 片，两 PASS 一 FAIL）
 
 **本轮性质**：紧接 Phase 2 起步 1（接触表落地）向前推一格——落地 Gate-G1 三合一探针脚本，对 §4.4 全 25 片跑通并输出**确定性/性能双 PASS、覆盖率 FAIL** 的负结论。**未改任何生产代码**，仅新增探针脚本 + 更新 spec / WORK_LOG / delta_update。

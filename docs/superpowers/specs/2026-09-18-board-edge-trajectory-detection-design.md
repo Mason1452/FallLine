@@ -392,9 +392,10 @@ Phase 2 主体开工前必须逐项打勾：
 - [ ] 12.1 候选池 ≥9 片教练判档回流，§4.4 表扩到 ≥20 片。
 - [ ] [bestthird_aggregator_audit.py CLIPS](file:///Users/mingsen/Project/FallLine/scripts/bestthird_aggregator_audit.py#L38-L64) 与 [lowend_separability_audit.py BEGINNER/EMERGING](file:///Users/mingsen/Project/FallLine/scripts/lowend_separability_audit.py#L41-L42) 同步扩到扩集口径。
 - [x] Phase 2 起步 2：Gate-G1 三合一探针脚本落地并全量跑 25 片（见 §12.5，2026-09-18）。
-- [ ] `swift run FallLineCLI --board-edge` 在扩集 ≥20 片上跑通，观测覆盖率 ≥60%（Gate-G1 覆盖率维度）→ **当前 §4.4 25 片实测 19.6%，FAIL，Gate-G1 门槛不通过；须先按 §12.5 分析放宽 `farShot`/`rejectVertical` 或补 §4.4 判档后重测**。
+- [ ] `swift run FallLineCLI --board-edge` 在扩集 ≥20 片上跑通，观测覆盖率 ≥60%（Gate-G1 覆盖率维度）→ **当前 §4.4 25 片实测 19.6%，FAIL；§12.6 reason audit 证伪"放宽板轴几何门控"为主方向，须先在 §6 落 ADR（覆盖率不是唯一门槛）+ 降级链路 A（`fallbackAxis`），再重测**。
 - [x] `scripts/board_edge_gate_g1_probe.py` 跨次 bit-identical（含 `boardEdgeObservation` 字段）→ 25 片 4146/4146 帧完全一致（PASS）。
 - [x] `scripts/board_edge_gate_g1_probe.py` `--board-edge` 开/关总耗时增幅 ≤30%（Gate-G1 性能）→ avg +5.9% / max +19.7%（PASS）。
+- [x] Phase 2 起步 3：Gate-G1 reason 分布 audit 完成（见 §12.6，2026-09-18）→ 证伪"放宽板轴几何门控"为主方向，翻转到"降级链路 + Gate-G1 门槛重定义 + 连续 board 片段"三方向。
 - [ ] Phase 2 时序特征输出仅进 JSON 新命名空间 + debug overlay，Models 评分字段消费方零改动。
 - [ ] Gate-G2 判定：`lowend_separability_audit.py` 用新特征重跑，margin ≥1.5σ 且 LOOCV ≥90%（Phase 3 立项前置）。
 
@@ -409,8 +410,36 @@ Phase 2 主体开工前必须逐项打勾：
 - **单片分布（cov% ↓）**：BND2_L1 75% / BND2_LM 57% / BND2_L3 50% / BND2_L5 38.7% / BND_M4 37.7% / BND_M2 32.3% / BND2_H4 31.6% / BND_M1 28.9% / BND_M3 23.2% / BND2_H0 22.0% / BND2_LB 17.7% / BND2_TOP 16.9% / BND2_L6 15.3% / BND2_H1 14.5% / BND_L3 14.4% / BND2_GM 14.1% / BND_HI1 12.6% / BND2_H2 11.5% / BND_HI2 6.6% / BND_L2 6.3% / BND2_H3 4.5% / BND2_L2 2.3% / BND_HI3 2.3% / BND2_L4 1.9% / BND_L1 0.0%。
 - **Gate-G1 结论**：**确定性 & 性能双 PASS，覆盖率 FAIL**。三合一维度中，确定性 / 性能已达到 Phase 2 主体准入水位（观测器状态机纯函数化 + 只在 Vision 结果后回调、不进入评分链路，行为可跨次复现且开销可控）；覆盖率不达标属于**门控阈值层面的负结论**，不是可靠性问题：
     - 结构上正确：BND2_L1 75% / BND2_LM 57% 证明门控在近景初级/中级雏形上可稳定输出板轴；金色夕阳远景 BND_L1 = 0/103 与 Phase 0 [outputs/edge_spike/](file:///Users/mingsen/Project/FallLine/outputs/edge_spike) 结论一致（诚实拒绝，不吐脏字段），也符合 §11 P1 落地时"默认关、纯诊断"的方向。
-    - 覆盖率被压低的主因是 `farShot`（远景 / 人体像素占比过低）与 `rejectVertical`（板轴与体轴夹角超阈），扩集含大量长片 & 远景，正是 Gate-G2 需要教练判档 + Phase 2 时序特征补齐的场景。
-- **下一步**（不改评分、不联动 cap）：
-    1. 由 §12.5 结果驱动 §4.4 覆盖率 audit：对 25 片按 reason 分布做逐片直方图（`farShot` / `rejectVertical` / `axisTooShort` / `elongTooLow`），量化"哪一门控贡献最大的拒绝"。
-    2. 结合 §12.2 优先次序回流 9 片教练判档到 §4.4，再对扩集 (≥34 片) 重跑 §12.5 探针，验证覆盖率 ≥60% 是否**在扩集口径下可达**，或需要将 Gate-G1 覆盖率门槛按"每片可用性 = min(cov%, 60%)"重定义（此改动须在 spec §6 中做出决定并附证据）。
-    3. 在 Phase 2 时序特征引入前，`--board-edge` 保持默认关 + JSON 新命名空间，不影响 Models 评分字段。
+    - 覆盖率被压低的主因初步猜测是 `farShot` + `rejectVertical`，**已被 §12.6 reason audit 部分证伪**：`farShot` 29.8% 是最大项符合猜测，但 **`ankleLowCnf` 27.6% 与 `farShot` 量级相当**、`rejectVertical` 仅 4.8% 远低于预期，Phase 2 下一步方向不是放宽板轴几何门控，而是应对踝点定位失败（详见 §12.6）。
+- **下一步**（不改评分、不联动 cap）：由 §12.6 reason 分布 audit 已经完成第 1 项；后续按 §12.6 结论方向推进。
+
+### 12.6 Gate-G1 reason 分布 audit（2026-09-18，§4.4 全 25 片，4146 帧）
+
+- 探针脚本：[scripts/board_edge_reason_audit.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_reason_audit.py)（每片 CLI 单轮 `--board-edge`；按 [`BoardEdgeStatus`](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L594-L617) 11 枚举做分片直方图；聚合出全集总账 + 分档位 high/mid/low 对比 + 每片最大拒绝路径 + Top-5 拒绝路径）。
+- 产物日志：[outputs/board_edge_p2/reason_audit.log](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/reason_audit.log)（`.gitignore` 已排除）。
+- **全集 Top-5 拒绝路径（4146 帧口径）**：
+    1. **`farShot` 1234 帧 29.76%**（主体占比 <0.02，与预期一致）
+    2. **`ankleLowCnf` 1144 帧 27.59%**（踝点低置信度，与 `farShot` 量级相当，**§12.5 猜测未覆盖**）
+    3. `rejectLength` 240 帧 5.79%
+    4. `rejectVertical` 199 帧 4.80%（**远低于 §12.5 猜测**）
+    5. `noMask` 187 帧 4.51%
+    - 其余 `rejectBlob` 3.59% / `rejectOwnership` 3.09% / `rejectPosture` 1.11% / `noAxis` 0.17%；`disabled` 为 0（都走了 `--board-edge` 分支）。
+- **分档位对比（board% + Top-3 拒绝）**：
+    - **high 桶** 2106 帧：board 15% / farShot **42%** / ankleLowCnf **28%** / noMask 7%。高质量片主要死于**远景 + 踝低置信 + 掩码缺失**（典型 "教练远拍专业滑手" 视角，人体像素占比与踝点稳定性都吃亏）。
+    - **mid 桶** 1079 帧：board 24% / ankleLowCnf **28%** / rejectVertical **14%** / rejectLength **10%**。中间地带 farShot 只有 9%，主要死于**踝点 + 板轴几何拒绝**（BND_M2 rejectVertical 25% + rejectLength 16% 是全集唯一 rejectVertical 主导片，值得单独看接触表）。
+    - **low 桶** 961 帧：board 25% / farShot **27%** / ankleLowCnf **25%** / rejectOwnership 7%。初级片 farShot 与 ankleLowCnf 打平，rejectOwnership 比其他档位高 3-7× 说明背景常有他人（雪场群拍）。
+- **每片最大拒绝路径归类**（25 片）：
+    - `ankleLowCnf` 主导 **12 片**（含 BND_L1 66% / BND_M3 65% / BND2_L4 63% / BND2_LB 57% / BND_HI2 57% / BND_L2 53% / BND_M1 48% / BND2_H2 47% / BND2_H1 39% / BND_L3 34% / BND2_L3 34% / BND2_TOP 28% / BND2_L1 21%）— **最大宗，占近半样本**。
+    - `farShot` 主导 **7 片**（BND_HI1 74% / BND2_L6 63% / BND_HI3 62% / BND2_H3 58% / BND2_H0 40% / BND2_H4 34% / BND2_GM 31%）— 全部 high 桶 + 2 片长片 low，符合远景先验。
+    - `rejectOwnership` 主导 **2 片**（BND2_L2 37% / BND2_L5 29%）— 背景他人板/裤腿被 IoU 拒。
+    - `rejectVertical` 主导 **1 片**（BND_M2 25%）— 495 帧长片，板轴与体轴夹角频繁越 45°。
+    - `noMask` 主导 **1 片**（BND_M4 34%）— Vision `foregroundInstanceMask` 在这片上失败率高。
+    - `rejectBlob` 主导 **1 片**（BND2_LM 23%）— 主轴延伸率 <2 的团块型输入。
+    - 1 片纯 board / disabled（不适用）。
+- **方向翻转**：**§12.5 结尾"下一步"里的方向建议（放宽 `farShot=0.02→0.01` 或 `rejectVertical=45°→55°`）价值有限**——即使把这两个门控完全砍掉，理论上最多召回 `farShot`(29.8%) + `rejectVertical`(4.8%) = 34.6%，覆盖率上限只到 54%（当前 19.6% + 34.6%）仍够不到 60% 门槛；而**踝点低置信度 27.6% 是完全独立的信号源**，不能靠板轴门控放宽解决。真正的杠杆是"踝点稳定性"本身，与 Phase 1 spec §10.1 前后一致（依赖 Vision `bodyPose` 的踝关键点置信度）。
+- **Phase 2 主体方向重定义**（评分零改动，须再走一次 review）：
+    1. **优先方向 A：降级链路（复用 [BoardObservationSource.ankleProxy](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L555-L557)）** — 当 `boardEdgeObservation.status ∈ {ankleLowCnf, farShot, noMask}` 时，允许 `BoardEdgeDetector` 尝试用踝-膝矢量 + 髋高度先验合成一个"低置信板轴代理"，并在 JSON 新增 `boardEdgeObservation.fallbackAxis`（不改现有字段，Codable 后向兼容）。Gate-G1 覆盖率按 `status ∈ {board, fallbackAxis}` 重新度量。**此路只在 Vision 已返回的姿态数据基础上做几何合成，不新增模型推理，性能开销可忽略**。
+    2. **优先方向 B：Gate-G1 覆盖率门槛重定义** — 从"全帧口径 ≥60%" 改为"**每片可用性 = min(cov%, 60%)，全集加权平均 ≥40%**" 或者"**片级 cov% ≥30% 的样本比例 ≥60%**"（当前 §4.4 25 片中 cov% ≥30% 的样本 7/25 = 28%）。此路是纯统计约定，需要在 §6 明确写出"Gate-G1 覆盖率不代表评分覆盖率，而是观测器可用性下限"。
+    3. **辅助方向 C：Phase 2 时序特征以"连续 board 片段"为输入** — 不再依赖每帧都有 board，而是要求视频至少存在一段"连续 ≥5 帧板轴稳定"的窗口（相当于 1 秒 @ 5fps）。BND2_L1 (75%) / BND2_LM (57%) / BND2_L3 (50%) / BND_M4 (38%) / BND2_L5 (39%) 5 片已具备条件；其余 20 片需要 Phase 2 决定是否放弃或走降级链路。
+- **不建议做的方向**：**放宽 `farShot / rejectVertical` 阈值不再是下一步选项**——见"方向翻转"分析，收益 <5% 且会引入远景假阳/雪杖误识（Phase 0 spec §10.4 已经做过决策）。
+- **spec 决策**：Phase 2 主体开工前须在 §6 补一条 ADR：**"覆盖率不是刃线质量的唯一门槛"**，把优先方向 A + B 的组合作为 Gate-G1 v2 定义（原 v1 门槛 60% 作为"理想覆盖率"保留，不作为准入闸门）；此 ADR 未落地前不动 [BoardEdgeConfig.standard](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift) 阈值。
