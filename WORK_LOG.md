@@ -1,6 +1,20 @@
 # FallLine Work Log
 
-## Current State (2026-09-18 Phase 2 起步 2 完成：Gate-G1 三合一探针跑通 25 片，确定性/性能 PASS、覆盖率 FAIL 待扩集+门控调参)
+## Current State (2026-09-18 Phase 2 起步 3 完成：Gate-G1 reason audit 翻转下一步方向，证伪"放宽板轴门控"路线)
+
+**刃线/轨迹检测 Phase 2 起步 3（评分零改动）**：Gate-G1 reason 分布 audit 脚本落地并对 §4.4 全 25 片跑通，输出**"下一步方向翻转"**的关键负结论——§12.5 结尾曾把"放宽 `farShot=0.02→0.01` / `rejectVertical=45°→55°`"作为覆盖率修复主方向，本轮 audit 证伪：`farShot` 29.8% 是最大项符合猜测，但 **`ankleLowCnf` 27.6% 与 `farShot` 量级相当**且是完全独立的踝点定位问题，`rejectVertical` 仅 4.8% 远低于预期，即使把两个板轴几何门控完全砍掉理论覆盖率上限也只到 54%，够不到 60%。详见 [spec §12.6](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md#L415) 与 [delta_update.md](file:///Users/mingsen/Project/FallLine/delta_update.md) 2026-09-18（Phase 2 起步 3）条：
+- **新脚本 [scripts/board_edge_reason_audit.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_reason_audit.py)**（约 210 行，纯 stdlib）：单轮 CLI（`--board-edge`），按 [`BoardEdgeStatus`](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L594-L617) 11 枚举做分片直方图，聚合出全集总账 + 分档位 high/mid/low + 每片最大拒绝路径 + Top-5 拒绝路径；不做 bit-identical / 耗时对比（已在 §12.5 PASS）。支持 `ONLY=<alias>,...` 与 `-n <k>`。
+- **25 片全量 Top-5 拒绝路径**（4146 帧口径）：`farShot` 29.76% / `ankleLowCnf` 27.59% / `rejectLength` 5.79% / `rejectVertical` 4.80% / `noMask` 4.51%。
+- **分档位对比**：high 桶 farShot 42% + ankleLowCnf 28%（远拍专业滑手）；mid 桶 ankleLowCnf 28% + rejectVertical 14% + rejectLength 10%（中间地带踝点 + 板轴几何双失）；low 桶 farShot 27% + ankleLowCnf 25% + rejectOwnership 7%（雪场群拍背景他人板/裤腿）。
+- **每片最大拒绝路径归类**（25 片）：`ankleLowCnf` 主导 **12 片**（近半样本，含 BND_L1 66%/BND_M3 65%/BND2_L4 63%/BND2_LB 57%/BND_HI2 57%）；`farShot` 主导 **7 片**（BND_HI1 74%/BND2_L6 63%/BND_HI3 62%）；`rejectOwnership` 主导 2 片；`rejectVertical` 主导仅 1 片（BND_M2 25%，全集唯一）；`noMask`/`rejectBlob` 各 1 片；1 片纯 board。
+- **Phase 2 主体方向重定义**（[spec §12.6](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md#L439)）：**A 降级链路** — 在 `status ∈ {ankleLowCnf, farShot, noMask}` 时用踝-膝矢量 + 髋高度合成 `boardEdgeObservation.fallbackAxis`（复用 [`BoardObservationSource.ankleProxy`](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L555-L557)），不新增模型推理；**B Gate-G1 门槛重定义** — 从全帧口径 ≥60% 改为"每片可用性 = min(cov%, 60%)，加权 ≥40%" 或 "片级 cov% ≥30% 占比 ≥60%"（当前 7/25=28%），需在 §6 落 ADR；**C 时序特征以连续 board 片段为输入** — 要求"连续 ≥5 帧板轴稳定"窗口，BND2_L1/LM/L3/M4/L5 5 片已具备。
+- **不建议做的方向**：**放宽 `farShot / rejectVertical` 阈值不再是下一步选项**（收益 <5% + 引入远景假阳/雪杖误识 + Phase 0 §10.4 已决策拒绝）。
+- **产物**：[outputs/board_edge_p2/reason_audit.log](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/reason_audit.log)（`.gitignore` 已排除，25 片单轮日志）。
+- **Gate-G1/G2 前置检查表**（[spec §12.4](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md#L387)）：✅ 接触表脚本 ✅ Gate-G1 三合一探针 ✅ 跨次 bit-identical ✅ 耗时 ≤+30% ✅ reason audit（本轮） ⬜ ADR "覆盖率不是唯一门槛" + 降级链路 A ⬜ 候选池 ≥9 片教练判档回流 ⬜ §4.4 扩到 ≥20 ⬜ Gate-G2 margin ≥1.5σ / LOOCV ≥90%。
+- **验证**：本轮零生产代码改动（仅新增 audit 脚本 + 更新 spec/WORK_LOG/delta_update）；release binary 已存在（同 Phase 2 起步 2 一致），`swift test` 未跑（无 Sources 变更），Phase 1 274 通过基线不变。
+- **下一步（未开始，等确认）**：① 在 spec §6 落 ADR "Gate-G1 覆盖率不是唯一门槛，v2 门槛 = 降级链路后覆盖率 + 片级可用性下限"；② 起草 `BoardEdgeObservation.fallbackAxis` Codable 后向兼容改造（评分零改动，只加字段）；③ Phase 2 主体开工。
+
+## Previous State (2026-09-18 Phase 2 起步 2 完成：Gate-G1 三合一探针跑通 25 片，确定性/性能 PASS、覆盖率 FAIL 待扩集+门控调参)
 
 **刃线/轨迹检测 Phase 2 起步 2（评分零改动）**：Gate-G1 三合一探针脚本落地并对 §4.4 全 25 片跑通，输出**确定性 / 性能双 PASS、覆盖率 FAIL** 的负结论。详见 [spec §12.5](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md#L401) 与 [delta_update.md](file:///Users/mingsen/Project/FallLine/delta_update.md) 2026-09-18（Phase 2 起步 2）条：
 - **探针脚本已落地**：[scripts/board_edge_gate_g1_probe.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_gate_g1_probe.py)。每片 CLI 跑三轮：`--board-edge` × 2 + 基线 × 1；从 JSON `boardEdgeObservation` 逐帧提取 status/reason，同时算 ①**覆盖率** = `status=board` 帧数 / 总帧数 ②**确定性** = 两轮 `--board-edge` 逐帧 `board_flag / axis_angle_deg / axis_length_norm / confidence / near_body_shape / obs_confidence / reason` bit-identical ③**性能** = `--board-edge` 均耗时 / 基线耗时。支持 `ONLY=<alias>,...` 单片过滤、`-n <k>` 前 k 片抽样。
