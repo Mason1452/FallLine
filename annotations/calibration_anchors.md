@@ -149,3 +149,36 @@ Full rerun of the 12 anchor clips above with current [release CLI](file:///Users
 **4. 2D 板身 carvingConfidence 二度确认无判别力**：本批刻滑 7 份 cnf ∈ [0.8%, 43%]（H3=1%、H0/H1/H2=3–4% 却是确认刻滑），搓雪 8 份 cnf ∈ [6%, 53%]（LM=53% 搓雪）。两区间完全重叠，继续坚持 P8-A 结论：板身证据不参与评分、不作硬阈值。
 
 **5. good/bad 桶标签只可作弱先验**：good 桶里 GM 只有 76（教练中偏上），bad 桶 LM 是真中级；目录归类 ≠ 精确档位，一切以人眼标注为准。
+
+## 2026-09-18 Boundary Annotation Batch 3（候选池 19 片，待教练看接触表回填）
+
+§4.4 扩样本第三批。前两批 25 片均为「先按信息增益挑片、再逐份人眼看片」，本批把 Phase 2 起步 1 [p2_candidate_contact_sheets.swift](file:///Users/mingsen/Project/FallLine/scripts/p2_candidate_contact_sheets.swift#L28-L48) 的 19 片候选池（good 8 / middle 10 / bad 1）一次性用当前 release 重跑，算法列已填齐（提取脚本 [board_edge_batch3_extract.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_batch3_extract.py)，日志 `outputs/board_edge_p2/batch3_extract.log`、逐片 JSON `outputs/board_edge_p2/batch3_json/`，均已 .gitignore）。**教练档位 / 是否稳定刻滑 / 备注三列待看 `outputs/board_edge_p2/contact_sheets/<alias>.jpg` 后回填**，五档口径同前：初级<60 · 中级[60,70) · 中级偏上[70,80) · 高质量[80,88) · 专业≥88。calf/knee 按 [StageClassifier.averageSubScores](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/StageClassifier.swift#L24-L39) 口径（可靠姿态帧 totalConfidence 加权，min 0.30 门控）。
+
+| Alias | 文件（桶） | 算法综合分 | edge(conf) | pressure | calf | knee | sideslip° / carvingCnf% | 时长 | 教练档位 | 稳定刻滑? | 备注 |
+|---|---|---:|---|---:|---:|---:|---|---:|---|---|---|
+| CAND_G01 | `0946ed384e732c357a3d55fac77426c0.MP4` (good) | 89 | 67.5 (0.72) | 73.9 | 62.4 | 83.2 | 52° / 13% | 42s |  |  | |
+| CAND_G02 | `3134552bed78447b9f7ba8e2003ce678.MP4` (good) | 93 | 69.0 (0.70) | 74.5 | 64.2 | 89.9 | 40° / 32% | 50s |  |  | |
+| CAND_G03 | `3e6f37fe76521781506c19c02c1b97ed.MP4` (good) | 95 | 74.6 (0.66) | 76.3 | 77.0 | 92.9 | 54° / 16% | 25s |  |  | |
+| CAND_G04 | `5382da0c825e30518ab376505cbcfaf2.MOV` (good) | 91 | 73.6 (0.71) | 77.0 | 71.2 | 94.1 | 39° / 27% | 43s |  |  | |
+| CAND_G05 | `641efed02be271b6d9f014c97d1f8ae0.MOV` (good) | 89 | 67.4 (0.78) | 76.7 | 58.7 | 97.2 | 46° / 21% | 114s |  |  | |
+| CAND_G06 | `9ed0bb6c707fc47fce153cee3dcd365e.MP4` (good) | 96 | 69.9 (0.57) | 77.5 | 70.0 | 92.1 | 54° / 14% | 41s |  |  | |
+| CAND_G07 | `v0200fg10000d7r0017og65qoh1vgeg0.MP4` (good) | 86 | 60.8 (0.50) | 79.1 | 48.2 | 97.7 | 50° / 11% | 30s |  |  | |
+| CAND_G08 | `v2800fgi0000d6m0mk7og65qamcvgf80.MP4` (good) | 93 | 76.5 (0.59) | 73.0 | 83.3 | 96.1 | 55° / 12% | 37s |  |  | |
+| CAND_M01 | `1c5771fc7dd1ea546eb5bc3e4e01bc48.MP4` (middle) | 55 | 34.5 (0.54) | 61.8 | 6.7 | 47.6 | 44° / 17% | 45s |  |  | |
+| CAND_M02 | `4a7dfe960f07ac14b06bbd8de3d38aa4.MP4` (middle) | 77 | 57.7 (0.81) | 68.9 | 46.5 | 74.2 | 41° / 25% | 33s |  |  | |
+| CAND_M03 | `96001e37e76be9ef6cf7a65e73efcac4.MP4` (middle) | 90 | 70.7 (0.73) | 78.4 | 65.4 | 97.4 | 37° / 32% | 29s |  |  | |
+| CAND_M04 | `992f063b79d27b96b471e44a48d8465e.MP4` (middle) | 72 | 54.3 (0.73) | 74.9 | 36.7 | 96.3 | 63° / 4% | 35s |  |  | |
+| CAND_M05 | `a7791a475a244c938dd0815e89b1dec5.MP4` (middle) | 93 | 64.9 (0.67) | 75.1 | 58.6 | 91.7 | 39° / 31% | 51s |  |  | |
+| CAND_M06 | `ccfd9967aa6d3ab5abd04fb8991872c7.MOV` (middle) | 82 | 61.4 (0.64) | 74.5 | 51.5 | 84.0 | 53° / 14% | 10s |  |  | |
+| CAND_M07 | `v0200fg10000d2tcts7og65t6h63ua2g.MP4` (middle) | 65 | 39.9 (0.63) | 64.1 | 17.7 | 61.3 | 34° / 35% | 22s |  |  | |
+| CAND_M08 | `v0200fg10000d6a4i57og65mkjkcdpu0.MP4` (middle) | 81 | 63.1 (0.66) | 69.2 | 58.1 | 72.4 | 73° / 0% | 20s |  |  | |
+| CAND_M09 | `v0300fg10000d4oq6avog65ihr8qf550.MP4` (middle) | 61 | 38.6 (0.70) | 64.2 | 12.3 | 57.7 | 60° / 5% | 106s |  |  | |
+| CAND_M10 | `v2800fgi0000d5ehg1vog65tinkepgl0.MP4` (middle) | 83 | 59.0 (0.73) | 74.4 | 46.0 | 86.2 | 45° / 23% | 59s |  |  | |
+| CAND_B01 | `0b7522e9db823b910ac67727aea726da.MP4` (bad) | 75 | 57.5 (0.56) | 75.9 | 44.8 | 87.8 | 49° / 18% | 49s |  |  | |
+
+### 第三批初步观察（算法侧，待教练标签回流后复核）
+
+- **弱先验分与当前 release 偏差显著**，再次证明接触表 hint 不可作档位：good 桶 G01/G02 弱先验 73/72，当前 release 已 **89/93**；middle 桶 M01 弱先验 67 → 实际 **55**（calf 仅 6.7，全集最低端）、M05 74 → **93**、M07 58 → **65**。
+- **G07 = 86、edge 60.8、calf 48.2** 与 §4.1 GOOD_A 校准锚点完全一致（同一 known anchor 片），佐证提取脚本综合分 / edge 口径与前批严格对齐。
+- **分数带分布（算法）**：≥88 专业带 9 片（G02/G03/G04/G06/G08/M03/M05 + G01 89 + G05 89）；80–88 高质量 3 片（M06/M08/M10）；70–80 中偏上 3 片（M02/M04/B01）；60–70 中级 2 片（M07/M09）；<60 初级 1 片（M01）。**12/19 落专业带、且 calf≥48 的片多达 14 片**——明显高于自然雪场分布，提示候选池在挑片阶段就偏向了高姿态质量片；教练判档后需重点核对这批是否真是专业刻滑，避免 Gate-G2 高端密度虚高。
+- **延续前两批结论**：carvingCnf 与真实刻滑仍不对应（G08 calf 83.3 但 cnf 12%、M08 cnf 0%、M07 搓雪姿态 cnf 35%），P8-A 板身证据不参与评分的结论三批一致。

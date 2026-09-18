@@ -14,6 +14,28 @@
 
 ## 变更
 
+### 2026-09-18（刃线/轨迹检测 Phase 2 扩边界集：§4.4 第三批 19 片算法列 + Gate-G1 预跑）
+
+**本轮性质**：Phase 2 扩边界集——把起步 1 的 19 片接触表候选池（good 8 / middle 10 / bad 1）一次性纳入 [calibration_anchors.md §4.4 Batch 3](file:///Users/mingsen/Project/FallLine/annotations/calibration_anchors.md#L153)。**未改任何生产代码**（新脚本 + 文档 + 探针 CLIPS）。教练档位/刻滑两列留空，待看接触表回填。
+
+**新增 [scripts/board_edge_batch3_extract.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_batch3_extract.py)**（约 200 行，纯 stdlib）：
+- 19 片跑当前 release **基线** CLI（不开 `--board-edge`），提取综合分 / edgeQuality(conf) / pressure / calf / knee / sideslip / carvingCnf / 时长，直接吐 Markdown 表行。
+- calf/knee 加权口径对齐 [StageClassifier.averageSubScores](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/StageClassifier.swift#L24-L39)：只取可靠姿态帧、按 `totalConfidence` 加权。旧片校验：knee 与既有标注精确复现，calf 有 ~1.5 的旧缓存版本微漂（综合分 92 精确对齐）；CAND_G07=86 / edge60.8 / calf48.2 与 GOOD_A 锚点一致，佐证口径对齐。
+- 产物：`outputs/board_edge_p2/batch3_extract.log` + `batch3_json/<alias>.json`（均 .gitignore）。
+
+**探针/审计脚本扩样**（CLIPS 25 → 44 片）：[board_edge_gate_g1_probe.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_gate_g1_probe.py) / [board_edge_reason_audit.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_reason_audit.py) 各加 19 片 `group="tbd"`；audit 分档聚合从写死 high/mid/low 改为按实际 group 动态排序，tbd 单列不混桶。回填档位后把 tbd 改成实际 group 即可重跑，覆盖率数字本身不随档位变。
+
+**第三批 Gate-G1 reason 预跑**（spec §12.7，4218 帧，`outputs/board_edge_p2/batch3_reason_audit.log`）：
+- **board 覆盖率 827/4218 = 19.61%，与旧 25 片的 19.56%（811/4146）几乎逐位相同**——两个独立候选池同得 ~20%，坐实 Gate-G1 v1 的 60% 门槛结构性不可达、非抽样偶然，再次支撑 §12.6 方向 B/A（门槛重定义 + 降级链路）。
+- reason 分布：farShot **37.22%** / ankleLowCnf **22.12%** / noMask **7.56%**（较旧池 4.51% 上升为第三大项，CAND_G02 单片 59.2% 前景分割失败）/ rejectLength 4.84% / rejectPosture 3.65% / rejectBlob 2.28% / rejectOwnership 1.85% / **rejectVertical 仅 0.71%**（旧池 4.80%，二度证伪放宽 45° 夹角门控）/ noAxis 0.17%。
+- 每片主导路径：farShot 9 片（M02 86% 最高）、ankleLowCnf 6 片（M01 60% 最高）、noMask 3 片（G02/G01/M06）。片级高覆盖：M06 56% / G06 48% / M10 44% / B01 41% / M04 35% / G03 30%。
+
+**算法列初步观察（不作档位依据）**：弱先验分与当前 release 偏差大（G02 72→93、M01 67→55 calf 仅 6.7、M05 74→93）；12/19 落专业带、calf≥48 达 14 片，候选池偏高姿态质量——回填时需重点核对"姿态好 ≠ 专业刻滑"，防 Gate-G2 高端密度虚高。
+
+**验证**：release build 通过；3 个 py 脚本 `py_compile` 通过；本轮零 Sources 变更，未跑 `swift test`（Phase 1 274 通过基线不变）。
+
+**遗留 / 下一步**：等教练看 `outputs/board_edge_p2/contact_sheets/<alias>.jpg` 回填 §4.4 第三批档位/刻滑 → 同步两脚本 group → 44 片重跑 Gate-G1 三合一 + 分档 reason audit（方向 B 片级口径）→ 回写 §12.7 / WORK_LOG / delta_update。
+
 ### 2026-09-18（刃线/轨迹检测 Phase 2 起步 3：Gate-G1 reason audit 翻转下一步方向）
 
 **本轮性质**：紧接 Phase 2 起步 2（Gate-G1 三合一探针）向前推一格——落地 reason 分布 audit 脚本，对 §4.4 全 25 片跑通并**证伪 §12.5 结尾提出的"放宽板轴几何门控"路线**。**未改任何生产代码**，仅新增 audit 脚本 + 更新 spec / WORK_LOG / delta_update。

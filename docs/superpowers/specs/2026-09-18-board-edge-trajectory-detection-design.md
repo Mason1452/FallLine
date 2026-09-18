@@ -443,3 +443,14 @@ Phase 2 主体开工前必须逐项打勾：
     3. **辅助方向 C：Phase 2 时序特征以"连续 board 片段"为输入** — 不再依赖每帧都有 board，而是要求视频至少存在一段"连续 ≥5 帧板轴稳定"的窗口（相当于 1 秒 @ 5fps）。BND2_L1 (75%) / BND2_LM (57%) / BND2_L3 (50%) / BND_M4 (38%) / BND2_L5 (39%) 5 片已具备条件；其余 20 片需要 Phase 2 决定是否放弃或走降级链路。
 - **不建议做的方向**：**放宽 `farShot / rejectVertical` 阈值不再是下一步选项**——见"方向翻转"分析，收益 <5% 且会引入远景假阳/雪杖误识（Phase 0 spec §10.4 已经做过决策）。
 - **spec 决策**：Phase 2 主体开工前须在 §6 补一条 ADR：**"覆盖率不是刃线质量的唯一门槛"**，把优先方向 A + B 的组合作为 Gate-G1 v2 定义（原 v1 门槛 60% 作为"理想覆盖率"保留，不作为准入闸门）；此 ADR 未落地前不动 [BoardEdgeConfig.standard](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift) 阈值。
+
+### 12.7 第三批候选池 19 片 reason 预跑（2026-09-18，待教练回填，覆盖率与档位无关）
+
+- 背景：§4.4 第三批把 Phase 2 起步 1 接触表候选池 19 片（good 8 / middle 10 / bad 1）一次性纳入，算法列已用当前 release 重跑并写入 [calibration_anchors.md Batch 3](file:///Users/mingsen/Project/FallLine/annotations/calibration_anchors.md#L153)；教练档位 / 刻滑两列仍空（看接触表回填中）。覆盖率只依赖 `boardEdgeObservation.status`、与档位无关，因此先用 `group=tbd` 把 19 片并入 [board_edge_reason_audit.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_reason_audit.py) / [board_edge_gate_g1_probe.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_gate_g1_probe.py) 的 CLIPS 做单轮 `--board-edge` 预跑（日志 `outputs/board_edge_p2/batch3_reason_audit.log`，已 .gitignore）。
+- **关键复现：新候选池 board 覆盖率 827/4218 = 19.61%，与 §12.5 旧 25 片的 19.56%（811/4146）几乎逐位相同**。两个独立挑选、不同桶分布的候选池得到同样 ~20% 全帧覆盖率 → **Gate-G1 v1 的 60% 门槛在当前观测器下结构性不可达，不是抽样偶然**，进一步坐实 §12.6 "门槛重定义 + 降级链路"而非"放宽板轴几何门控"的方向。
+- **第三批全集 status 分布（4218 帧）**：board 19.61% / **farShot 37.22%**（1570）/ **ankleLowCnf 22.12%**（933）/ noMask **7.56%**（319）/ rejectLength 4.84% / rejectPosture 3.65% / rejectBlob 2.28% / rejectOwnership 1.85% / rejectVertical **0.71%**（30）/ noAxis 0.17%。
+    - 与旧 25 片对比：farShot 从 29.76% 升到 **37.22%**（新池含 G05 569 帧、M09 532 帧等远拍长片，权重放大）；ankleLowCnf 从 27.59% 微降到 22.12% 但仍是第二大项；**rejectVertical 从 4.80% 进一步坍缩到 0.71%**，二度证伪"放宽 45° 夹角门控"的价值。
+    - **noMask 从旧池 4.51% 升到 7.56% 且成为第三大拒绝路径**：CAND_G02 单片 59.2%（148/250）、CAND_G01 27.5%（58/211）前景实例分割大面积失败。这是 §12.6 优先方向 A 降级链路必须覆盖的第三类 `status`（已包含在 `{ankleLowCnf, farShot, noMask}` 合成 `fallbackAxis` 的触发集合内），新数据再次确认该集合选择正确。
+- **每片最大拒绝路径（19 片）**：farShot 主导 **9 片**（M02 86% / M03 80% / M09 61% / M08 53% / M04 51% / M05 48% / G05 48% / G04 45% / M10 38% / G08 35%）；ankleLowCnf 主导 **6 片**（M01 60% / G07 53% / M07 31% / G06 26% / G03 26% / B01 25%）；noMask 主导 **3 片**（G02 59% / G01 27.5% / M06 17.3%）；无 rejectVertical / rejectLength / rejectBlob 主导片。
+- **片级高覆盖样本**：CAND_M06 **56%**（52 帧短片）、CAND_G06 **48%**、CAND_M10 **44%**、CAND_B01 **41%**、CAND_M04 35%、CAND_G03 30%。除 M06 外均仍低于 60%，但多数 ≥30%，与 §12.6 方向 B 的"片级 cov% ≥30%"口径吻合——回填档位后应按该口径而非全帧 60% 判定可用性。
+- **注意**：第三批分档位（high/mid/low）聚合暂缺，因为 `group=tbd`；教练档位回流后把 CLIPS 的 tbd 改成实际档位重跑本 audit 即可，覆盖率 / reason 数字本身不随档位改变，只有分档对比会新增三行。

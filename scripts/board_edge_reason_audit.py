@@ -36,6 +36,7 @@ ROOT = Path(__file__).resolve().parent.parent
 RELEASE_BIN = ROOT / ".build" / "release" / "FallLineCLI"
 
 # 与 board_edge_gate_g1_probe.py 同源；保留同一份 CLIPS 便于对齐。
+# group=tbd 的 19 片为第三批待回填片（calibration_anchors.md Batch 3）。
 CLIPS: list[tuple[str, str, str]] = [
     ("BND_HI1", "high",  "video/middle/9714be3aba73f5f94130750c2a15d381.MP4"),
     ("BND_HI2", "high",  "video/middle/4f9ec73b994b63b0775ccfb7a8ef7e6f.MP4"),
@@ -61,7 +62,27 @@ CLIPS: list[tuple[str, str, str]] = [
     ("BND2_L4",  "low",  "video/bad/v1e00fgi0000cv786ffog65rtmm48gmg.MOV"),
     ("BND2_L3",  "low",  "video/bad/v2800fgi0000d4v24r7og65oi0fmka5g.MP4"),
     ("BND2_L2",  "low",  "video/bad/v0d00fg10000ctm0ufvog65rqb97g2p0.MP4"),
-    ("BND2_L1",  "low",  "video/bad/v0d00fg10000csgr6inog65n8mlpg2m0.MP4"),
+    ("BND2_L1", "low", "video/bad/v0d00fg10000csgr6inog65n8mlpg2m0.MP4"),
+    # ---- CAND_* 第三批 19 片（group=tbd 待回填）----
+    ("CAND_G01", "tbd", "video/good/0946ed384e732c357a3d55fac77426c0.MP4"),
+    ("CAND_G02", "tbd", "video/good/3134552bed78447b9f7ba8e2003ce678.MP4"),
+    ("CAND_G03", "tbd", "video/good/3e6f37fe76521781506c19c02c1b97ed.MP4"),
+    ("CAND_G04", "tbd", "video/good/5382da0c825e30518ab376505cbcfaf2.MOV"),
+    ("CAND_G05", "tbd", "video/good/641efed02be271b6d9f014c97d1f8ae0.MOV"),
+    ("CAND_G06", "tbd", "video/good/9ed0bb6c707fc47fce153cee3dcd365e.MP4"),
+    ("CAND_G07", "tbd", "video/good/v0200fg10000d7r0017og65qoh1vgeg0.MP4"),
+    ("CAND_G08", "tbd", "video/good/v2800fgi0000d6m0mk7og65qamcvgf80.MP4"),
+    ("CAND_M01", "tbd", "video/middle/1c5771fc7dd1ea546eb5bc3e4e01bc48.MP4"),
+    ("CAND_M02", "tbd", "video/middle/4a7dfe960f07ac14b06bbd8de3d38aa4.MP4"),
+    ("CAND_M03", "tbd", "video/middle/96001e37e76be9ef6cf7a65e73efcac4.MP4"),
+    ("CAND_M04", "tbd", "video/middle/992f063b79d27b96b471e44a48d8465e.MP4"),
+    ("CAND_M05", "tbd", "video/middle/a7791a475a244c938dd0815e89b1dec5.MP4"),
+    ("CAND_M06", "tbd", "video/middle/ccfd9967aa6d3ab5abd04fb8991872c7.MOV"),
+    ("CAND_M07", "tbd", "video/middle/v0200fg10000d2tcts7og65t6h63ua2g.MP4"),
+    ("CAND_M08", "tbd", "video/middle/v0200fg10000d6a4i57og65mkjkcdpu0.MP4"),
+    ("CAND_M09", "tbd", "video/middle/v0300fg10000d4oq6avog65ihr8qf550.MP4"),
+    ("CAND_M10", "tbd", "video/middle/v2800fgi0000d5ehg1vog65tinkepgl0.MP4"),
+    ("CAND_B01", "tbd", "video/bad/0b7522e9db823b910ac67727aea726da.MP4"),
 ]
 
 # 与 [BoardEdgeStatus](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L594-L617) 完整对齐。
@@ -163,11 +184,13 @@ def summarize(results: list[dict]) -> None:
         pct = n / total_frames * 100 if total_frames else 0.0
         print(f"  {st:>16s} : {n:>5d}  ({pct:5.2f}%)")
 
-    print("\n按档位（high/mid/low）分布：")
+    print("\n按档位（high/mid/low，tbd=待回填单列不混入）分布：")
     header = ["group", "frames"] + STATUS_ORDER
     widths = [6, 7] + [max(9, len(s) + 1) for s in STATUS_ORDER]
     print("  " + "  ".join(f"{h:>{w}s}" for h, w in zip(header, widths)))
-    for g in ("high", "mid", "low"):
+    group_order = [g for g in ("high", "mid", "low", "tbd") if g in group_frames]
+    group_order += [g for g in group_frames if g not in group_order]
+    for g in group_order:
         tf = group_frames.get(g, 0)
         row = [g, str(tf)]
         for st in STATUS_ORDER:

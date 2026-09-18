@@ -1,6 +1,16 @@
 # FallLine Work Log
 
-## Current State (2026-09-18 Phase 2 起步 3 完成：Gate-G1 reason audit 翻转下一步方向，证伪"放宽板轴门控"路线)
+## Current State (2026-09-18 §4.4 第三批扩边界集：19 片算法列 + Gate-G1 预跑完成，等教练看接触表回填档位)
+
+**刃线/轨迹检测 Phase 2 — 扩边界集（评分零改动）**：把 Phase 2 起步 1 的 19 片接触表候选池（good 8 / middle 10 / bad 1）一次性纳入 §4.4 第三批。算法列已用当前 release 重跑填齐，**教练档位 / 稳定刻滑两列留空，正在看接触表回填**。详见 [calibration_anchors.md Batch 3](file:///Users/mingsen/Project/FallLine/annotations/calibration_anchors.md#L153) 与 [delta_update.md](file:///Users/mingsen/Project/FallLine/delta_update.md) 2026-09-18 第三批条：
+- **新脚本 [scripts/board_edge_batch3_extract.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_batch3_extract.py)**（纯 stdlib，约 200 行）：19 片跑当前 release 基线 CLI，提取综合分 / edge(conf) / pressure / calf / knee / sideslip / carvingCnf / 时长；calf/knee 按 [StageClassifier.averageSubScores](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/StageClassifier.swift#L24-L39) 口径（可靠姿态帧 totalConfidence 加权），旧片校验 knee 精确复现、calf 有 ~1.5 版本微漂（score=92 精确对齐）；G07=86/edge60.8/calf48.2 与 GOOD_A 锚点完全一致，佐证口径对齐。产物 `outputs/board_edge_p2/batch3_extract.log` + `batch3_json/<alias>.json`（.gitignore）。
+- **算法列初步观察**：弱先验分与当前 release 偏差大（G02 72→**93**、M01 67→**55** calf 仅 6.7、M05 74→**93**），hint 不可作档位；12/19 落专业带、calf≥48 达 14 片，候选池偏高姿态质量，回填时需重点核对是否真专业刻滑，防 Gate-G2 高端密度虚高。
+- **Gate-G1 预跑（[board_edge_reason_audit.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_reason_audit.py) group=tbd，spec §12.7）**：19 片 4218 帧 board 覆盖率 **19.61%**，与旧 25 片 **19.56%** 几乎逐位相同——两个独立候选池同得 ~20%，**坐实 60% 门槛结构性不可达、非抽样偶然**，再次支撑 §12.6 方向 B/A（门槛重定义 + 降级链路）。第三批 reason：farShot 37.2% / ankleLowCnf 22.1% / **noMask 7.6%（升为第三大项，G02 59% 前景分割失败）** / rejectVertical 仅 0.71%（二度证伪放宽夹角门控）。片级高覆盖：M06 56% / G06 48% / M10 44% / B01 41%。
+- **探针 CLIPS 已扩到 44 片**：[gate_g1_probe.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_gate_g1_probe.py) 与 [reason_audit.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_reason_audit.py) 新增 19 片 group=`tbd`（不与 high/mid/low 混桶，audit 已改为动态 group 排序）。回填后把 tbd 换成实际档位即可重跑，覆盖率数字不随档位变。
+- **验证**：本轮零 Sources 变更（新脚本 + 文档 + 探针 CLIPS）；release build 通过；3 个 py 脚本 `py_compile` 通过；`swift test` 未跑（无生产代码变更，Phase 1 274 通过基线不变）。
+- **下一步（等教练回填）**：① 看 `outputs/board_edge_p2/contact_sheets/<alias>.jpg` 回填 §4.4 第三批 19 片档位/刻滑；② 我把两脚本 group=tbd 改成实际档位，重跑 reason audit 补分档对比；③ 全 44 片重跑 Gate-G1 三合一确认确定性/性能仍 PASS、覆盖率按方向 B 片级口径统计；④ 回写 §12.7 / WORK_LOG / delta_update。
+
+## Previous State (2026-09-18 Phase 2 起步 3 完成：Gate-G1 reason audit 翻转下一步方向，证伪"放宽板轴门控"路线)
 
 **刃线/轨迹检测 Phase 2 起步 3（评分零改动）**：Gate-G1 reason 分布 audit 脚本落地并对 §4.4 全 25 片跑通，输出**"下一步方向翻转"**的关键负结论——§12.5 结尾曾把"放宽 `farShot=0.02→0.01` / `rejectVertical=45°→55°`"作为覆盖率修复主方向，本轮 audit 证伪：`farShot` 29.8% 是最大项符合猜测，但 **`ankleLowCnf` 27.6% 与 `farShot` 量级相当**且是完全独立的踝点定位问题，`rejectVertical` 仅 4.8% 远低于预期，即使把两个板轴几何门控完全砍掉理论覆盖率上限也只到 54%，够不到 60%。详见 [spec §12.6](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md#L415) 与 [delta_update.md](file:///Users/mingsen/Project/FallLine/delta_update.md) 2026-09-18（Phase 2 起步 3）条：
 - **新脚本 [scripts/board_edge_reason_audit.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_reason_audit.py)**（约 210 行，纯 stdlib）：单轮 CLI（`--board-edge`），按 [`BoardEdgeStatus`](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L594-L617) 11 枚举做分片直方图，聚合出全集总账 + 分档位 high/mid/low + 每片最大拒绝路径 + Top-5 拒绝路径；不做 bit-identical / 耗时对比（已在 §12.5 PASS）。支持 `ONLY=<alias>,...` 与 `-n <k>`。
