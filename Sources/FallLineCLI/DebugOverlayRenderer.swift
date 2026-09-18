@@ -269,6 +269,10 @@ private extension DebugOverlayRenderer {
             drawVisualBoardObservation(visualObservation, canvas: size)
         }
 
+        if let edge = frame.boardEdgeObservation {
+            drawBoardEdgeObservation(edge, canvas: size)
+        }
+
         if let boardFrame {
             drawBoardObservation(boardFrame.observation, canvas: size)
             if let kinematics = boardFrame.kinematics {
@@ -350,6 +354,29 @@ private extension DebugOverlayRenderer {
             alpha: CGFloat(max(0.35, observation.confidence)),
             widthMultiplier: 0.004
         )
+    }
+
+    static func drawBoardEdgeObservation(_ edge: BoardEdgeObservation, canvas: NSSize) {
+        guard edge.status == .board,
+              let angle = edge.axisAngle,
+              let cx = edge.centerX,
+              let cy = edge.centerY,
+              let lengthRatio = edge.lengthRatio else {
+            return
+        }
+        let color = NSColor.systemCyan
+        let length = canvas.width * CGFloat(clamp(lengthRatio, lower: 0.04, upper: 0.55))
+        let direction = vector(angle: angle, length: length / 2)
+        let center = normalizedPoint(x: cx, y: cy, canvas: canvas)
+        let start = NSPoint(x: center.x - direction.x, y: center.y - direction.y)
+        let end = NSPoint(x: center.x + direction.x, y: center.y + direction.y)
+        let line = NSBezierPath()
+        line.lineWidth = max(3, min(canvas.width, canvas.height) * 0.006)
+        line.lineCapStyle = .round
+        line.move(to: start)
+        line.line(to: end)
+        color.withAlphaComponent(0.95).setStroke()
+        line.stroke()
     }
 
     static func drawObservationLine(

@@ -1,6 +1,6 @@
 # Delta Update
 
-最后更新：2026-09-15
+最后更新：2026-09-18
 
 本文档只记录每轮工作的增量变化，不记录项目全量背景。需要项目当前状态、目标和长期上下文时，先看 `WORK_LOG.md`；需要文件职责时，看 `file_manifest.md`。
 
@@ -13,6 +13,94 @@
 - 同一轮没有代码变更时，明确写”仅文档变更”或”未运行测试”的原因。
 
 ## 变更
+
+### 2026-09-18（刃线/轨迹检测 Phase 1：生产级板身刃线观测器落地，默认关、纯诊断、零评分接触）
+
+**本轮性质**：执行 [立项 spec](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md) Phase 1，把候选 A（前景分割 + 踝下 ROI PCA）从离线原型升级为生产代码并接入分析管线。**全程不改任何评分逻辑、聚合器、报告结构与 iOS UI**；默认关闭，仅显式开启时产出诊断观测。
+
+**A. 新增生产代码**
+- [BoardEdgeDetector.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift)：`BoardEdgeConfig`（阈值公开常量，默认 `.standard` = Gate-G0 校准值，`minAxisLength=0.07`）+ `AxisGeometry`（纯数值 PCA 结果，Equatable）+ `BoardEdgeDetector.detect(cgImage:pose:config:)`。落实 Phase 0 指定的两条必修：**实例归属校验**（姿态框与各前景实例框算 IoU，取 ≥0.15 中最高者，否则 `rejectOwnership`）、**站姿状态联合门控**（躯干倾角 + 髋高于踝，摔倒/坐姿判 `rejectPosture`）。门控链：ankleLowCnf → noMask → rejectOwnership → farShot(subjFrac<0.02) → rejectPosture → noAxis/rejectVertical(>45°)/rejectLength/rejectBlob(elong<2.0) → board。
+- [Models.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L594-L661)：`BoardEdgeStatus`（11 态，board + disabled + 9 种具体不可用原因）、`BoardEdgeObservation`（归一几何量 + Codable，init 对越界字段做 [0,1] 钳制）；`DetectionResult` 新增可选 `boardEdgeObservation`。
+- [VideoAnalyzer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L343-L354)：init 增 `enableBoardEdge`（默认 false）/`boardEdgeConfig`，`analyzeFrame` 同帧调用检测器。**诊断失败局部隔离**（`try?` → `.noMask` 占位），避免分割抛错拖垮同帧已成功的姿态/评分。
+- [PoseSmoother.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseSmoother.swift)：三处重建 `DetectionResult` 全部透传 `boardEdgeObservation`，平滑不丢诊断字段。
+
+**B. CLI / overlay**
+- [main.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCLI/main.swift)：新增 `--board-edge` flag（用法同步 help），透传 `enableBoardEdge`。
+- [DebugOverlayRenderer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCLI/DebugOverlayRenderer.swift#L359-L380)：新增 `drawBoardEdgeObservation`，仅 `status==.board` 时画青色板轴（用图宽 × lengthRatio 定长，与骨架/黄紫板线区分）。
+
+**C. 测试与验证**
+- 新增 [BoardEdgeDetectorTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/BoardEdgeDetectorTests.swift)：21 用例覆盖踝点均值/单踝/低置信/缺失、IoU（同框/不交/部分）、实例归属（最高 IoU/低 IoU 拒绝/无姿态框回退最大）、站姿（站立/横倒/坐姿/证据不足）、ROI PCA（水平条角度0+长度/竖直条90°/团块低延伸/像素不足/短条长度越界/ROI 外忽略）、观测字段钳制。
+- `swift build` 通过；`swift test` 全量 **274 通过 0 失败**（基线 253 + 21 新用例）。
+- 真实冒烟 `testvideo/1.MP4 --board-edge`：117 采样帧状态分布 farShot 92 / rejectLength 10 / **board 8** / ankleLowCnf 6 / rejectVertical 1，与 Phase 0 GT 结论一致；8 个 board 帧 axisAngle 3.4–10.4°、elong 4.6–8.4。叠加 `--debug-overlay` 118 张图正常产出，目检 board 帧青色轴精确落在真实雪板上。
+
+**遗留 / 下一步**：观测仍为诊断字段，Phase 2 须在边界集（当前 n=11，待扩 ≥20）上以 Gate-G2（margin≥1.5σ + LOOCV≥90%）验证后才允许联动评分；远景帧继续诚实输出不可用，不做补偿。
+
+### 2026-09-18（刃线/轨迹检测 Phase 0 离线可行性验证：Gate-G0 PASS，A 路 go / C1 路 no-go）
+
+**本轮性质**：执行 [2026-09-18 立项 spec](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md) 的 Phase 0 闸门，全程离线脚本原型 + 人工逐帧 GT，**生产代码、评分、iOS UI 零改动**。抽帧口径 11 片 × 10 个均匀时间点（0.08–0.92，AVAssetImageGenerator 精确取帧）= 110 帧。
+
+**A. 候选 A（前景分割 + 踝下 ROI PCA 板轴）→ GO**
+- 原型：[p0_board_axis_dense_spike.swift](file:///Users/mingsen/Project/FallLine/scripts/p0_board_axis_dense_spike.swift)（加密版；早期 1 帧/片版 [p0_board_axis_spike.swift](file:///Users/mingsen/Project/FallLine/scripts/p0_board_axis_spike.swift)）。同帧 Vision bodyPose 踝点 → `VNGenerateForegroundInstanceMaskRequest` → 踝下 ROI（x±0.24，y −0.16…−0.01）主体像素 PCA → unsigned 主轴角/延伸率/归一长度。
+- Gate-G0 三硬指标（先验门控 ankCnf≥0.30/subjFrac≥0.02/angle≤45°/axisLen 0.10–0.55/elong≥2.0）：近景子集 52/110。①**检出率**：0.10 口径 28/52=54% 未达标，但 17 帧 rejectLength 长度连续分布（0.04–0.098）、7 帧在 0.07–0.098 为阈值边界效应；按 GT 把 `G_MIN_LEN` 校准到 **0.07** 后放行 38/52=**73%≥70%**，新增 10 帧逐帧核对全真板。②**角度误差**：28 个 board 目测中位 **≤8°**（绝大多数 ≤5°，全部 ≤10°，阈值 ≤12°）。③**门控精度 100%**（28 board 全在近景子集；非近景 58 帧 0 误放；雪杖/裤腿/竖直他人均被 rejectVertical 拦截）。
+- **零硬假阳**；远景（BND_L1 金色夕阳、BND_L2 雪雾）0 board 诚实输出不可用。两处 Phase 1 必修：**实例归属校验**（BND2_L5#7 轴 28° 对准背景中他人的板——物理真板但错对象）、**站姿状态联合门控**（BND2_LB 摔倒/坐姿帧轴不代表刃线质量）。
+- GT 工具与产物：[p0_gt_contact_sheets.py](file:///Users/mingsen/Project/FallLine/scripts/p0_gt_contact_sheets.py) → [outputs/edge_spike/gt_sheets/](file:///Users/mingsen/Project/FallLine/outputs/edge_spike/gt_sheets)（11 张逐片接触表）+ [p0_board_axis_dense.tsv](file:///Users/mingsen/Project/FallLine/outputs/edge_spike/p0_board_axis_dense.tsv)。
+
+**B. 候选 C1（VNTranslational 相机补偿 + 踝轨迹弯形）→ NO-GO**
+- 原型：全图配准 [p0_camera_registration_spike.swift](file:///Users/mingsen/Project/FallLine/scripts/p0_camera_registration_spike.swift)（成功率 75–100%）、人体框外背景掩膜版 [p0_camera_registration_bg_spike.swift](file:///Users/mingsen/Project/FallLine/scripts/p0_camera_registration_bg_spike.swift)（70–100%），两版位移向量 y 相关≈1.0、x 多 0.65–0.95（"主体锁定"担心不成立）。
+- 补偿后分析 [p0_compensated_pathshape_audit.py](file:///Users/mingsen/Project/FallLine/scripts/p0_compensated_pathshape_audit.py)：全图补偿 turnStd within-set margin 0.38→**2.00σ 但方向与假设相反**（雏形踝中点 S 弧多→转角大；初级近景跟拍轨迹反被压平），系机位类型与水平混淆的假阳性。
+- LOO 判定 [p0_loo_classify.py](file:///Users/mingsen/Project/FallLine/scripts/p0_loo_classify.py)：标准化 5 维（straight/turnStd/turnPerLen/curvMed/pathLen）单/双特征留一交叉验证，raw/全图/背景三口径最好分别 **6/6/5 错分**（11 中），2.00σ margin 不转化为判别力。**C1/C2/C3 不做 Phase 1 主线**；远景只能诚实输出"板轴不可用"。
+
+**C. 判定与入口**：spec 状态 Proposed → **Gate-G0 PASS**，追加 §10（含 Phase 1 四条入口要求：实例归属门控、站姿状态门控、G_MIN_LEN=0.07、踝下 ROI 全分辨率裁剪缓存）。下一步 Phase 1 生产级板轴观测器（默认关、诊断命名空间 + debug overlay，不接触评分字段；Phase 2 仍须 Gate-G2 margin≥1.5σ + LOOCV≥90% 才联动）。中优先：边界集 n=11→≥20。
+
+**验证**：4 个 swift 原型均编译运行 exit 0；3 个 python 脚本 exit 0；无 Core/CLI 代码变更，未跑 swift test（基线维持 253）。
+
+### 2026-09-18（低端 62 分地板归因闭环：bestThird 修正证伪 + 2D 特征可分性穷尽审计，负结论归档）
+
+**本轮性质**：针对 2026-09-16 两批人眼标注（n=25）定位的"6 份教练判初级 bad 片被 cap 顶在 60-65"问题，先按计划验证 bestThird 选择偏差修正，再穷尽现有 2D 检测信号的可分性。**两个假设均被数据证伪；本轮不改任何评分代码**，只新增两个可复现审计脚本 + 归档产物，结论转入"可靠刃线/轨迹检测"新能力立项。
+
+**A. bestThird 聚合器扫描（[scripts/bestthird_aggregator_audit.py](file:///Users/mingsen/Project/FallLine/scripts/bestthird_aggregator_audit.py)）**
+- 方法：离线复刻 [VideoAnalyzer.generateSummary](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift) 完整封顶链路（stable baseline / edge 62 / edgeQuality 72 / board 62 / duration ramp + flow factor + 0.30 门控），**唯一可替换环节是可靠帧聚合函数**。18 种聚合器：top33（baseline）/wmean/median/wmedian/top50/top25/p67/blend25-75/headroom25-60/trim10-25_33。
+- 仿真基线校验：25 片 sim 终分 vs JSON averageScore **max Δ=0.00**，封顶链路复刻可信。
+- 结果：**baseline top33 本身就是 18 种里最好的**——档位命中 13/25、MAE 12.25、越界样本 MAE **1.08**、全部样本都在 ±1 档内。任何更"全片化"的聚合器（wmean 8 中、越界 MAE 4.72；median 9 中、最差跨 3 档）都会在中高端造成大面积低估（wmean 15 处低估），trim 系列虽能压低端但把 M2/M3 真中级误压到初级（最差跨 3 档）。
+- **bestThird 选择偏差不是低端地板的可修复成因**：低端被顶分的真正机制是 `min(top33, edge cap 62)`——top33 虚高（59.9-84.1）只是被 cap 截断前的中间量，换聚合器要么穿不透 cap（低端仍 62），要么误伤中高端。
+- 产物：[outputs/bestthird_rerun/aggregator_scores.tsv](file:///Users/mingsen/Project/FallLine/outputs/bestthird_rerun/aggregator_scores.tsv)（25 片 ×18 聚合器终分矩阵）+ [clips.txt](file:///Users/mingsen/Project/FallLine/outputs/bestthird_rerun/clips.txt)（第二批 15 片清单）+ logs/（15 份 release 重跑日志）。
+
+**B. 低端可分性穷尽审计（[scripts/lowend_separability_audit.py](file:///Users/mingsen/Project/FallLine/scripts/lowend_separability_audit.py)）**
+- 样本：7 片教练判初级（BND2_LB/L6/L5/L4/L3/L2/L1，被 62 地板顶进中级带）vs 4 片真中级雏形（BND_L1/L2/L3、BND2_LM，同分带 60-65）。
+- 特征空间（25 维，7 类）：①聚合分布（wmean/bestThird/median/p67/below60frac）②时长/stability/flow（coherence/smoothness）③姿态维度（knee/calf/gravity/sym/edgeQuality/pressure）④跨弯时序结构（leanSwaps 倒伏换弯、latAutoCo 横向位移自相关、kneeAutoCo 膝屈伸节律、turnSegments）⑤几何代理（kneeOverAnkle/ankleOverHip/knockKnee 犁式站姿宽度、travelAngle、edgeSignal）。
+- 1D：最强单特征 **sym（初级更高，acc 仅 81.8%，margin −0.73σ）**，误分 BND2_L1 与 BND_L1；与 §4.5 sym 负相关结论一致——楔形站姿对称是初级特征，但不是分档器。
+- 2D：枚举全部轴对齐合取规则，仅 8 个能在 n=11 上 11/11 全对，**最强 margin 只有 0.50σ**（初级⊂ 低 smoothness & 低 ankleOverHip），多数 0.0-0.37σ，全部落在测量噪声/采样波动内，属小样本过拟合，不具备任何稳健阈值。
+- **结论：当前 2D Vision 信号空间中，推坡初级与平行雏形中级线性（及轴对齐规则）不可分**。物理上可分的信号（弯形 C/S 弧、板身刃线轨迹、搓雪 vs 刻滑的速度-方向耦合）现有检测管线完全没有观测。
+
+**C. 决策（用户拍板）**
+1. 本轮不改评分、不动 bestThird、不新增 2D 代理阈值（0.50σ margin 规则若上线必然在新样本翻车，重蹈 knee 动态加权 margin 0.44 的覆辙）。
+2. **立项新检测能力：可靠板身刃线 / 轨迹检测**。候选方向（预研，未排期）：板身/雪板实例分割或线段检测提取刃线方向、跨弯轨迹曲率（C 弧 vs 直滑降-急转）、速度方向一致性（搓雪急转 vs 刻滑顺弧）；产出新特征后再回到本审计脚本验证 n=11 边界集能否以 ≥1.5σ margin 分开，届时才谈低端 cap/聚合器联动。
+3. calf≈45.5 刻滑软信号（23/25）与本审计不冲突——它分刻滑/搓雪，不分推坡/平行雏形。
+
+**验证**：两个脚本 `python3` 直接运行 exit 0，baseline max Δ=0.00；无 Core 代码变更，未跑 swift test（测试数维持 253，上轮 §4.1/§4.3 后基线）。
+
+**遗留**：
+- 15 份第二批样本的 release 重跑报告 md（[video/bad](file:///Users/mingsen/Project/FallLine/video/bad)/[video/good](file:///Users/mingsen/Project/FallLine/video/good) 各 8/7 份）为本轮批跑刷新，与脚本消费的本地 JSON 同批生成；JSON 按 [.gitignore](file:///Users/mingsen/Project/FallLine/.gitignore) `*.json` 约定不入库，脚本只可在已重跑过的本机复现，换机器需先按 clips.txt 重跑 release CLI。
+
+---
+
+### 2026-09-18（续：刃线/轨迹检测新能力立项 spec，仅文档变更）
+
+**本轮性质**：承接上一轮负结论，正式立项"可靠板身刃线/跨弯轨迹检测"。**零评分/生产代码改动**，仅新增 1 份立项 spec + WORK_LOG 同步；先复跑并固化 4 项 spike 证据，再做 Vision 能力调研。
+
+**A. spike 证据复跑固化**（脚本上一轮已建，产物 [outputs/edge_spike/](file:///Users/mingsen/Project/FallLine/outputs/edge_spike)）
+- ROI（[edge_spike_roi_audit.py](file:///Users/mingsen/Project/FallLine/scripts/edge_spike_roi_audit.py)）：脚下纵向余量中位 585–1022px（P10 437–939）充足，但双踝站姿宽仅 2–46px（BND2_L1 147 除外），单板多只检出单踝中心，无法靠两脚连线定板轴；有效姿态帧 34–92%。
+- 雪面静态脊线（[edge_spike_trajectory_audit.py](file:///Users/mingsen/Project/FallLine/scripts/edge_spike_trajectory_audit.py)）：手工理想 ROI 下初级 entropy 0.638–0.894/peak3 0.099–0.150，雏形 0.588–0.849/0.113–0.158，**区间重叠不可分**（他人轨迹/雪雾/相机俯仰污染），单帧/短窗用法否决。
+- 踝 2D 轨迹弯形（[edge_spike_pathshape_audit.py](file:///Users/mingsen/Project/FallLine/scripts/edge_spike_pathshape_audit.py)）：turnStd 33.9–62.3 vs 46.7–55.6、curvMed 116–1114 vs 56–983，**严重重叠不可分**，手持相机运动主导。
+- 前景实例分割（[edge_spike_foreground_mask.swift](file:///Users/mingsen/Project/FallLine/scripts/edge_spike_foreground_mask.swift)）：近景侧视（L1）/室内教学（LM）mask **含完整雪板**；户外中景（L3）切板；金色夕阳远景大全景（MIDL1）只剩人体小剪影、板丢失 → 只能做带严格可用性门控的近景信号。
+
+**B. Vision 能力调研**：`VNDetectContoursRequest`（macOS11/iOS14，无门槛）、`VNGenerateForegroundInstanceMaskRequest`（macOS14/iOS17，与现部署目标一致）可用；`VNDetectTrajectoriesRequest` 仅检测**抛物线抛体且需稳定相机**，不适用滑雪弧线，排除。
+
+**C. 立项 spec**：[2026-09-18-board-edge-trajectory-detection-design.md](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md)（状态 Proposed）。方向矩阵 A=mask+contours 板轴几何（近景门控）/B=CoreML 板身专项（A 不达标才升级）/C=图像配准补偿相机+滑者尾迹归属+跨弯弯形描述子（远景主线）。分 Phase 0–3，硬闸门 **Gate-G2 要求新信号 margin≥1.5σ + LOOCV≥90% 才允许进入评分联动（Phase 3 另立项）**；本期评分链路、bestThird、iOS UI 全部零改动。Phase 0（扩边界集 ≥20 片 + A/C1 离线原型）**尚未开始，等用户确认**。
+
+**验证**：无代码变更，未跑 swift test（测试数维持 253）；3 个 python spike 复跑 exit 0，数值与上一轮一致。
+
+---
 
 ### 2026-09-15（方向 α：edgeQuality 正式取代 sideslip 走刃语义）
 

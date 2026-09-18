@@ -50,6 +50,13 @@ public class VideoAnalyzer {
     /// 光流缓存帧的最大尺寸，超过则下采样（nil = 不限制）
     private let flowFrameMaxSize: CGSize?
 
+    /// 是否启用板身刃线检测（Phase 1 诊断能力，默认关）。
+    /// 启用后逐帧在抽帧原图上跑前景分割 + 踝下 ROI PCA，结果写入
+    /// `DetectionResult.boardEdgeObservation`（诊断字段，不参与评分）。
+    public let enableBoardEdge: Bool
+    /// 板身刃线检测门控配置（仅 `enableBoardEdge` 时使用）。
+    private let boardEdgeConfig: BoardEdgeConfig
+
     /// 光流分析用帧缓存（仅缓存姿态检测成功的帧）
     private var frameCache: [(image: CGImage, pose: BodyPoseData)] = []
     /// 帧缓存对应的时间（与 frameCache 一一对应）
@@ -74,7 +81,9 @@ public class VideoAnalyzer {
         maxFrameSize: CGSize? = CGSize(width: 1920, height: 1080),
         visionOptions: VisionAnalysisOptions = .skiAnalysis,
         batchSize: Int = 8,
-        flowFrameMaxSize: CGSize? = CGSize(width: 640, height: 480)
+        flowFrameMaxSize: CGSize? = CGSize(width: 640, height: 480),
+        enableBoardEdge: Bool = false,
+        boardEdgeConfig: BoardEdgeConfig = .standard
     ) {
         self.videoURL = videoURL
         self.asset = AVAsset(url: videoURL)
@@ -82,6 +91,8 @@ public class VideoAnalyzer {
         self.maxFrameSize = maxFrameSize
         self.batchSize = max(1, batchSize)
         self.flowFrameMaxSize = flowFrameMaxSize
+        self.enableBoardEdge = enableBoardEdge
+        self.boardEdgeConfig = boardEdgeConfig
         self.frameAnalyzer = VisionFrameAnalyzer(options: visionOptions)
         self.metricsCalculator = PoseMetricsCalculator(pointConfidenceThreshold: pointConfidenceThreshold)
         self.poseScorer = PoseScorer()
@@ -329,6 +340,19 @@ public class VideoAnalyzer {
         let poseScore = poseScorer.score(pose: bodyPose)
         let visualBoardObservation = BoardVisualLineDetector.detect(cgImage: cgImage, pose: bodyPose)
 
+        // Phase 1 诊断：板身刃线检测（默认关）。仅写诊断字段，不接触评分。
+        // 诊断失败须局部隔离，不能拖垮同帧已成功的姿态/评分结果。
+        let boardEdgeObservation: BoardEdgeObservation?
+        if enableBoardEdge {
+            boardEdgeObservation = (try? BoardEdgeDetector.detect(
+                cgImage: cgImage,
+                pose: bodyPose,
+                config: boardEdgeConfig
+            )) ?? BoardEdgeObservation(status: .noMask)
+        } else {
+            boardEdgeObservation = nil
+        }
+
         return DetectionResult(
             time: CMTimeGetSeconds(time),
             objects: objects,
@@ -337,7 +361,8 @@ public class VideoAnalyzer {
             sceneClassifications: sceneClassifications,
             bodyPose: bodyPose,
             poseScore: poseScore,
-            visualBoardObservation: visualBoardObservation
+            visualBoardObservation: visualBoardObservation,
+            boardEdgeObservation: boardEdgeObservation
         )
     }
 

@@ -585,6 +585,81 @@ public struct BoardObservation: Codable {
     }
 }
 
+// MARK: - 板身刃线观测（Phase 1 诊断能力，候选 A）
+
+/// 板身刃线逐帧观测的门控状态。
+///
+/// 仅 `board` 代表检测到归属本滑者、站姿可靠的板轴；其余状态均为“不可用”的具体原因，
+/// 供诊断与覆盖率统计，不允许把这些帧当作刃线证据。
+public enum BoardEdgeStatus: String, Codable, CaseIterable {
+    /// 检测到归属本滑者、站姿可靠的板轴。
+    case board
+    /// 未启用板身刃线检测（默认关闭路径）。
+    case disabled
+    /// Vision / 分割未能产出可用掩码。
+    case noMask
+    /// 踝点置信度不足，无法可靠定位 ROI。
+    case ankleLowCnf
+    /// 主体占比过小（远景/雪雾），分割不具备足部细节。
+    case farShot
+    /// ROI 内未形成可识别主轴。
+    case noAxis
+    /// 主轴近竖直，判为雪杖/裤腿/竖直他人而非板。
+    case rejectVertical
+    /// 主轴归一长度越界（过短噪声或过长物体）。
+    case rejectLength
+    /// 主轴延伸率不足，判为团块而非细长板身。
+    case rejectBlob
+    /// 主轴几何虽成立，但空间上不归属本滑者（如背景中他人的板）。
+    case rejectOwnership
+    /// 主体处于摔倒/坐姿等非站立状态，板轴不代表滑行刃线质量。
+    case rejectPosture
+}
+
+/// 单帧板身刃线观测（Phase 1，仅诊断，不参与评分）。
+///
+/// 由前景实例分割 + 踝下 ROI PCA 得到；字段为归一化几何量，跨次确定性由纯函数计算保证。
+public struct BoardEdgeObservation: Codable {
+    public let status: BoardEdgeStatus
+    /// 板轴相对水平的无符号夹角（0...90，度）。仅 `status == .board` 时有效，否则为 nil。
+    public let axisAngle: Double?
+    /// 主轴中心 X（归一化 0...1）。
+    public let centerX: Double?
+    /// 主轴中心 Y（归一化 0...1）。
+    public let centerY: Double?
+    /// 主轴等效全长 / 图宽。
+    public let lengthRatio: Double?
+    /// 主轴延伸率（长轴/短轴，越大越细长）。
+    public let elongation: Double?
+    /// 前景主体占整帧比例（近景门控输入）。
+    public let subjectFraction: Double?
+    /// 踝点定位置信度（0...1）。
+    public let ankleConfidence: Double?
+
+    public init(
+        status: BoardEdgeStatus,
+        axisAngle: Double? = nil,
+        centerX: Double? = nil,
+        centerY: Double? = nil,
+        lengthRatio: Double? = nil,
+        elongation: Double? = nil,
+        subjectFraction: Double? = nil,
+        ankleConfidence: Double? = nil
+    ) {
+        self.status = status
+        self.axisAngle = axisAngle
+        self.centerX = centerX.map { max(0, min(1, $0)) }
+        self.centerY = centerY.map { max(0, min(1, $0)) }
+        self.lengthRatio = lengthRatio.map { max(0, min(1, $0)) }
+        self.elongation = elongation.map { max(0, $0) }
+        self.subjectFraction = subjectFraction.map { max(0, min(1, $0)) }
+        self.ankleConfidence = ankleConfidence.map { max(0, min(1, $0)) }
+    }
+
+    /// 默认关闭路径的占位观测。
+    public static let disabled = BoardEdgeObservation(status: .disabled)
+}
+
 /// 单帧板身与运动方向关系。
 public struct BoardKinematics: Codable {
     public let boardAngle: Double
@@ -669,6 +744,8 @@ public struct DetectionResult: Codable {
     public let bodyPose: BodyPoseData
     public let poseScore: PoseScore?
     public let visualBoardObservation: BoardObservation?
+    /// 板身刃线观测（Phase 1 诊断，默认关；关闭时为 status=.disabled）。不参与评分。
+    public var boardEdgeObservation: BoardEdgeObservation?
     public var skiMetrics: SkiDerivedMetrics?
     /// 帧分析错误信息（抽帧或 Vision 请求失败时填充，成功时为 nil）
     public var error: String?
@@ -682,6 +759,7 @@ public struct DetectionResult: Codable {
         bodyPose: BodyPoseData,
         poseScore: PoseScore?,
         visualBoardObservation: BoardObservation? = nil,
+        boardEdgeObservation: BoardEdgeObservation? = nil,
         skiMetrics: SkiDerivedMetrics? = nil,
         error: String? = nil
     ) {
@@ -693,6 +771,7 @@ public struct DetectionResult: Codable {
         self.bodyPose = bodyPose
         self.poseScore = poseScore
         self.visualBoardObservation = visualBoardObservation
+        self.boardEdgeObservation = boardEdgeObservation
         self.skiMetrics = skiMetrics
         self.error = error
     }

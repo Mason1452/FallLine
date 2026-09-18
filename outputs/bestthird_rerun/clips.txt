@@ -1,0 +1,15 @@
+video/good/v1e00fgi0000d2bufenog65temc6sh70.MP4
+video/good/v0200fg10000d6mln8vog65kajcq52dg.MP4
+video/good/v2800fgi0000d7o00ufog65t0ran4h1g.MP4
+video/good/v0300fg10000d7h0ckfog65nmsn20jqg.MP4
+video/good/v1e00fgi0000d5utfk7og65q1chsrq8g.MP4
+video/good/86ae42724c8349913703af0f4140f6d2.MP4
+video/good/d63bfbf8978cf8a962f613a489a14420.MP4
+video/bad/v0300fg10000cusoptnog65pkehng280.MP4
+video/bad/v0200fg10000d6olrffog65vrste5qqg.MOV
+video/bad/v0200fg10000d7nnh5vog65i52ermgog.MP4
+video/bad/v0300fg10000d664l37og65t6pnbois0.MOV
+video/bad/v1e00fgi0000cv786ffog65rtmm48gmg.MOV
+video/bad/v2800fgi0000d4v24r7og65oi0fmka5g.MP4
+video/bad/v0d00fg10000ctm0ufvog65rqb97g2p0.MP4
+video/bad/v0d00fg10000csgr6inog65n8mlpg2m0.MP4
