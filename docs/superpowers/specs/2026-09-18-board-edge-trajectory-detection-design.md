@@ -391,8 +391,26 @@ Phase 2 主体开工前必须逐项打勾：
 - [x] Phase 2 起步 1：19 片候选池接触表脚本落地并全跑通（见 §12.3，2026-09-18）。
 - [ ] 12.1 候选池 ≥9 片教练判档回流，§4.4 表扩到 ≥20 片。
 - [ ] [bestthird_aggregator_audit.py CLIPS](file:///Users/mingsen/Project/FallLine/scripts/bestthird_aggregator_audit.py#L38-L64) 与 [lowend_separability_audit.py BEGINNER/EMERGING](file:///Users/mingsen/Project/FallLine/scripts/lowend_separability_audit.py#L41-L42) 同步扩到扩集口径。
-- [ ] `swift run FallLineCLI --board-edge` 在扩集 ≥20 片上跑通，观测覆盖率 ≥60%（Gate-G1）。
-- [ ] `scripts/repeatability_probe.py` 跨次 bit-identical（含 `boardEdgeObservation` 字段）。
-- [ ] `scripts/benchmark_cli_release.sh`（或等价基线）新旧总耗时增幅 ≤30%（Gate-G1 性能）。
+- [x] Phase 2 起步 2：Gate-G1 三合一探针脚本落地并全量跑 25 片（见 §12.5，2026-09-18）。
+- [ ] `swift run FallLineCLI --board-edge` 在扩集 ≥20 片上跑通，观测覆盖率 ≥60%（Gate-G1 覆盖率维度）→ **当前 §4.4 25 片实测 19.6%，FAIL，Gate-G1 门槛不通过；须先按 §12.5 分析放宽 `farShot`/`rejectVertical` 或补 §4.4 判档后重测**。
+- [x] `scripts/board_edge_gate_g1_probe.py` 跨次 bit-identical（含 `boardEdgeObservation` 字段）→ 25 片 4146/4146 帧完全一致（PASS）。
+- [x] `scripts/board_edge_gate_g1_probe.py` `--board-edge` 开/关总耗时增幅 ≤30%（Gate-G1 性能）→ avg +5.9% / max +19.7%（PASS）。
 - [ ] Phase 2 时序特征输出仅进 JSON 新命名空间 + debug overlay，Models 评分字段消费方零改动。
 - [ ] Gate-G2 判定：`lowend_separability_audit.py` 用新特征重跑，margin ≥1.5σ 且 LOOCV ≥90%（Phase 3 立项前置）。
+
+### 12.5 Gate-G1 三合一探针实测（2026-09-18，§4.4 全 25 片）
+
+- 探针脚本：[scripts/board_edge_gate_g1_probe.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_gate_g1_probe.py)（每片 CLI 跑三轮：`--board-edge` 两轮 + 基线一轮；从 JSON `boardEdgeObservation` 逐帧提取 status/reason，覆盖率 = `status=board` 帧数 / 总帧数；确定性 = 两轮 `--board-edge` 逐帧 `board_flag / axis_angle_deg / axis_length_norm / confidence / near_body_shape / obs_confidence / reason` bit-identical；性能 = `--board-edge` 平均耗时 / 基线耗时）。
+- 产物日志：[outputs/board_edge_p2/gate_g1_probe.log](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/gate_g1_probe.log)（`.gitignore` 排除）。
+- **总账**：
+    - 覆盖率：全帧口径 **811/4146 = 19.56%**（Gate-G1 门槛 ≥60%）→ **FAIL**；片级 ≥60% 仅 **1/25**（BND2_L1 = 75%，其次 BND2_LM 57%、BND2_L3 50%）。
+    - 确定性：**4146/4146 = 100%** bit-identical（跨两轮 `--board-edge` 逐字段完全一致）→ **PASS**。
+    - 性能：`--board-edge` 开启对总耗时 **avg +5.9% / median +5.2% / max +19.7%**（Gate-G1 门槛 ≤30%）→ **PASS**。
+- **单片分布（cov% ↓）**：BND2_L1 75% / BND2_LM 57% / BND2_L3 50% / BND2_L5 38.7% / BND_M4 37.7% / BND_M2 32.3% / BND2_H4 31.6% / BND_M1 28.9% / BND_M3 23.2% / BND2_H0 22.0% / BND2_LB 17.7% / BND2_TOP 16.9% / BND2_L6 15.3% / BND2_H1 14.5% / BND_L3 14.4% / BND2_GM 14.1% / BND_HI1 12.6% / BND2_H2 11.5% / BND_HI2 6.6% / BND_L2 6.3% / BND2_H3 4.5% / BND2_L2 2.3% / BND_HI3 2.3% / BND2_L4 1.9% / BND_L1 0.0%。
+- **Gate-G1 结论**：**确定性 & 性能双 PASS，覆盖率 FAIL**。三合一维度中，确定性 / 性能已达到 Phase 2 主体准入水位（观测器状态机纯函数化 + 只在 Vision 结果后回调、不进入评分链路，行为可跨次复现且开销可控）；覆盖率不达标属于**门控阈值层面的负结论**，不是可靠性问题：
+    - 结构上正确：BND2_L1 75% / BND2_LM 57% 证明门控在近景初级/中级雏形上可稳定输出板轴；金色夕阳远景 BND_L1 = 0/103 与 Phase 0 [outputs/edge_spike/](file:///Users/mingsen/Project/FallLine/outputs/edge_spike) 结论一致（诚实拒绝，不吐脏字段），也符合 §11 P1 落地时"默认关、纯诊断"的方向。
+    - 覆盖率被压低的主因是 `farShot`（远景 / 人体像素占比过低）与 `rejectVertical`（板轴与体轴夹角超阈），扩集含大量长片 & 远景，正是 Gate-G2 需要教练判档 + Phase 2 时序特征补齐的场景。
+- **下一步**（不改评分、不联动 cap）：
+    1. 由 §12.5 结果驱动 §4.4 覆盖率 audit：对 25 片按 reason 分布做逐片直方图（`farShot` / `rejectVertical` / `axisTooShort` / `elongTooLow`），量化"哪一门控贡献最大的拒绝"。
+    2. 结合 §12.2 优先次序回流 9 片教练判档到 §4.4，再对扩集 (≥34 片) 重跑 §12.5 探针，验证覆盖率 ≥60% 是否**在扩集口径下可达**，或需要将 Gate-G1 覆盖率门槛按"每片可用性 = min(cov%, 60%)"重定义（此改动须在 spec §6 中做出决定并附证据）。
+    3. 在 Phase 2 时序特征引入前，`--board-edge` 保持默认关 + JSON 新命名空间，不影响 Models 评分字段。

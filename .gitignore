@@ -19,3 +19,6 @@ outputs/**/*.mov
 *.debug_frames/
 # Phase 2 接触表 JPG（本地生成，按需重跑，不入库）
 outputs/board_edge_p2/contact_sheets/
+# Phase 2 Gate-G1 探针日志与 JSON 中间产物（本地生成，按需重跑，不入库）
+outputs/board_edge_p2/*.log
+outputs/board_edge_p2/*.json
