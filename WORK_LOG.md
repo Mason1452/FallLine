@@ -1,6 +1,27 @@
 # FallLine Work Log
 
-## Current State (2026-09-18 Phase 1 完成：生产级板身刃线观测器落地，默认关、纯诊断、零评分接触，可进 Phase 2)
+## Current State (2026-09-18 Phase 2 起步 1 完成：19 片候选池接触表已生成，等待教练判档回流)
+
+**刃线/轨迹检测 Phase 2 起步 1（评分零改动）**：接触表脚本落地并对 19 片候选池全跑通。详见 [spec §12.3](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md#L379) 与 [delta_update.md](file:///Users/mingsen/Project/FallLine/delta_update.md) 2026-09-18（Phase 2 起步 1）条：
+- **接触表脚本已落地**：[scripts/p2_candidate_contact_sheets.swift](file:///Users/mingsen/Project/FallLine/scripts/p2_candidate_contact_sheets.swift)。沿用 [p0_board_axis_dense_spike.swift](file:///Users/mingsen/Project/FallLine/scripts/p0_board_axis_dense_spike.swift) 的 Vision bodyPose + foregroundInstanceMask + 踝下 ROI PCA + `BoardEdgeConfig.standard` 门控（`G_MIN_LEN=0.07`）。每片一张 5×2 拼图（10 均匀抽帧 0.08–0.92），每帧 300×533，绘 ROI 黄框 + 板轴（board=绿 / rejected=红）+ verdict/cnf/subj/ang/elong/L 状态文本 + 顶栏 hint/score/命中计数。支持 `ONLY=<alias>,...` 单片过滤，纯 Swift、无 ffmpeg。
+- **19 片全跑通命中率**（`verdict==board`/10）：good 桶 21/80=26%（G06=7 最优、G05=0 需目检）；middle 桶 11/100=11%（M03/M05/M08=0，中间地带主要被 farShot/rejectVertical 拒）；bad 桶 B01=5/10=50%。整体 37/190≈19%。middle 覆盖率显著低于 Phase 0 主 corpus 5-6/10，符合"中间地带远景 + 站姿飘忽"的先验，正是需要教练判档 + Phase 2 时序特征补齐的场景；此批接触表**不能**当 Gate-G1 覆盖率证据（后者需 `--board-edge` 5fps 全帧生产口径统计）。
+- **产物**：[outputs/board_edge_p2/contact_sheets/](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/contact_sheets) 19 张 JPG（`.gitignore` 已排除，不入库；教练本地看图 + 回流后再删）。目检 CAND_M06 拼图：绿轴精确覆盖 #2/#3/#4 板身，rejectLength/farShot 状态文字清晰、无误画青轴。
+- **候选池 & 优先次序（沿用上轮盘点）**：good 8 / middle 10 / bad 1，共 19 片，教练至少判 9 片以扩边界集 n=11→≥20。3 桶信息增益优先次序：中间地带 60–70 分 4 片、专业候补 2 片、中偏上 72–78 3 片。
+- **Gate-G1/G2 前置检查表**（[spec §12.4](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md#L387)）：✅ 接触表脚本落地 → ⬜ 候选池 ≥9 片教练判档回流 → ⬜ §4.4 表扩到 ≥20 → ⬜ CLI `--board-edge` 覆盖率 ≥60% (G1) → ⬜ 跨次 bit-identical + 耗时 ≤+30% (G1) → ⬜ 新特征 margin≥1.5σ 且 LOOCV≥90% (G2)。
+- **验证**：本轮零生产代码改动（仅新增脚本 + 更新 spec/WORK_LOG/delta_update）；`swift build`/`swift test` 未跑（无 Sources 变更），Phase 1 274 通过基线不变。
+- **下一步（未开始，等教练回流）**：教练判档后同步扩 §4.4 边界表 + [bestthird_aggregator_audit.py CLIPS](file:///Users/mingsen/Project/FallLine/scripts/bestthird_aggregator_audit.py#L38-L64) + [lowend_separability_audit.py BEGINNER/EMERGING](file:///Users/mingsen/Project/FallLine/scripts/lowend_separability_audit.py#L41-L42)，再启动 Phase 2 主体（时序特征 + Gate-G1/G2）。
+
+## Previous State (2026-09-18 Phase 2 起步：扩样候选池已盘点入 spec §12，等待教练判档回流)
+
+**刃线/轨迹检测 Phase 2 起步（评分零改动）**：Phase 1 观测器已上线（默认关、纯诊断），本轮完成 Phase 2 前置的扩样盘点与 spec 更新。详见 [spec §12](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md#L339) 与 [delta_update.md](file:///Users/mingsen/Project/FallLine/delta_update.md) 2026-09-18（Phase 2 起步）条：
+- **候选池盘点**：[video/](file:///Users/mingsen/Project/FallLine/video) 库 44 片视频，已标注 25 片（BND* + BND2_* 见 §4.4），剩余 **19 片候选池**未打教练档位。分布 good 8 / middle 10 / bad 1；扩集目标 n≥20 至少需教练判 9 片。
+- **优先次序**（信息增益 3 桶）：中间地带 60–70 分 4 片（对低端 cap 最有信息量）、专业候补 2 片（v0200…d7r0017=GOOD_A、96001e… 2026-05 已认专业但未入 §4.4）、中偏上 72–78 3 片（中级/专业过渡带补密）。
+- **接触表脚本待落地**：[scripts/p2_candidate_contact_sheets.swift](file:///Users/mingsen/Project/FallLine/scripts/p2_candidate_contact_sheets.swift)，沿用 [p0_board_axis_dense_spike.swift](file:///Users/mingsen/Project/FallLine/scripts/p0_board_axis_dense_spike.swift) 的 AVAssetImageGenerator + Vision + `BoardEdgeDetector` 生产链路 + [p0_gt_contact_sheets.py](file:///Users/mingsen/Project/FallLine/scripts/p0_gt_contact_sheets.py) 的 5×2 拼图布局，纯 Swift、无 ffmpeg 依赖；产物写 `outputs/board_edge_p2/contact_sheets/`（`.gitignore` 已排除）。
+- **Gate-G1/G2 前置检查表**（[spec §12.4](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md#L386)）：候选池 ≥9 片教练判档回流 → 边界集扩到 ≥20 → CLI `--board-edge` 覆盖率 ≥60% (G1) → 跨次 bit-identical + 耗时 ≤+30% (G1) → 新特征重跑 [lowend_separability_audit.py](file:///Users/mingsen/Project/FallLine/scripts/lowend_separability_audit.py) margin≥1.5σ 且 LOOCV ≥90% (G2)。
+- **验证**：本轮零代码改动，仅 spec/WORK_LOG/.gitignore；`swift build` 与 `swift test` 未跑（无 Swift 变更），Phase 1 冒烟结果不变。
+- **下一步（未开始，等确认）**：① 落 [p2_candidate_contact_sheets.swift](file:///Users/mingsen/Project/FallLine/scripts/p2_candidate_contact_sheets.swift) 生成候选池 19 片接触表 JPG；② 教练判档回流后同步扩 §4.4 表 + [bestthird_aggregator_audit.py CLIPS](file:///Users/mingsen/Project/FallLine/scripts/bestthird_aggregator_audit.py#L38-L64) + [lowend_separability_audit.py BEGINNER/EMERGING](file:///Users/mingsen/Project/FallLine/scripts/lowend_separability_audit.py#L41-L42)；③ 再进 Phase 2 主体（时序特征 + Gate-G1/G2）。
+
+## Previous State (2026-09-18 Phase 1 完成：生产级板身刃线观测器落地，默认关、纯诊断、零评分接触，可进 Phase 2)
 
 **刃线/轨迹检测 Phase 1 本轮完成：把候选 A（前景分割 + 踝下 ROI PCA）从离线原型升级为生产代码并接入分析管线与 CLI/overlay。全程不改评分、聚合器、报告结构与 iOS UI；默认关闭，仅 `--board-edge` 显式开启时产出诊断观测。详见 [delta_update.md](file:///Users/mingsen/Project/FallLine/delta_update.md) 2026-09-18（Phase 1）条**：
 - **新增 [BoardEdgeDetector.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift)**：`BoardEdgeConfig`（阈值公开，`.standard` = Gate-G0 校准值 `minAxisLength=0.07`）+ `AxisGeometry`（纯数值，Equatable）+ `BoardEdgeDetector.detect`。落实 Phase 0 两条必修：**实例归属校验**（姿态框 vs 前景实例框 IoU，≥0.15 取最高，否则 rejectOwnership）、**站姿状态门控**（躯干倾角 + 髋高于踝，摔倒/坐姿 rejectPosture）。门控链 ankleLowCnf→noMask→rejectOwnership→farShot(<0.02)→rejectPosture→noAxis/rejectVertical(>45°)/rejectLength/rejectBlob(<2.0)→board。

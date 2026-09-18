@@ -17,3 +17,5 @@ outputs/**/*.mp4
 outputs/**/*.mov
 # --debug-overlay 临时覆盖图（体量大，按需本地生成）
 *.debug_frames/
+# Phase 2 接触表 JPG（本地生成，按需重跑，不入库）
+outputs/board_edge_p2/contact_sheets/
