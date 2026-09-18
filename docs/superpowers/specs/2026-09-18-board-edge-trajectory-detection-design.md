@@ -184,7 +184,12 @@
 
 ### Phase 2 — 边界集可分性验证（仍不进评分）
 
-- 用 Phase 1 特征重跑 [lowend_separability_audit.py](file:///Users/mingsen/Project/FallLine/scripts/lowend_separability_audit.py) 的同一套 1D/2D margin 扫描与 LOOCV，与现有 25 维基线对照。
+- **起步 0：扩边界集 n=11 → ≥20**（Gate-G2 前置，2026-09-18 已盘点，等待教练回流）。当前 [video/](file:///Users/mingsen/Project/FallLine/video) 库 44 片视频中已标注 25 片（BND* + BND2_*，见 §4.4），剩余 **19 片候选池**详见 §12 清单。评分口径不动，只增加"档位 + 是否稳定刻滑 + 弯形备注"三列。
+- 起步 1：候选池接触表生成——扩展 [p0_board_axis_dense_spike.swift](file:///Users/mingsen/Project/FallLine/scripts/p0_board_axis_dense_spike.swift) 为 `p2_candidate_contact_sheets.swift`（沿用 AVAssetImageGenerator 10 均匀抽帧 + Vision bodyPose + `BoardEdgeDetector` 生产链路），每片一张 5×2 拼图 JPG + 板轴标注，产物写 [outputs/board_edge_p2/contact_sheets/](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/contact_sheets)（不入库，`.gitignore` 已含 `outputs/*/contact_sheets/`）。教练直接看图判档，无需装 ffmpeg。
+- 起步 2：教练判档回流后，把 §4.4 表扩到 ≥20 片；对新增样本同步跑一次 [bestthird_aggregator_audit.py](file:///Users/mingsen/Project/FallLine/scripts/bestthird_aggregator_audit.py) 的 `CLIPS` 数组补齐（`band` 教练档位）。
+- 主体 1：Phase 1 观测器覆盖率与确定性验证——用 `--board-edge` 在扩集 ≥20 片上全跑，落实 **Gate-G1**：有效覆盖率 ≥60% / 跨次 bit-identical（`repeatability_probe.py` 通过）/ CLI 单视频耗时增幅 ≤30%。
+- 主体 2：新增跨弯时序特征——板轴方向序列（unsigned 0-90°/带符号 −90…+90°）与踝下 ROI 主轴曲率、速度-方向耦合、板轴稳定连续帧占比等；实现纯函数在 `TrajectoryShapeCalculator`，输出仅进 JSON 新命名空间。
+- 主体 3：用 Phase 1+Phase 2 新特征重跑 [lowend_separability_audit.py](file:///Users/mingsen/Project/FallLine/scripts/lowend_separability_audit.py) 的 1D/2D margin 扫描与 LOOCV，与现有 25 维基线对照。
 - **Gate-G2（硬闸门，见 §6）**：≥1.5σ margin + LOOCV 稳定，才允许立项 Phase 3。
 
 ### Phase 3 — 评分联动（**另行立项 spec，本期不做**）
@@ -328,3 +333,66 @@ ankleLowCnf → noMask → rejectOwnership → farShot(subjFrac<0.02)
 
 - 观测**仍为诊断字段**，不读取也不修改任何评分。
 - **Phase 2**：板轴方向序列 + 轨迹曲率 + 速度-方向耦合等跨弯时序特征，先扩边界集 **n=11→≥20**，再以 **Gate-G2（margin≥1.5σ + LOOCV≥90%）** 判定；Gate-G2 通过且另行立项前不联动评分。远景帧继续诚实输出"板轴不可用"。
+
+---
+
+## 12. Phase 2 起步：扩样候选池（2026-09-18 盘点）
+
+已标注 25 片（BND* + BND2_*，见 §4.4），[video/](file:///Users/mingsen/Project/FallLine/video) 库共 44 片，剩余 **19 片候选池**未打教练档位。历史算法综合分（来自各 `.md` 报告）作为**弱先验**排序，只用来提示教练"哪些片可能引入新的信息"，判档以人眼为准。
+
+### 12.1 未标注候选（19 片，按桶分组）
+
+| # | 桶 | 相对路径 | 历史算法分 | 弱先验档位提示 |
+|---|---|---|---:|---|
+| 1 | good | [good/0946ed384e732c357a3d55fac77426c0.MP4](file:///Users/mingsen/Project/FallLine/video/good/0946ed384e732c357a3d55fac77426c0.MP4) | 73 | 中偏上 / 高质量 |
+| 2 | good | [good/3134552bed78447b9f7ba8e2003ce678.MP4](file:///Users/mingsen/Project/FallLine/video/good/3134552bed78447b9f7ba8e2003ce678.MP4) | 72 | 中偏上 |
+| 3 | good | [good/3e6f37fe76521781506c19c02c1b97ed.MP4](file:///Users/mingsen/Project/FallLine/video/good/3e6f37fe76521781506c19c02c1b97ed.MP4) | 83 | 高质量 |
+| 4 | good | [good/5382da0c825e30518ab376505cbcfaf2.MOV](file:///Users/mingsen/Project/FallLine/video/good/5382da0c825e30518ab376505cbcfaf2.MOV) | 72 | 中偏上 |
+| 5 | good | [good/641efed02be271b6d9f014c97d1f8ae0.MOV](file:///Users/mingsen/Project/FallLine/video/good/641efed02be271b6d9f014c97d1f8ae0.MOV) | 77 | 中偏上 |
+| 6 | good | [good/9ed0bb6c707fc47fce153cee3dcd365e.MP4](file:///Users/mingsen/Project/FallLine/video/good/9ed0bb6c707fc47fce153cee3dcd365e.MP4) | 75 | 中偏上 |
+| 7 | good | [good/v0200fg10000d7r0017og65qoh1vgeg0.MP4](file:///Users/mingsen/Project/FallLine/video/good/v0200fg10000d7r0017og65qoh1vgeg0.MP4) | 89 | 专业（GOOD_A，2026-05 教练已认专业，但未纳入 §4.4 边界表） |
+| 8 | good | [good/v2800fgi0000d6m0mk7og65qamcvgf80.MP4](file:///Users/mingsen/Project/FallLine/video/good/v2800fgi0000d6m0mk7og65qamcvgf80.MP4) | 78 | 中偏上 |
+| 9 | middle | [middle/1c5771fc7dd1ea546eb5bc3e4e01bc48.MP4](file:///Users/mingsen/Project/FallLine/video/middle/1c5771fc7dd1ea546eb5bc3e4e01bc48.MP4) | 67 | 中级 |
+| 10 | middle | [middle/4a7dfe960f07ac14b06bbd8de3d38aa4.MP4](file:///Users/mingsen/Project/FallLine/video/middle/4a7dfe960f07ac14b06bbd8de3d38aa4.MP4) | 73 | 中偏上 |
+| 11 | middle | [middle/96001e37e76be9ef6cf7a65e73efcac4.MP4](file:///Users/mingsen/Project/FallLine/video/middle/96001e37e76be9ef6cf7a65e73efcac4.MP4) | 85 | 专业（2026-05 教练已认，但未在 §4.4 边界集） |
+| 12 | middle | [middle/992f063b79d27b96b471e44a48d8465e.MP4](file:///Users/mingsen/Project/FallLine/video/middle/992f063b79d27b96b471e44a48d8465e.MP4) | 55 | 初级 |
+| 13 | middle | [middle/a7791a475a244c938dd0815e89b1dec5.MP4](file:///Users/mingsen/Project/FallLine/video/middle/a7791a475a244c938dd0815e89b1dec5.MP4) | 74 | 中偏上 |
+| 14 | middle | [middle/ccfd9967aa6d3ab5abd04fb8991872c7.MOV](file:///Users/mingsen/Project/FallLine/video/middle/ccfd9967aa6d3ab5abd04fb8991872c7.MOV) | 68 | 中级 |
+| 15 | middle | [middle/v0200fg10000d2tcts7og65t6h63ua2g.MP4](file:///Users/mingsen/Project/FallLine/video/middle/v0200fg10000d2tcts7og65t6h63ua2g.MP4) | 58 | 初级 |
+| 16 | middle | [middle/v0200fg10000d6a4i57og65mkjkcdpu0.MP4](file:///Users/mingsen/Project/FallLine/video/middle/v0200fg10000d6a4i57og65mkjkcdpu0.MP4) | 76 | 中偏上 |
+| 17 | middle | [middle/v0300fg10000d4oq6avog65ihr8qf550.MP4](file:///Users/mingsen/Project/FallLine/video/middle/v0300fg10000d4oq6avog65ihr8qf550.MP4) | 60 | 中级 |
+| 18 | middle | [middle/v2800fgi0000d5ehg1vog65tinkepgl0.MP4](file:///Users/mingsen/Project/FallLine/video/middle/v2800fgi0000d5ehg1vog65tinkepgl0.MP4) | 77 | 中偏上 |
+| 19 | bad | [bad/0b7522e9db823b910ac67727aea726da.MP4](file:///Users/mingsen/Project/FallLine/video/bad/0b7522e9db823b910ac67727aea726da.MP4) | 70 | 初级 / 中级（bad 桶中的相对高分，2026-05 教练已认中级但未在 §4.4） |
+
+分布：good 8 / middle 10 / bad 1。**good/middle 各半**符合 §5 Phase 0 "补初级推坡与平行雏形各半，含近/远景、室内外、雪雾" 的采样目标；bad 桶剩余仅 1 片（其余 8 片已在 §4.4 batch 2），需要新增 bad 样本的话须从 corpus 外补片。
+
+### 12.2 Phase 2 起步优先次序建议（教练判档 + 稳定刻滑判定）
+
+按信息增益优先看片，n=11 → ≥20 至少需教练判 9 片：
+
+1. **中间地带 60-70 分** 4 片（对分低端 cap 最有信息量）：#12 992f… (55)、#15 v0200…d2tcts7 (58)、#17 v0300…d4oq (60)、#19 0b7522… (70)。
+2. **专业候补** 2 片（对上端专业边界稳定性有信息量）：#7 v0200…d7r0017 (89, GOOD_A 已认专业)、#11 96001e… (85, 已认专业)。
+3. **中偏上 72–78** 3 片（对中级与专业过渡带补密）：#3 3e6f37fe (83)、#8 v2800…d6m0mk (78)、#5 641efed0 (77)。
+
+其余 10 片作为 Phase 2 结束后的复核池，视 Gate-G2 结果再决定是否扩到 n≥30。
+
+### 12.3 接触表产物路径（Phase 2 起步 1 产出，2026-09-18 已落地）
+
+- 生成脚本：[scripts/p2_candidate_contact_sheets.swift](file:///Users/mingsen/Project/FallLine/scripts/p2_candidate_contact_sheets.swift)（对齐 [p0_board_axis_dense_spike.swift](file:///Users/mingsen/Project/FallLine/scripts/p0_board_axis_dense_spike.swift) 的算法：Vision `bodyPose` 找踝 + `foregroundInstanceMask` 抠人体 + 踝下 ROI PCA 求主轴 + 生产 `BoardEdgeConfig.standard` 门控口径 `G_MIN_LEN=0.07`；纯 Swift、无 ffmpeg 依赖；支持 `ONLY=<alias>,...` 单片过滤）。
+- 产物目录：[outputs/board_edge_p2/contact_sheets/](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/contact_sheets)（`.gitignore` 排除，不入库）。
+- 图布局：每片一张 5×2 大图（10 均匀抽帧 `frac=0.08~0.92`），每帧 300×533，覆盖踝下 ROI 黄框 + 主轴（board=绿、rejected=红）+ 状态文本（`verdict/cnf/subj/ang/elong/axisLen`）；顶栏一行 hint/score/board 命中计数。
+- 教练回流格式：追加到 §4.4 表，新增列 `教练档位 / 稳定刻滑? / 弯形备注`。
+- **首轮 19 片全跑通命中率（`verdict==board` / 10 抽帧）**：good 桶 G01=2 / G02=1 / G03=2 / G04=3 / G05=0 / G06=7 / G07=2 / G08=4（共 21/80，26%）；middle 桶 M01=1 / M02=1 / M03=0 / M04=1 / M05=0 / M06=3 / M07=2 / M08=0 / M09=1 / M10=2（共 11/100，11%）；bad 桶 B01=5/10（50%）。整体 37/190 ≈ 19%。观测：middle 中间地带 11% 显著低于 Phase 0 主 corpus 的 5-6/10，主要被 `farShot`/`rejectVertical` 拒（远景 + 站姿飘忽），正是 Gate-G2 需要教练判档 + Phase 2 时序特征补齐的场景；这批接触表可作为教练判档的 sanity check 而非 Gate-G1 覆盖率证据（后者需在 `--board-edge` 生产口径下的 5fps 全帧统计上做）。
+
+### 12.4 Gate-G1 / Gate-G2 前置检查表
+
+Phase 2 主体开工前必须逐项打勾：
+
+- [x] Phase 2 起步 1：19 片候选池接触表脚本落地并全跑通（见 §12.3，2026-09-18）。
+- [ ] 12.1 候选池 ≥9 片教练判档回流，§4.4 表扩到 ≥20 片。
+- [ ] [bestthird_aggregator_audit.py CLIPS](file:///Users/mingsen/Project/FallLine/scripts/bestthird_aggregator_audit.py#L38-L64) 与 [lowend_separability_audit.py BEGINNER/EMERGING](file:///Users/mingsen/Project/FallLine/scripts/lowend_separability_audit.py#L41-L42) 同步扩到扩集口径。
+- [ ] `swift run FallLineCLI --board-edge` 在扩集 ≥20 片上跑通，观测覆盖率 ≥60%（Gate-G1）。
+- [ ] `scripts/repeatability_probe.py` 跨次 bit-identical（含 `boardEdgeObservation` 字段）。
+- [ ] `scripts/benchmark_cli_release.sh`（或等价基线）新旧总耗时增幅 ≤30%（Gate-G1 性能）。
+- [ ] Phase 2 时序特征输出仅进 JSON 新命名空间 + debug overlay，Models 评分字段消费方零改动。
+- [ ] Gate-G2 判定：`lowend_separability_audit.py` 用新特征重跑，margin ≥1.5σ 且 LOOCV ≥90%（Phase 3 立项前置）。
