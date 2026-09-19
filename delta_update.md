@@ -1,6 +1,6 @@
 # Delta Update
 
-最后更新：2026-09-18
+最后更新：2026-09-19
 
 本文档只记录每轮工作的增量变化，不记录项目全量背景。需要项目当前状态、目标和长期上下文时，先看 `WORK_LOG.md`；需要文件职责时，看 `file_manifest.md`。
 
@@ -33,6 +33,13 @@
 **算法列初步观察（不作档位依据）**：弱先验分与当前 release 偏差大（G02 72→93、M01 67→55 calf 仅 6.7、M05 74→93）；12/19 落专业带、calf≥48 达 14 片，候选池偏高姿态质量——回填时需重点核对"姿态好 ≠ 专业刻滑"，防 Gate-G2 高端密度虚高。
 
 **验证**：release build 通过；3 个 py 脚本 `py_compile` 通过；本轮零 Sources 变更，未跑 `swift test`（Phase 1 274 通过基线不变）。
+
+**2026-09-19 补：Batch 3 数据只读核对（无文件改动）**——教练回填前对 19 片原始 JSON 做独立重算（未复用提取脚本逻辑，避免同 bug 同源）：
+- **19 片 × 9 列全部匹配**：综合分 / edge / edgeConf / pressure / calf / knee / sideslip / carvingCnf / 时长，与 [Batch 3 表格](file:///Users/mingsen/Project/FallLine/annotations/calibration_anchors.md#L157)逐格一致；calf/knee 独立重算严格走 [reliablePoseFrames](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L272-L278)（`poseScore≠nil && bodyPose.detected` + `totalConfidence≥0.30`，空则回退，权重 `max(0.01, cnf)`）与 [averageSubScores](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/StageClassifier.swift#L24-L39) 口径。
+- 核对过程中的 DIFF 系**校验脚本自身量纲错误**（误把 JSON 已为百分数的 `carvingConfidence` 再 ×100，得 1755），修正后全对；**表格数据无需改动**。
+- 结构完整性：19 JSON 齐全、`totalFrames` 与 frames 数组长度全一致；有效抽帧帧率全部 ≈5.00fps（5.00–5.06）；reason 十状态求和 4218 与总帧精确闭合。
+- 评分勾稽：最终分均可由 `evidenceCappedScore × flowModulation` 复现（如 M06 78×1.05→82、M01 52.1×1.05→55），无矛盾。
+- **判档注意点**：bestThird 虚高在本批同样明显（M01 raw44.7→best1/3 52.1、M07 raw51.7→62.3）；M01 可靠姿态帧仅 37%（全池最低，calf6.7 稳定性弱）；M04=72/M06=78/M07=62 触发证据 cap；本批 flow 仅 +5% 加成、无惩罚（10 片 ×1.05）。
 
 **遗留 / 下一步**：等教练看 `outputs/board_edge_p2/contact_sheets/<alias>.jpg` 回填 §4.4 第三批档位/刻滑 → 同步两脚本 group → 44 片重跑 Gate-G1 三合一 + 分档 reason audit（方向 B 片级口径）→ 回写 §12.7 / WORK_LOG / delta_update。
 
