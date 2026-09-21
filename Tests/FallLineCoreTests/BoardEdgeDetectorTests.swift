@@ -292,6 +292,296 @@ final class BoardEdgeDetectorTests: XCTestCase {
         XCTAssertEqual(observation.ankleConfidence ?? 999, 0, accuracy: 1e-6)
     }
 
+    // MARK: - Fallback 姿态几何降级（ADR-001）
+
+    func test_fallback_anklePairHorizontal() {
+        let pose = makePose(
+            leftKnee: PoseJointPoint(x: 0.40, y: 0.55, confidence: 0.9),
+            rightKnee: PoseJointPoint(x: 0.60, y: 0.55, confidence: 0.9),
+            leftAnkle: PoseJointPoint(x: 0.40, y: 0.30, confidence: 0.9),
+            rightAnkle: PoseJointPoint(x: 0.60, y: 0.30, confidence: 0.9)
+        )
+
+        let fallback = BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .farShot, config: .standard
+        )
+
+        XCTAssertEqual(fallback?.source, .anklePair)
+        XCTAssertEqual(fallback?.axisAngle ?? 999, 0, accuracy: 1e-6)
+        XCTAssertEqual(fallback?.centerX ?? 0, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(fallback?.centerY ?? 0, 0.3, accuracy: 1e-6)
+        XCTAssertEqual(fallback?.originalStatus, .farShot)
+        // geometryConfidence = min(0.2×12, 1) = 1；confidence = 0.9
+        XCTAssertEqual(fallback?.confidence ?? 0, 0.9, accuracy: 1e-6)
+    }
+
+    func test_fallback_kneePairWeakerThanAnklePair() {
+        let pose = makePose(
+            leftKnee: PoseJointPoint(x: 0.40, y: 0.55, confidence: 0.9),
+            rightKnee: PoseJointPoint(x: 0.60, y: 0.55, confidence: 0.9),
+            leftAnkle: PoseJointPoint(x: 0.42, y: 0.30, confidence: 0.9),
+            rightAnkle: PoseJointPoint(x: 0.58, y: 0.30, confidence: 0.9)
+        )
+
+        let fallback = BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .noMask, config: .standard
+        )
+
+        // 踝间距 0.16 → geom 1 → cnf 0.9；膝间距 0.2 → geom 1 → cnf 0.9×0.6=0.54
+        XCTAssertEqual(fallback?.source, .anklePair)
+        XCTAssertEqual(fallback?.confidence ?? 0, 0.9, accuracy: 1e-6)
+    }
+
+    func test_fallback_prefersKneeWhenAnkleTooClose() {
+        let pose = makePose(
+            leftKnee: PoseJointPoint(x: 0.40, y: 0.55, confidence: 0.9),
+            rightKnee: PoseJointPoint(x: 0.60, y: 0.55, confidence: 0.9),
+            leftAnkle: PoseJointPoint(x: 0.485, y: 0.30, confidence: 0.9),
+            rightAnkle: PoseJointPoint(x: 0.515, y: 0.30, confidence: 0.9)
+        )
+
+        // 显式还原 v2 语义（confMax + floor 0.30），验证膝对补位逻辑。
+        let config = BoardEdgeConfig(
+            fallbackConfidenceFloor: 0.30,
+            fallbackPickStrategy: .confMax
+        )
+        let fallback = BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .farShot, config: config
+        )
+
+        // 踝间距 0.03 → geom 0.36 → cnf 0.324（合格但低）；膝对 0.54 更高
+        XCTAssertEqual(fallback?.source, .kneePair)
+        XCTAssertEqual(fallback?.confidence ?? 0, 0.54, accuracy: 1e-6)
+    }
+
+    func test_fallback_kneePairOnly() {
+        let pose = makePose(
+            leftKnee: PoseJointPoint(x: 0.40, y: 0.55, confidence: 0.9),
+            rightKnee: PoseJointPoint(x: 0.60, y: 0.55, confidence: 0.9),
+            leftAnkle: nil,
+            rightAnkle: nil
+        )
+
+        // v2 语义：confMax 允许膝对独立成为候选。
+        let config = BoardEdgeConfig(
+            fallbackConfidenceFloor: 0.30,
+            fallbackPickStrategy: .confMax
+        )
+        let fallback = BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .ankleLowCnf, config: config
+        )
+
+        XCTAssertEqual(fallback?.source, .kneePair)
+        XCTAssertEqual(fallback?.confidence ?? 0, 0.54, accuracy: 1e-6)
+    }
+
+    func test_fallback_nilWhenPairConfidenceBelowFloor() {
+        let pose = makePose(
+            leftKnee: PoseJointPoint(x: 0.40, y: 0.55, confidence: 0.25),
+            rightKnee: PoseJointPoint(x: 0.60, y: 0.55, confidence: 0.25),
+            leftAnkle: PoseJointPoint(x: 0.40, y: 0.30, confidence: 0.25),
+            rightAnkle: PoseJointPoint(x: 0.60, y: 0.30, confidence: 0.25)
+        )
+
+        let fallback = BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .farShot, config: .standard
+        )
+
+        XCTAssertNil(fallback)
+    }
+
+    func test_fallback_nilWhenBothPairsTooCloseForConfidenceFloor() {
+        // 点置信 0.9；间距 0.02 → geom 0.24；踝对 cnf 0.216、膝对 0.13 均 < 0.30
+        let pose = makePose(
+            leftKnee: PoseJointPoint(x: 0.49, y: 0.55, confidence: 0.9),
+            rightKnee: PoseJointPoint(x: 0.51, y: 0.55, confidence: 0.9),
+            leftAnkle: PoseJointPoint(x: 0.49, y: 0.30, confidence: 0.9),
+            rightAnkle: PoseJointPoint(x: 0.51, y: 0.30, confidence: 0.9)
+        )
+
+        let fallback = BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .farShot, config: .standard
+        )
+
+        XCTAssertNil(fallback)
+    }
+
+    func test_fallback_angleFoldsIntoZeroToNinety() {
+        // 135° 方向（dx,dy 同幅）→ 折叠后 45°
+        let pose = makePose(
+            leftKnee: nil, rightKnee: nil,
+            leftAnkle: PoseJointPoint(x: 0.30, y: 0.20, confidence: 0.9),
+            rightAnkle: PoseJointPoint(x: 0.50, y: 0.40, confidence: 0.9)
+        )
+
+        let fallback = BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .rejectOwnership, config: .standard
+        )
+
+        XCTAssertEqual(fallback?.axisAngle ?? 0, 45, accuracy: 1e-6)
+    }
+
+    func test_fallback_confidenceJustAboveFloorPasses() {
+        // point 0.9 × geom(d×12) = 0.31 → d ≈ 0.0287
+        let d = 0.31 / 0.9 / 12.0
+        let pose = makePose(
+            leftKnee: nil, rightKnee: nil,
+            leftAnkle: PoseJointPoint(x: 0.5 - d / 2, y: 0.30, confidence: 0.9),
+            rightAnkle: PoseJointPoint(x: 0.5 + d / 2, y: 0.30, confidence: 0.9)
+        )
+
+        // v2 语义：floor 0.30 下 0.31 恰好通过。
+        let config = BoardEdgeConfig(
+            fallbackConfidenceFloor: 0.30,
+            fallbackPickStrategy: .confMax
+        )
+        let fallback = BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .farShot, config: config
+        )
+
+        XCTAssertEqual(fallback?.confidence ?? 0, 0.31, accuracy: 1e-9)
+    }
+
+    func test_fallback_confidenceJustBelowFloorRejected() {
+        // point 0.9 × geom(d×12) = 0.29
+        let d = 0.29 / 0.9 / 12.0
+        let pose = makePose(
+            leftKnee: nil, rightKnee: nil,
+            leftAnkle: PoseJointPoint(x: 0.5 - d / 2, y: 0.30, confidence: 0.9),
+            rightAnkle: PoseJointPoint(x: 0.5 + d / 2, y: 0.30, confidence: 0.9)
+        )
+
+        // v2 语义：floor 0.30 下 0.29 被拒。
+        let config = BoardEdgeConfig(
+            fallbackConfidenceFloor: 0.30,
+            fallbackPickStrategy: .confMax
+        )
+        let fallback = BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .farShot, config: config
+        )
+
+        XCTAssertNil(fallback)
+    }
+
+    func test_fallback_originalStatusPreservedPerCandidate() {
+        let pose = makePose(
+            leftKnee: PoseJointPoint(x: 0.40, y: 0.55, confidence: 0.9),
+            rightKnee: PoseJointPoint(x: 0.60, y: 0.55, confidence: 0.9),
+            leftAnkle: PoseJointPoint(x: 0.40, y: 0.30, confidence: 0.9),
+            rightAnkle: PoseJointPoint(x: 0.60, y: 0.30, confidence: 0.9)
+        )
+
+        let fallback = BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .noAxis, config: .standard
+        )
+
+        XCTAssertEqual(fallback?.originalStatus, .noAxis)
+    }
+
+    func test_fallback_roundTripsThroughCodable() throws {
+        let pose = makePose(
+            leftKnee: PoseJointPoint(x: 0.40, y: 0.55, confidence: 0.9),
+            rightKnee: PoseJointPoint(x: 0.60, y: 0.55, confidence: 0.9),
+            leftAnkle: PoseJointPoint(x: 0.40, y: 0.30, confidence: 0.9),
+            rightAnkle: PoseJointPoint(x: 0.60, y: 0.30, confidence: 0.9)
+        )
+        let observation = BoardEdgeObservation(
+            status: .fallback,
+            fallbackAxis: BoardEdgeDetector.synthesizeFallback(
+                pose: pose, originalStatus: .farShot, config: .standard
+            )
+        )
+
+        let encoded = try JSONEncoder().encode(observation)
+        let decoded = try JSONDecoder().decode(BoardEdgeObservation.self, from: encoded)
+
+        XCTAssertEqual(decoded.status, .fallback)
+        XCTAssertEqual(decoded.fallbackAxis, observation.fallbackAxis)
+        XCTAssertNil(decoded.axisAngle)
+    }
+
+    // MARK: - ADR-002：v3 默认策略（ankleOnly + floor=0.40）
+
+    func test_defaultConfig_isAnkleOnlyWithFloor040() {
+        // ADR-002 默认策略基线；防止后续误改回 v2。
+        XCTAssertEqual(BoardEdgeConfig.standard.fallbackPickStrategy, .ankleOnly)
+        XCTAssertEqual(BoardEdgeConfig.standard.fallbackConfidenceFloor, 0.40, accuracy: 1e-9)
+    }
+
+    func test_fallback_ankleOnlySkipsKneeEvenWhenKneeStronger() {
+        // 踝对间距 0.03 → geom 0.36 → cnf 0.324（<0.40 被 floor 拒）；
+        // 膝对若参与本会 cnf=0.54 高于踝，但 ankleOnly 策略下必须跳过。
+        let pose = makePose(
+            leftKnee: PoseJointPoint(x: 0.40, y: 0.55, confidence: 0.9),
+            rightKnee: PoseJointPoint(x: 0.60, y: 0.55, confidence: 0.9),
+            leftAnkle: PoseJointPoint(x: 0.485, y: 0.30, confidence: 0.9),
+            rightAnkle: PoseJointPoint(x: 0.515, y: 0.30, confidence: 0.9)
+        )
+
+        let fallback = BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .farShot, config: .standard
+        )
+
+        // 默认策略下：膝对被跳过；踝对置信 0.324 < floor 0.40 → 全体 nil。
+        XCTAssertNil(fallback)
+    }
+
+    func test_fallback_ankleOnlyReturnsAnkleWhenPassesFloor() {
+        // 踝对间距 0.20 → geom 1.0 → cnf 0.9 ≥ 0.40。
+        let pose = makePose(
+            leftKnee: PoseJointPoint(x: 0.30, y: 0.55, confidence: 0.9),
+            rightKnee: PoseJointPoint(x: 0.70, y: 0.55, confidence: 0.9),
+            leftAnkle: PoseJointPoint(x: 0.40, y: 0.30, confidence: 0.9),
+            rightAnkle: PoseJointPoint(x: 0.60, y: 0.30, confidence: 0.9)
+        )
+
+        let fallback = BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .farShot, config: .standard
+        )
+
+        XCTAssertEqual(fallback?.source, .anklePair)
+        XCTAssertEqual(fallback?.confidence ?? 0, 0.9, accuracy: 1e-6)
+    }
+
+    func test_fallback_ankleOnlyIgnoresKneeWhenAnkleMissing() {
+        // 踝缺失 + 膝对可能过 v2 floor 也不允许（ankleOnly 结构性拒绝）。
+        let pose = makePose(
+            leftKnee: PoseJointPoint(x: 0.30, y: 0.55, confidence: 0.95),
+            rightKnee: PoseJointPoint(x: 0.70, y: 0.55, confidence: 0.95),
+            leftAnkle: nil,
+            rightAnkle: nil
+        )
+
+        let fallback = BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .ankleLowCnf, config: .standard
+        )
+
+        XCTAssertNil(fallback)
+    }
+
+    func test_fallback_floor040RejectsBorderlineAnklePair() {
+        // point 0.9 × geom(d×12) = 0.39 → d ≈ 0.0361
+        let d = 0.39 / 0.9 / 12.0
+        let pose = makePose(
+            leftKnee: nil, rightKnee: nil,
+            leftAnkle: PoseJointPoint(x: 0.5 - d / 2, y: 0.30, confidence: 0.9),
+            rightAnkle: PoseJointPoint(x: 0.5 + d / 2, y: 0.30, confidence: 0.9)
+        )
+
+        // 默认 floor=0.40 下 0.39 被拒（v2 的 floor=0.30 会通过 → 用来对照）。
+        XCTAssertNil(BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .farShot, config: .standard
+        ))
+
+        let v2 = BoardEdgeConfig(
+            fallbackConfidenceFloor: 0.30,
+            fallbackPickStrategy: .confMax
+        )
+        XCTAssertNotNil(BoardEdgeDetector.synthesizeFallback(
+            pose: pose, originalStatus: .farShot, config: v2
+        ))
+    }
+
     // MARK: - Helpers
 
     private func makeInstance(index: Int, alphaCount: Int, box: CGRect)
@@ -350,6 +640,30 @@ final class BoardEdgeDetectorTests: XCTestCase {
             rightShoulderPoint: rightShoulder,
             leftHipPoint: leftHip,
             rightHipPoint: rightHip,
+            leftAnklePoint: leftAnkle,
+            rightAnklePoint: rightAnkle
+        )
+    }
+
+    private func makePose(
+        leftKnee: PoseJointPoint?,
+        rightKnee: PoseJointPoint?,
+        leftAnkle: PoseJointPoint?,
+        rightAnkle: PoseJointPoint?
+    ) -> BodyPoseData {
+        BodyPoseData(
+            detected: true,
+            visibility: .full,
+            bodyLeanAngle: nil,
+            leftBodyLeanAngle: nil,
+            rightBodyLeanAngle: nil,
+            leftKneeBendAngle: nil,
+            rightKneeBendAngle: nil,
+            leftCalfLeanAngle: nil,
+            rightCalfLeanAngle: nil,
+            centerOfGravity: nil,
+            leftKneePoint: leftKnee,
+            rightKneePoint: rightKnee,
             leftAnklePoint: leftAnkle,
             rightAnklePoint: rightAnkle
         )

@@ -357,14 +357,33 @@ private extension DebugOverlayRenderer {
     }
 
     static func drawBoardEdgeObservation(_ edge: BoardEdgeObservation, canvas: NSSize) {
-        guard edge.status == .board,
-              let angle = edge.axisAngle,
-              let cx = edge.centerX,
-              let cy = edge.centerY,
-              let lengthRatio = edge.lengthRatio else {
+        let angle: Double
+        let cx: Double
+        let cy: Double
+        let lengthRatio: Double
+        let color: NSColor
+
+        switch edge.status {
+        case .board:
+            guard let a = edge.axisAngle,
+                  let x = edge.centerX,
+                  let y = edge.centerY,
+                  let len = edge.lengthRatio else {
+                return
+            }
+            angle = a; cx = x; cy = y; lengthRatio = len
+            color = NSColor.systemCyan
+        case .fallback:
+            guard let fb = edge.fallbackAxis else { return }
+            angle = fb.axisAngle
+            cx = fb.centerX
+            cy = fb.centerY
+            lengthRatio = fb.lengthRatio
+            color = NSColor.systemYellow
+        default:
             return
         }
-        let color = NSColor.systemCyan
+
         let length = canvas.width * CGFloat(clamp(lengthRatio, lower: 0.04, upper: 0.55))
         let direction = vector(angle: angle, length: length / 2)
         let center = normalizedPoint(x: cx, y: cy, canvas: canvas)

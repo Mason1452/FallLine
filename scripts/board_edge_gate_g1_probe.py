@@ -4,30 +4,26 @@
 board_edge_gate_g1_probe.py
 ===========================
 
-Phase 2 主体 1：Gate-G1（观测器工程质量）三合一探针。
+Gate-G1（观测器工程质量）三合一探针。2026-09-20 ADR-002 后升级为 v3 主判定 + v2 对照。
 
-对 §4.4 已标注 25 片边界集，每片跑三轮 CLI：
-  A. `--board-edge` (opt-in 第 1 次)
-  B. `--board-edge` (opt-in 第 2 次，用来判 bit-identical)
-  C. 基线（默认关，不加 flag，用来算耗时增幅）
+对边界集每片跑三轮 CLI：
+  A. `--board-edge` (第 1 次)
+  B. `--board-edge` (第 2 次，判 bit-identical，含 fallbackAxis 全字段)
+  C. 基线（不加 flag，算耗时增幅）
 
 对每片给出：
-  - **覆盖率**：frames 中 boardEdgeObservation.status=board 的比例
-    （Gate-G1 门槛 ≥60%，远景片 farShot 主导预期不到；主 corpus 5-6/10 参考基线）。
-  - **确定性**：A vs B 的 boardEdgeObservation 逐帧对比：status 一致率 + axisAngle
-    差 <1e-6 的帧数（Gate-G1 需 bit-identical，跟 repeatability_probe.py 同精神）。
-  - **性能**：wall-clock 耗时 A vs C 的比值（Gate-G1 需增幅 ≤30%）。
-
-聚合层面报总覆盖率（全帧口径）+ per-clip 明细 + 全集平均耗时增幅。
+  - **覆盖率三口径**：raw = status=board；effective_v2 = board + fallback≥0.30（历史对照）；
+    effective_v3 = board + fallback≥0.40（ADR-002 生产默认）。
+    Gate-G1 v3 按片级可用性判定：v3-B eff≥25% 片占比≥60%；或 v3-A 帧加权可用性≥40。
+  - **确定性**：A vs B 逐帧全字段（含 fallbackAxis）bit-identical。
+  - **性能**：wall-clock A vs C，增幅 ≤30%。
 
 用法：
-  swift build -c release  # 先构建 release
-  python3 scripts/board_edge_gate_g1_probe.py                 # 25 片全跑
-  python3 scripts/board_edge_gate_g1_probe.py ONLY=BND_L1     # 单片
-  python3 scripts/board_edge_gate_g1_probe.py -n 3            # 前 3 片
-  python3 scripts/board_edge_gate_g1_probe.py --build         # 先 release build
-
-无副作用：每次 CLI 跑在独立 tmp 目录 + symlink，删除时不动 video/。
+  swift build -c release
+  python3 scripts/board_edge_gate_g1_probe.py                 # 44 片全跑
+  python3 scripts/board_edge_gate_g1_probe.py ONLY=BND_L1
+  python3 scripts/board_edge_gate_g1_probe.py -n 3
+  python3 scripts/board_edge_gate_g1_probe.py --build
 """
 
 from __future__ import annotations
@@ -46,8 +42,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 RELEASE_BIN = ROOT / ".build" / "release" / "FallLineCLI"
 
-# §4.4 标注集（25 片已判 + 19 片 tbd 待回填）：alias, group, relpath
-# group=tbd 的 19 片见 calibration_anchors.md 第三批；教练看接触表回填后替换为 high/mid/low。
+# §4.4 标注集（44 片全部已判）：alias, group, relpath
+# group 口径：high=专业/高质量刻滑档，mid=中级/中级偏上，low=初级（第三批 2026-09-19 按接触表回填）。
 CLIPS: list[tuple[str, str, str]] = [
     # ---- BND* (11 片) ----
     ("BND_HI1", "high",  "video/middle/9714be3aba73f5f94130750c2a15d381.MP4"),
@@ -76,34 +72,42 @@ CLIPS: list[tuple[str, str, str]] = [
     ("BND2_L3",  "low",  "video/bad/v2800fgi0000d4v24r7og65oi0fmka5g.MP4"),
     ("BND2_L2",  "low",  "video/bad/v0d00fg10000ctm0ufvog65rqb97g2p0.MP4"),
     ("BND2_L1",  "low",  "video/bad/v0d00fg10000csgr6inog65n8mlpg2m0.MP4"),
-    # ---- CAND_* 第三批 19 片（group=tbd 待回填）----
-    ("CAND_G01", "tbd", "video/good/0946ed384e732c357a3d55fac77426c0.MP4"),
-    ("CAND_G02", "tbd", "video/good/3134552bed78447b9f7ba8e2003ce678.MP4"),
-    ("CAND_G03", "tbd", "video/good/3e6f37fe76521781506c19c02c1b97ed.MP4"),
-    ("CAND_G04", "tbd", "video/good/5382da0c825e30518ab376505cbcfaf2.MOV"),
-    ("CAND_G05", "tbd", "video/good/641efed02be271b6d9f014c97d1f8ae0.MOV"),
-    ("CAND_G06", "tbd", "video/good/9ed0bb6c707fc47fce153cee3dcd365e.MP4"),
-    ("CAND_G07", "tbd", "video/good/v0200fg10000d7r0017og65qoh1vgeg0.MP4"),
-    ("CAND_G08", "tbd", "video/good/v2800fgi0000d6m0mk7og65qamcvgf80.MP4"),
-    ("CAND_M01", "tbd", "video/middle/1c5771fc7dd1ea546eb5bc3e4e01bc48.MP4"),
-    ("CAND_M02", "tbd", "video/middle/4a7dfe960f07ac14b06bbd8de3d38aa4.MP4"),
-    ("CAND_M03", "tbd", "video/middle/96001e37e76be9ef6cf7a65e73efcac4.MP4"),
-    ("CAND_M04", "tbd", "video/middle/992f063b79d27b96b471e44a48d8465e.MP4"),
-    ("CAND_M05", "tbd", "video/middle/a7791a475a244c938dd0815e89b1dec5.MP4"),
-    ("CAND_M06", "tbd", "video/middle/ccfd9967aa6d3ab5abd04fb8991872c7.MOV"),
-    ("CAND_M07", "tbd", "video/middle/v0200fg10000d2tcts7og65t6h63ua2g.MP4"),
-    ("CAND_M08", "tbd", "video/middle/v0200fg10000d6a4i57og65mkjkcdpu0.MP4"),
-    ("CAND_M09", "tbd", "video/middle/v0300fg10000d4oq6avog65ihr8qf550.MP4"),
-    ("CAND_M10", "tbd", "video/middle/v2800fgi0000d5ehg1vog65tinkepgl0.MP4"),
-    ("CAND_B01", "tbd", "video/bad/0b7522e9db823b910ac67727aea726da.MP4"),
+    # ---- CAND_* 第三批 19 片（档位已按教练接触表回填，2026-09-19）----
+    ("CAND_G01", "high", "video/good/0946ed384e732c357a3d55fac77426c0.MP4"),
+    ("CAND_G02", "high", "video/good/3134552bed78447b9f7ba8e2003ce678.MP4"),
+    ("CAND_G03", "high", "video/good/3e6f37fe76521781506c19c02c1b97ed.MP4"),
+    ("CAND_G04", "high", "video/good/5382da0c825e30518ab376505cbcfaf2.MOV"),
+    ("CAND_G05", "high", "video/good/641efed02be271b6d9f014c97d1f8ae0.MOV"),
+    ("CAND_G06", "high", "video/good/9ed0bb6c707fc47fce153cee3dcd365e.MP4"),
+    ("CAND_G07", "high", "video/good/v0200fg10000d7r0017og65qoh1vgeg0.MP4"),
+    ("CAND_G08", "high", "video/good/v2800fgi0000d6m0mk7og65qamcvgf80.MP4"),
+    ("CAND_M01", "low",  "video/middle/1c5771fc7dd1ea546eb5bc3e4e01bc48.MP4"),
+    ("CAND_M02", "mid",  "video/middle/4a7dfe960f07ac14b06bbd8de3d38aa4.MP4"),
+    ("CAND_M03", "high", "video/middle/96001e37e76be9ef6cf7a65e73efcac4.MP4"),
+    ("CAND_M04", "mid",  "video/middle/992f063b79d27b96b471e44a48d8465e.MP4"),
+    ("CAND_M05", "high", "video/middle/a7791a475a244c938dd0815e89b1dec5.MP4"),
+    ("CAND_M06", "mid",  "video/middle/ccfd9967aa6d3ab5abd04fb8991872c7.MOV"),
+    ("CAND_M07", "mid",  "video/middle/v0200fg10000d2tcts7og65t6h63ua2g.MP4"),
+    ("CAND_M08", "mid",  "video/middle/v0200fg10000d6a4i57og65mkjkcdpu0.MP4"),
+    ("CAND_M09", "low",  "video/middle/v0300fg10000d4oq6avog65ihr8qf550.MP4"),
+    ("CAND_M10", "high", "video/middle/v2800fgi0000d5ehg1vog65tinkepgl0.MP4"),
+    ("CAND_B01", "mid",  "video/bad/0b7522e9db823b910ac67727aea726da.MP4"),
 ]
 
-GATE_G1_COVERAGE = 0.60
+GATE_G1_RAW_COVERAGE = 0.60          # v1 理想覆盖率（观察项）
 GATE_G1_PERF_HEADROOM = 0.30
-STATUS_KEYS = (
-    "status", "axisAngle", "centerX", "centerY",
-    "lengthRatio", "elongation", "subjectFraction", "ankleConfidence",
-)
+GATE_G1_V2_CLIP_COV = 30.0            # v2 片级 effCov% 门槛
+GATE_G1_V2_CLIP_RATIO = 0.60          # v2 达标片占比门槛
+GATE_G1_V2_WEIGHTED = 40.0            # v2 帧加权可用性门槛
+GATE_G1_V2_WEIGHTED_CAP = 60.0        # Σ min(effCov%, 该 cap)·f/F，spec §6
+FALLBACK_CONFIDENCE_FLOOR_V2 = 0.30   # v2 对照口径（历史）
+# v3（ADR-002，2026-09-20）：精度优先的可用性闸门
+GATE_G1_V3_CLIP_COV = 25.0            # v3 片级 effCov% 门槛（v2 的 30 → 25）
+GATE_G1_V3_CLIP_RATIO = 0.60          # v3 达标片占比门槛（与 v2 一致）
+GATE_G1_V3_WEIGHTED = 40.0            # v3 帧加权可用性门槛（与 v2-A 一致）
+GATE_G1_V3_WEIGHTED_CAP = 60.0        # 同 v2 权威口径
+FALLBACK_CONFIDENCE_FLOOR_V3 = 0.40   # v3 生产默认（ankleOnly + floor 0.40）
+FALLBACK_CONFIDENCE_FLOOR = FALLBACK_CONFIDENCE_FLOOR_V3  # 与 BoardEdgeConfig v3 对齐
 
 
 def build_release() -> None:
@@ -144,44 +148,53 @@ def run_cli(video_abs: Path, board_edge: bool) -> tuple[dict, float]:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-def coverage(data: dict) -> tuple[int, int, dict]:
-    """(board_frames, total_frames, status_hist)"""
+def coverage(data: dict) -> tuple[int, int, int, int, dict]:
+    """(board_frames, effective_v2_frames, effective_v3_frames, total_frames, status_hist)。
+    effective_v2 = board + fallback≥FLOOR_V2（0.30，历史对照口径）；
+    effective_v3 = board + fallback≥FLOOR_V3（0.40，ADR-002 生产默认）。"""
     frames = data.get("frames") or []
     hist: dict[str, int] = {}
     board = 0
+    effective_v2 = 0
+    effective_v3 = 0
     for fr in frames:
         obs = fr.get("boardEdgeObservation") or {}
         st = obs.get("status") or "missing"
         hist[st] = hist.get(st, 0) + 1
         if st == "board":
             board += 1
-    return board, len(frames), hist
+            effective_v2 += 1
+            effective_v3 += 1
+        elif st == "fallback":
+            fb = obs.get("fallbackAxis") or {}
+            conf = fb.get("confidence") or 0
+            if conf >= FALLBACK_CONFIDENCE_FLOOR_V2:
+                effective_v2 += 1
+            if conf >= FALLBACK_CONFIDENCE_FLOOR_V3:
+                effective_v3 += 1
+    return board, effective_v2, effective_v3, len(frames), hist
+
+
+def _canonical(obs: dict | None) -> str:
+    return json.dumps(obs, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
 def frames_equal(a_frames: list, b_frames: list) -> tuple[int, int, int, str | None]:
-    """
-    对比两次 opt-in 运行的 boardEdgeObservation：
-      returns (n_all, n_status_same, n_full_bit_same, first_diff_desc)
-    完整 bit-identical 定义：STATUS_KEYS 全部相等（float 用 repr 比对，与 SwiftJSONEncoder 一致）。
-    """
+    """对比两轮的 boardEdgeObservation 整个对象（含 fallbackAxis 全子字段）。
+    returns (n_pair, n_status_same, n_full_bit_same, first_diff_desc)。"""
     n = min(len(a_frames), len(b_frames))
     n_status = 0
     n_full = 0
     first_diff = None
     for i in range(n):
-        oa = a_frames[i].get("boardEdgeObservation") or {}
-        ob = b_frames[i].get("boardEdgeObservation") or {}
-        if oa.get("status") == ob.get("status"):
+        oa = a_frames[i].get("boardEdgeObservation")
+        ob = b_frames[i].get("boardEdgeObservation")
+        if (oa or {}).get("status") == (ob or {}).get("status"):
             n_status += 1
-        equal_all = True
-        for k in STATUS_KEYS:
-            if oa.get(k) != ob.get(k):
-                equal_all = False
-                if first_diff is None:
-                    first_diff = f"frame#{i} {k}: {oa.get(k)!r} vs {ob.get(k)!r}"
-                break
-        if equal_all:
+        if _canonical(oa) == _canonical(ob):
             n_full += 1
+        elif first_diff is None:
+            first_diff = f"frame#{i}: {_canonical(oa)} vs {_canonical(ob)}"
     return n, n_status, n_full, first_diff
 
 
@@ -198,14 +211,16 @@ def probe_clip(alias: str, group: str, rel: str) -> dict | None:
     except RuntimeError as exc:
         print(f"FAIL {exc}", flush=True)
         return None
-    board_a, total_a, hist_a = coverage(d_a)
-    _, total_b, _ = coverage(d_b)
-    _, total_c, _ = coverage(d_c)
+    board_a, eff_v2_a, eff_v3_a, total_a, hist_a = coverage(d_a)
+    _, _, _, total_b, _ = coverage(d_b)
+    _, _, _, total_c, _ = coverage(d_c)
     n_pair, n_status, n_full, first_diff = frames_equal(d_a["frames"], d_b["frames"])
     perf_ratio = t_a / t_c if t_c > 0 else float("nan")
-    cov_pct = board_a / total_a if total_a else 0.0
+    raw_pct = board_a / total_a if total_a else 0.0
+    eff_v2_pct = eff_v2_a / total_a if total_a else 0.0
+    eff_v3_pct = eff_v3_a / total_a if total_a else 0.0
     print(
-        f"cov={board_a}/{total_a}={cov_pct*100:5.1f}%  "
+        f"raw={raw_pct*100:5.1f}%  effV2={eff_v2_pct*100:5.1f}%  effV3={eff_v3_pct*100:5.1f}%  "
         f"bit-same={n_full}/{n_pair}  "
         f"perf={t_a:5.2f}s vs {t_c:5.2f}s (+{(perf_ratio-1)*100:+.1f}%)",
         flush=True,
@@ -216,7 +231,11 @@ def probe_clip(alias: str, group: str, rel: str) -> dict | None:
         "alias": alias, "group": group, "path": rel,
         "totalFrames": total_a,
         "boardFrames": board_a,
-        "coverage": cov_pct,
+        "effectiveFramesV2": eff_v2_a,
+        "effectiveFramesV3": eff_v3_a,
+        "rawCoverage": raw_pct,
+        "effCoverageV2": eff_v2_pct,
+        "effCoverageV3": eff_v3_pct,
         "statusHist": hist_a,
         "totalFramesA": total_a, "totalFramesB": total_b, "totalFramesC": total_c,
         "bitIdenticalFrames": n_full,
@@ -233,16 +252,57 @@ def summarize(results: list[dict]) -> None:
         print("\n(no results)")
         return
     print("\n" + "=" * 78)
-    print(" 汇总（Gate-G1 三合一）")
+    print(" 汇总（Gate-G1 三合一，v2 对照 + v3 主判定）")
     print("=" * 78)
     total_board = sum(r["boardFrames"] for r in results)
+    total_eff_v2 = sum(r["effectiveFramesV2"] for r in results)
+    total_eff_v3 = sum(r["effectiveFramesV3"] for r in results)
     total_frames = sum(r["totalFrames"] for r in results)
-    overall_cov = total_board / total_frames if total_frames else 0.0
-    print(f"  全帧口径覆盖率 : {total_board}/{total_frames} = {overall_cov*100:.2f}%  "
-          f"(Gate-G1 门槛 ≥{GATE_G1_COVERAGE*100:.0f}%) "
-          f"→ {'PASS' if overall_cov >= GATE_G1_COVERAGE else 'FAIL'}")
-    per_clip_pass = [r for r in results if r["coverage"] >= GATE_G1_COVERAGE]
-    print(f"  片级覆盖率 ≥60%: {len(per_clip_pass)}/{len(results)} 片")
+    raw_cov = total_board / total_frames if total_frames else 0.0
+    eff_v2_cov = total_eff_v2 / total_frames if total_frames else 0.0
+    eff_v3_cov = total_eff_v3 / total_frames if total_frames else 0.0
+    print(f"  raw board 覆盖率   : {total_board}/{total_frames} = {raw_cov*100:.2f}%  (v1 观察项)")
+    print(f"  eff v2 覆盖率      : {total_eff_v2}/{total_frames} = {eff_v2_cov*100:.2f}%  "
+          f"(board + fallback≥{FALLBACK_CONFIDENCE_FLOOR_V2:.2f}，历史对照)")
+    print(f"  eff v3 覆盖率      : {total_eff_v3}/{total_frames} = {eff_v3_cov*100:.2f}%  "
+          f"(board + fallback≥{FALLBACK_CONFIDENCE_FLOOR_V3:.2f}，ADR-002 生产默认)")
+
+    # ---- Gate-G1 v2（历史对照口径） ----
+    clips_pass_v2 = [r for r in results if r["effCoverageV2"] * 100 >= GATE_G1_V2_CLIP_COV]
+    clip_ratio_v2 = len(clips_pass_v2) / len(results)
+    v2_criterion_a = clip_ratio_v2 >= GATE_G1_V2_CLIP_RATIO
+    weighted_usability_v2 = sum(
+        min(r["effCoverageV2"] * 100, GATE_G1_V2_WEIGHTED_CAP) * r["totalFrames"]
+        for r in results
+    ) / total_frames if total_frames else 0.0
+    v2_criterion_b = weighted_usability_v2 >= GATE_G1_V2_WEIGHTED
+    print(f"  --- Gate-G1 v2（历史对照，ADR-001 已 FAIL 记录）---")
+    print(f"  v2-A: 片级 effCov≥{GATE_G1_V2_CLIP_COV:.0f}% 占比 "
+          f"{len(clips_pass_v2)}/{len(results)} = {clip_ratio_v2*100:.1f}%  "
+          f"(门槛 ≥{GATE_G1_V2_CLIP_RATIO*100:.0f}%) → {'PASS' if v2_criterion_a else 'FAIL'}")
+    print(f"  v2-B: 帧加权可用性 {weighted_usability_v2:.2f}  "
+          f"(门槛 ≥{GATE_G1_V2_WEIGHTED:.0f}) → {'PASS' if v2_criterion_b else 'FAIL'}")
+    print(f"  v2 总判定: {'PASS' if (v2_criterion_a or v2_criterion_b) else 'FAIL'}"
+          f"（A/B 二选一，未含 GT 精度小闸门）")
+
+    # ---- Gate-G1 v3（ADR-002 主判定口径） ----
+    clips_pass_v3 = [r for r in results if r["effCoverageV3"] * 100 >= GATE_G1_V3_CLIP_COV]
+    clip_ratio_v3 = len(clips_pass_v3) / len(results)
+    v3_criterion_a = clip_ratio_v3 >= GATE_G1_V3_CLIP_RATIO
+    weighted_usability_v3 = sum(
+        min(r["effCoverageV3"] * 100, GATE_G1_V3_WEIGHTED_CAP) * r["totalFrames"]
+        for r in results
+    ) / total_frames if total_frames else 0.0
+    v3_criterion_b = weighted_usability_v3 >= GATE_G1_V3_WEIGHTED
+    print(f"  --- Gate-G1 v3（ADR-002 主判定，2026-09-20）---")
+    print(f"  v3-B: 片级 effCov≥{GATE_G1_V3_CLIP_COV:.0f}% 占比 "
+          f"{len(clips_pass_v3)}/{len(results)} = {clip_ratio_v3*100:.1f}%  "
+          f"(门槛 ≥{GATE_G1_V3_CLIP_RATIO*100:.0f}%) → {'PASS' if v3_criterion_a else 'FAIL'}")
+    print(f"  v3-A: 帧加权可用性 {weighted_usability_v3:.2f}  "
+          f"(门槛 ≥{GATE_G1_V3_WEIGHTED:.0f}) → {'PASS' if v3_criterion_b else 'FAIL'}")
+    print(f"  v3 总判定: {'PASS' if (v3_criterion_a or v3_criterion_b) else 'FAIL'}"
+          f"（A/B 二选一；前置 GT 准入 ≥90% 已在 §12.11/§12.12 分别验证）")
+
     total_bit_pair = sum(r["pairFrames"] for r in results)
     total_bit_ok = sum(r["bitIdenticalFrames"] for r in results)
     print(f"  bit-identical  : {total_bit_ok}/{total_bit_pair} 帧 "
@@ -261,12 +321,13 @@ def summarize(results: list[dict]) -> None:
               f"(Gate-G1 门槛 ≤{1 + GATE_G1_PERF_HEADROOM:.2f}) "
               f"→ {'PASS' if avg <= 1 + GATE_G1_PERF_HEADROOM else 'FAIL'}")
 
-    print("\n  单片明细（cov% / bit-ok / perf±%）")
-    print(f"  {'alias':>8s}  {'grp':>4s}  {'frames':>6s}  {'cov%':>6s}  "
+    print("\n  单片明细（raw/effV2/effV3 cov% / bit-ok / perf±%）")
+    print(f"  {'alias':>8s}  {'grp':>4s}  {'frames':>6s}  {'raw%':>6s}  {'effV2%':>7s}  {'effV3%':>7s}  "
           f"{'bit-ok':>10s}  {'A_sec':>6s}  {'C_sec':>6s}  {'perf±%':>7s}")
-    for r in sorted(results, key=lambda x: (-x["coverage"], x["alias"])):
+    for r in sorted(results, key=lambda x: (-x["effCoverageV3"], x["alias"])):
         print(f"  {r['alias']:>8s}  {r['group']:>4s}  {r['totalFrames']:>6d}  "
-              f"{r['coverage']*100:>5.1f}%  "
+              f"{r['rawCoverage']*100:>5.1f}%  {r['effCoverageV2']*100:>6.1f}%  "
+              f"{r['effCoverageV3']*100:>6.1f}%  "
               f"{r['bitIdenticalFrames']:>4d}/{r['pairFrames']:>4d}  "
               f"{r['wallTimeA']:>6.2f}  {r['wallTimeC']:>6.2f}  "
               f"{(r['perfRatio']-1)*100:>+6.1f}%")

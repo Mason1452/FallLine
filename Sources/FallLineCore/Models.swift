@@ -589,11 +589,13 @@ public struct BoardObservation: Codable {
 
 /// 板身刃线逐帧观测的门控状态。
 ///
-/// 仅 `board` 代表检测到归属本滑者、站姿可靠的板轴；其余状态均为“不可用”的具体原因，
-/// 供诊断与覆盖率统计，不允许把这些帧当作刃线证据。
+/// `board` 代表检测到归属本滑者、站姿可靠的板轴；`fallback` 代表主检测失败但姿态几何
+/// 合成的降级板轴有效；其余状态均为“不可用”的具体原因，供诊断与覆盖率统计。
 public enum BoardEdgeStatus: String, Codable, CaseIterable {
     /// 检测到归属本滑者、站姿可靠的板轴。
     case board
+    /// 主检测失败，由姿态几何合成的降级板轴（详见 `BoardEdgeObservation.fallbackAxis`）。
+    case fallback
     /// 未启用板身刃线检测（默认关闭路径）。
     case disabled
     /// Vision / 分割未能产出可用掩码。
@@ -616,6 +618,49 @@ public enum BoardEdgeStatus: String, Codable, CaseIterable {
     case rejectPosture
 }
 
+/// 降级板轴的姿态几何来源。
+public enum BoardFallbackSource: String, Codable {
+    /// 双踝连线（一阶代理，双脚沿板长前后固定）。
+    case anklePair
+    /// 双膝连线（二阶弱代理，膝可相对板扭转）。
+    case kneePair
+}
+
+/// 主检测失败时由姿态几何合成的降级板轴（ADR-001，仅诊断）。
+public struct FallbackAxis: Codable, Equatable {
+    public let source: BoardFallbackSource
+    /// 板轴相对水平的无符号夹角（0...90，度）。
+    public let axisAngle: Double
+    /// 关节对中点 X（归一化 0...1）。
+    public let centerX: Double
+    /// 关节对中点 Y（归一化 0...1）。
+    public let centerY: Double
+    /// 关节对归一间距（仅展示用，0.02...1）。
+    public let lengthRatio: Double
+    /// 合成置信度（点置信度 × 几何置信度 × 源权重，0...1）。
+    public let confidence: Double
+    /// 触发降级合成的原始主检测拒绝状态。
+    public let originalStatus: BoardEdgeStatus
+
+    public init(
+        source: BoardFallbackSource,
+        axisAngle: Double,
+        centerX: Double,
+        centerY: Double,
+        lengthRatio: Double,
+        confidence: Double,
+        originalStatus: BoardEdgeStatus
+    ) {
+        self.source = source
+        self.axisAngle = max(0, min(90, axisAngle))
+        self.centerX = max(0, min(1, centerX))
+        self.centerY = max(0, min(1, centerY))
+        self.lengthRatio = max(0.02, min(1, lengthRatio))
+        self.confidence = max(0, min(1, confidence))
+        self.originalStatus = originalStatus
+    }
+}
+
 /// 单帧板身刃线观测（Phase 1，仅诊断，不参与评分）。
 ///
 /// 由前景实例分割 + 踝下 ROI PCA 得到；字段为归一化几何量，跨次确定性由纯函数计算保证。
@@ -635,6 +680,8 @@ public struct BoardEdgeObservation: Codable {
     public let subjectFraction: Double?
     /// 踝点定位置信度（0...1）。
     public let ankleConfidence: Double?
+    /// `status == .fallback` 时的降级板轴；其余状态为 nil。
+    public let fallbackAxis: FallbackAxis?
 
     public init(
         status: BoardEdgeStatus,
@@ -644,7 +691,8 @@ public struct BoardEdgeObservation: Codable {
         lengthRatio: Double? = nil,
         elongation: Double? = nil,
         subjectFraction: Double? = nil,
-        ankleConfidence: Double? = nil
+        ankleConfidence: Double? = nil,
+        fallbackAxis: FallbackAxis? = nil
     ) {
         self.status = status
         self.axisAngle = axisAngle
@@ -654,10 +702,145 @@ public struct BoardEdgeObservation: Codable {
         self.elongation = elongation.map { max(0, $0) }
         self.subjectFraction = subjectFraction.map { max(0, min(1, $0)) }
         self.ankleConfidence = ankleConfidence.map { max(0, min(1, $0)) }
+        self.fallbackAxis = fallbackAxis
     }
 
     /// 默认关闭路径的占位观测。
     public static let disabled = BoardEdgeObservation(status: .disabled)
+}
+
+// MARK: - 板轴刃线时序连续性（ADR-004，仅诊断，不参与评分）
+
+/// 时序窗口未通过的原因（ADR-004，§12.15）。
+public enum BoardTemporalRejectReason: String, Codable {
+    /// 窗口内有效候选数不足（< minCount）。
+    case insufficientCandidates
+    /// 窗口角度离散度过大（IQR > iqrGate）。
+    case unstableIQR
+    /// 角度跨 PCA 0/90° 折叠边界且无行进方向信号可重建有向角。
+    case foldCrossing
+}
+
+/// 帧对齐的时序窗口聚合产物（ADR-004，§12.15）。
+public struct BoardTemporalAxisPoint: Codable, Equatable {
+    /// 对应 DetectionResult 的帧序号。
+    public let frameIndex: Int
+    /// 该帧的因果前向窗是否通过稳定性门控。
+    public let windowPass: Bool
+    /// 窗口内有效候选数。
+    public let candidateCount: Int
+    /// 窗口角度中位数（通过时有效，0...90；未通过为 nil）。
+    public let medianAngle: Double?
+    /// 窗口候选置信度中位数（通过时有效，0...1；未通过为 nil）。
+    public let medianConfidence: Double?
+    /// 窗口角度 IQR（度）。
+    public let iqr: Double?
+    /// 窗口内源多数派（通过时有效；tie 取 ankle）。
+    public let source: BoardFallbackSource?
+    /// 未通过原因（通过时为 nil）。
+    public let rejectReason: BoardTemporalRejectReason?
+
+    public init(
+        frameIndex: Int,
+        windowPass: Bool,
+        candidateCount: Int,
+        medianAngle: Double? = nil,
+        medianConfidence: Double? = nil,
+        iqr: Double? = nil,
+        source: BoardFallbackSource? = nil,
+        rejectReason: BoardTemporalRejectReason? = nil
+    ) {
+        self.frameIndex = frameIndex
+        self.windowPass = windowPass
+        self.candidateCount = candidateCount
+        self.medianAngle = medianAngle.map { max(0, min(90, $0)) }
+        self.medianConfidence = medianConfidence.map { max(0, min(1, $0)) }
+        self.iqr = iqr.map { max(0, $0) }
+        self.source = source
+        self.rejectReason = rejectReason
+    }
+}
+
+/// 聚合器参数回声（写入 JSON 保证结果自解释，ADR-004）。
+public struct BoardTrajectoryConfigEcho: Codable, Equatable {
+    public let windowSize: Int
+    public let minCount: Int
+    public let iqrGate: Double
+    public let sampleInterval: Double
+    public let foldLowAngle: Double
+    public let foldHighAngle: Double
+
+    public init(
+        windowSize: Int,
+        minCount: Int,
+        iqrGate: Double,
+        sampleInterval: Double,
+        foldLowAngle: Double,
+        foldHighAngle: Double
+    ) {
+        self.windowSize = windowSize
+        self.minCount = minCount
+        self.iqrGate = iqrGate
+        self.sampleInterval = sampleInterval
+        self.foldLowAngle = foldLowAngle
+        self.foldHighAngle = foldHighAngle
+    }
+}
+
+/// 片级板轴刃线连续性度量（ADR-004，§12.15；进 summary `boardTrajectory`）。
+public struct BoardTrajectoryMetrics: Codable, Equatable {
+    /// 可评估窗口数（窗口至少含 1 个候选）。
+    public let evaluatedWindows: Int
+    /// 通过稳定性门控的窗口数。
+    public let stableWindows: Int
+    /// 通过窗数 / 可评估窗数（0...1）。
+    public let stableWindowRate: Double
+    /// 连续通过窗最长段（帧数）。
+    public let longestStableRunFrames: Int
+    /// 连续通过窗最长段（秒）。
+    public let longestStableRunSeconds: Double
+    /// 连续通过段数量。
+    public let stableRunCount: Int
+    /// 连续通过段平均长度（秒）。
+    public let stableRunMeanSeconds: Double
+    /// 落在连续稳定段内的帧占全部帧比例（0...1）。
+    public let stableFrameCoverage: Double
+    /// 折叠窗（无方向信号被保守拒绝）占可评估窗比例（0...1）。
+    public let foldCrossingRate: Double
+    /// 拒绝原因分布（按原因计数，键顺序在编码时由聚合器显式排序）。
+    public let rejectHist: [String: Int]
+    /// 参数回声。
+    public let configEcho: BoardTrajectoryConfigEcho
+    /// 帧对齐窗口产物（默认仅含通过帧；debug 下含全量）。
+    public let points: [BoardTemporalAxisPoint]
+
+    public init(
+        evaluatedWindows: Int,
+        stableWindows: Int,
+        stableWindowRate: Double,
+        longestStableRunFrames: Int,
+        longestStableRunSeconds: Double,
+        stableRunCount: Int,
+        stableRunMeanSeconds: Double,
+        stableFrameCoverage: Double,
+        foldCrossingRate: Double,
+        rejectHist: [String: Int],
+        configEcho: BoardTrajectoryConfigEcho,
+        points: [BoardTemporalAxisPoint]
+    ) {
+        self.evaluatedWindows = evaluatedWindows
+        self.stableWindows = stableWindows
+        self.stableWindowRate = max(0, min(1, stableWindowRate))
+        self.longestStableRunFrames = longestStableRunFrames
+        self.longestStableRunSeconds = max(0, longestStableRunSeconds)
+        self.stableRunCount = stableRunCount
+        self.stableRunMeanSeconds = max(0, stableRunMeanSeconds)
+        self.stableFrameCoverage = max(0, min(1, stableFrameCoverage))
+        self.foldCrossingRate = max(0, min(1, foldCrossingRate))
+        self.rejectHist = rejectHist
+        self.configEcho = configEcho
+        self.points = points
+    }
 }
 
 /// 单帧板身与运动方向关系。
@@ -810,6 +993,8 @@ public struct VideoSummary: Codable {
     /// - `nil`：无光流数据（`framePairsUsed < 2`）或历史归档，报告端不显示门控标记。
     /// 报告端 [ReportGenerator](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/ReportGenerator.swift) 根据此字段追加"（走刃证据不足，未加成）"标记，避免二次计算门控条件。
     public let flowModulationGated: Bool?
+    /// 板轴刃线连续性时序度量（ADR-004，§12.15；仅 `--board-edge` 启用时非 nil，纯诊断不参与评分）。
+    public let boardTrajectory: BoardTrajectoryMetrics?
 
     public init(
         averageScore: Double,
@@ -827,7 +1012,8 @@ public struct VideoSummary: Codable {
         flowMotionCoherence: Double? = nil,
         flowDirectionalStability: Double? = nil,
         flowVelocitySmoothness: Double? = nil,
-        flowModulationGated: Bool? = nil
+        flowModulationGated: Bool? = nil,
+        boardTrajectory: BoardTrajectoryMetrics? = nil
     ) {
         self.averageScore = averageScore
         self.bestFrame = bestFrame
@@ -845,6 +1031,7 @@ public struct VideoSummary: Codable {
         self.flowDirectionalStability = flowDirectionalStability
         self.flowVelocitySmoothness = flowVelocitySmoothness
         self.flowModulationGated = flowModulationGated
+        self.boardTrajectory = boardTrajectory
     }
 }
 

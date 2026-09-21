@@ -461,6 +461,23 @@ public class VideoAnalyzer {
             }
         }()
 
+        // 板轴刃线连续性时序聚合（ADR-004，§12.15；纯诊断，仅板边启用时运行，不参与评分）。
+        // 行进方向按精确时间戳对齐到全量 results（无匹配帧为 nil，折叠窗缺方向信号时保守拒绝）。
+        let boardTrajectory: BoardTrajectoryMetrics? = {
+            guard enableBoardEdge else { return nil }
+            let directionByTime = Dictionary(
+                cachedTravelDirections.map { ($0.time, $0.angle) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            let alignedDirections = results.map { directionByTime[$0.time] }
+            return BoardTemporalAxisAggregator.aggregate(
+                frames: results,
+                travelDirections: alignedDirections,
+                sampleInterval: sampleInterval,
+                config: boardEdgeConfig
+            )
+        }()
+
         return VideoSummary(
             averageScore: modulatedScore,
             bestFrame: FrameScore(
@@ -485,7 +502,8 @@ public class VideoAnalyzer {
             flowMotionCoherence: flowMetrics.framePairsUsed >= 2 ? flowMetrics.motionCoherence : nil,
             flowDirectionalStability: flowMetrics.framePairsUsed >= 2 ? flowMetrics.directionalStability : nil,
             flowVelocitySmoothness: flowMetrics.framePairsUsed >= 2 ? flowMetrics.velocitySmoothness : nil,
-            flowModulationGated: flowModulationGated
+            flowModulationGated: flowModulationGated,
+            boardTrajectory: boardTrajectory
         )
     }
 

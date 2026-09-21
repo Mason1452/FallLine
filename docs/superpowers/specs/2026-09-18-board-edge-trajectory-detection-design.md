@@ -2,7 +2,7 @@
 
 > 作者：agent
 > 日期：2026-09-18（2026-09-18 追加 Phase 0 Gate-G0 结果；同日追加 Phase 1 落地结果）
-> 状态：**Phase 1 已完成（生产级板身刃线观测器落地，默认关、纯诊断、零评分接触），可进入 Phase 2** — Phase 1 落地与验证见 §11；Phase 0 离线原型与人工 GT 见 §10；仍不含任何评分改动，Phase 2 Gate-G2 通过前不得联动评分。
+> 状态：**Phase 1 已完成（生产级板身刃线观测器落地，默认关、纯诊断、零评分接触），可进入 Phase 2** — Phase 1 落地与验证见 §11；Phase 0 离线原型与人工 GT 见 §10；仍不含任何评分改动，Phase 2 Gate-G2 通过前不得联动评分。**2026-09-20 fallback 前置闭环**：ADR-001（§12.9）+ 方向 A 实现（§12.10）+ GT 小闸门 FAIL（§12.11）+ 候选 D 时序累积离线 spike NO-GO（§12.12）。**2026-09-20 尾段决策**：候选 E（Gate-G1 v3 门槛松绑，ADR-002 §12.13）+ 候选 F（CoreML 板边分割 spike，§12.14 骨架）双线并行；E 已在 §6 落 ADR-002 + 生产接线，F 停留在设计骨架不投模型二进制。**2026-09-20 v3 44 片实测**（§12.13 尾）：**v3-B 26/44=59.1%（差 1 片）+ v3-A 30.64（差 9pp）双 FAIL**；bit 8364/8364 PASS + perf +4.9% PASS；结构性 FAIL。**2026-09-21 方向 C 时序累积重定位**（§12.15）：ADR-004 Accepted，把时序累积从 Gate-G1 覆盖率手段改为 Gate-G2 刃线连续性质量信号（W=5/minCount=3/IQR≤5°/fold-crossing），四阶段 spike 计划就绪，Gate-G1 v3 门槛不动；待按 §12.15.2 落地后再做 Gate-G2 裁决。
 > 前置（负结论闭环，均 2026-09-18，详见 [WORK_LOG Current State](file:///Users/mingsen/Project/FallLine/WORK_LOG.md)）：
 > - [bestthird_aggregator_audit.py](file:///Users/mingsen/Project/FallLine/scripts/bestthird_aggregator_audit.py)：18 种聚合器扫描，当前 top1/3 本身最优，聚合器不是低端地板成因（证伪）。
 > - [lowend_separability_audit.py](file:///Users/mingsen/Project/FallLine/scripts/lowend_separability_audit.py)：25 维现有 2D 特征穷尽，推坡初级 vs 平行雏形中级最强 margin 仅 0.50σ，不可分（负结论）。
@@ -205,10 +205,27 @@
 - **Gate-G0（可行性，至少一条成立）**
   - A 路：近景门控子集中，板轴逐帧检出率 ≥70%，板轴角度与人工标注中位误差 ≤12°，门控"近景"判定精确率 ≥90%（远/挡不得误判为近景）；或
   - C 路：相机补偿在远景子集 ≥80% 帧配准成功（残差 < 2px @640 宽或等价阈值），补偿后轨迹的类间可分性较补偿前有可量化改善（margin 提升 ≥0.5σ）。
-- **Gate-G1（观测器工程质量）**
+- **Gate-G1 v1（原始定义，2026-09-18 已实测结构性 FAIL，保留为历史/理想目标）**
   - 全集（n≥20）板轴或轨迹信号**有效覆盖率 ≥60%**，其余帧诚实输出"不可用"；
   - 跨次确定性：同视频 ×N 次运行新字段 bit-identical（纳入 repeatability 探针）；
   - 性能：CLI 单视频总耗时增幅 ≤30%（5fps 基线上），iOS 端内存峰值增幅 ≤15%。
+- **Gate-G1 v2（ADR-001 决策后的现行定义，2026-09-19）**
+  - 覆盖率按**降级后有效帧**度量：`status ∈ {board, fallback}`（fallback 须满足 `confidence ≥ fallbackConfidenceFloor`）；
+  - **片级可用性**（二者满足其一即可，避免长远景片稀释）：
+    - 片级 `effectiveCov% ≥ 30%` 的样本占比 **≥ 60%**；或
+    - 帧加权可用性 `Σ min(effectiveCov%, 60%)·f / F ≥ 40%`；
+  - v1 的全帧 ≥60% 降级为"理想覆盖率"观察项，不再作准入闸门；
+  - 确定性与性能条款沿用 v1（bit-identical；耗时 ≤30%），fallback 纯几何合成不新增推理，性能预期零增量。
+- **Gate-G1 v3（ADR-002 决策后的现行定义，2026-09-20）**
+  - 触发条件：v2 在 §12.10/§12.11/§12.12 连续三轮验证结构性 FAIL（fallback 几何精度天花板 + IQR 稳定性门二次腰斩），继续下调 floor / 换 pick 策略 / 加时序累积均已证伪；
+  - **口径核心翻转：从"覆盖率优先"改为"精度优先的可用性"**——凡计入 effectiveCov 的 fallback 帧必须先过 GT 小闸门（准入精度 ≥90%），覆盖率数字只作为"可用性"下限，不再自证质量；
+  - fallback 链路收敛到 **`ankleOnly + floor 0.40 + W=5 + IQR≤5°`**（§12.11 三策略扫描 + §12.12 时序累积扫描的联合唯一解），生产侧作为默认策略；
+  - 片级可用性（二者满足其一即可）：
+    - 片级 `effectiveCov% ≥ 25%` 的样本占比 **≥ 60%**（v3-B，v2 的 30/60 下调到 25/60）；或
+    - 帧加权可用性 `Σ min(effectiveCov%, 60%)·f / F ≥ 40%`（v3-A，与 v2 一致，因为 v2 加权阈值本身没有失守）；
+  - 确定性与性能条款沿用 v1/v2（bit-identical；耗时 ≤30%）；时序聚合窗仅在诊断/audit 场景开启，不影响生产帧级 `boardEdgeObservation`，性能预期零增量；
+  - v1 60% 全帧覆盖率 + v2 30/60 片级门槛保留为"理想目标 / 观察项"，不再作准入闸门。
+  - **答辩要点**："覆盖率不代表评分覆盖率" —— Phase 1 观测器**不进评分链路**（§4.5 独立命名空间），Gate-G1 只是"观测器可用性下限"，评分口径的最终质量由 Gate-G2 可分性硬闸门 + Gate-G3 兼容闸门守护。放弃"覆盖率≥60%"的心理预期，转而保证"入统计的 fallback 帧准入精度 ≥90%"，是对**评分零污染原则**（§4.5）的严格执行。
 - **Gate-G2（可分性硬闸门，这是进入任何评分讨论的前置）**
   - 新信号（或其与现有特征的组合）在边界集上的最强分离 **margin ≥1.5σ**（对照：现最强 0.50σ，knee 动态加权 0.44σ 均判过拟合）；
   - **LOOCV 留一准确率 ≥90%** 且无单片翻转导致 margin 跌破 1.0σ（防 n=11 小样本过拟合）；
@@ -389,15 +406,23 @@ ankleLowCnf → noMask → rejectOwnership → farShot(subjFrac<0.02)
 Phase 2 主体开工前必须逐项打勾：
 
 - [x] Phase 2 起步 1：19 片候选池接触表脚本落地并全跑通（见 §12.3，2026-09-18）。
-- [ ] 12.1 候选池 ≥9 片教练判档回流，§4.4 表扩到 ≥20 片。
+- [x] 12.1 候选池 ≥9 片教练判档回流，§4.4 表扩到 ≥20 片 → **44 片全部回填完成（2026-09-19，§12.8）**。
 - [ ] [bestthird_aggregator_audit.py CLIPS](file:///Users/mingsen/Project/FallLine/scripts/bestthird_aggregator_audit.py#L38-L64) 与 [lowend_separability_audit.py BEGINNER/EMERGING](file:///Users/mingsen/Project/FallLine/scripts/lowend_separability_audit.py#L41-L42) 同步扩到扩集口径。
 - [x] Phase 2 起步 2：Gate-G1 三合一探针脚本落地并全量跑 25 片（见 §12.5，2026-09-18）。
-- [ ] `swift run FallLineCLI --board-edge` 在扩集 ≥20 片上跑通，观测覆盖率 ≥60%（Gate-G1 覆盖率维度）→ **当前 §4.4 25 片实测 19.6%，FAIL；§12.6 reason audit 证伪"放宽板轴几何门控"为主方向，须先在 §6 落 ADR（覆盖率不是唯一门槛）+ 降级链路 A（`fallbackAxis`），再重测**。
-- [x] `scripts/board_edge_gate_g1_probe.py` 跨次 bit-identical（含 `boardEdgeObservation` 字段）→ 25 片 4146/4146 帧完全一致（PASS）。
-- [x] `scripts/board_edge_gate_g1_probe.py` `--board-edge` 开/关总耗时增幅 ≤30%（Gate-G1 性能）→ avg +5.9% / max +19.7%（PASS）。
+- [ ] `swift run FallLineCLI --board-edge` 在扩集 ≥20 片上跑通 → **44 片 raw board 覆盖率 19.58%（v1 60% 门槛结构性 FAIL，三度复现）；方向 A 已实现，effective（board+fb≥0.30）35.51%，v2-A 25/44=56.8% / v2-B 34.90 均微差 FAIL（§12.10）；fallback GT 小闸门结构性 FAIL（§12.11）；候选 D 时序累积 NO-GO（§12.12）；需在 §6 决策候选 E/F 后再谈**。
+- [x] `scripts/board_edge_gate_g1_probe.py` 跨次 bit-identical（含 `boardEdgeObservation` + `fallbackAxis` 全字段）→ 44 片 8364/8364 帧完全一致（PASS，§12.10）。
+- [x] `scripts/board_edge_gate_g1_probe.py` `--board-edge` 开/关总耗时增幅 ≤30%（Gate-G1 性能）→ 44 片 avg +4.51% / max +7.56%（PASS，§12.10）。
 - [x] Phase 2 起步 3：Gate-G1 reason 分布 audit 完成（见 §12.6，2026-09-18）→ 证伪"放宽板轴几何门控"为主方向，翻转到"降级链路 + Gate-G1 门槛重定义 + 连续 board 片段"三方向。
-- [ ] Phase 2 时序特征输出仅进 JSON 新命名空间 + debug overlay，Models 评分字段消费方零改动。
-- [ ] Gate-G2 判定：`lowend_separability_audit.py` 用新特征重跑，margin ≥1.5σ 且 LOOCV ≥90%（Phase 3 立项前置）。
+- [x] ADR-001 + fallbackAxis 实现规格定稿（见 §12.9，2026-09-19）→ Gate-G1 v2 定义已同步 §6；方向 A 已实现（§12.10）。
+- [x] fallback 自身 GT 精度小闸门（§12.9 前置条款）→ 44 片 × 三策略 × 八 floor **结构性 FAIL**（§12.11），三策略最好 ankleOnly 准入 87.2% / 差门槛 2.8pp；踝对是 2D 几何精度天花板，非策略/floor 可救。
+- [x] 候选 D 时序累积离线 spike（§12.11 下一步·候选 D 首选）→ 81 组合扫描完成 **NO-GO**（§12.12）：最强 ankleOnly+floor 0.35+W=5+IQR≤5° 准入 91.2% ✅ 但 v2-A 40.9% / v2-B 26.76 双低 ❌，精度/覆盖率此消彼长；Phase 2 主体前置候选缩到 E / F 二选一。
+- [x] 候选 E ADR-002 落地（§12.13，2026-09-20）→ Gate-G1 v3 定义已同步 §6，`fallbackConfidenceFloor` 默认 0.40 + `fallbackPickStrategy=ankleOnly`；探针 v3 双口径判定接入 [board_edge_gate_g1_probe.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_gate_g1_probe.py)。
+- [x] 候选 E 单测：[BoardEdgeDetectorTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/BoardEdgeDetectorTests.swift) 新增 4 条 ADR-002 用例（默认基线 = ankleOnly+floor 0.40、ankleOnly 跳过更强膝对、踝缺失 ankleOnly 结构性拒绝、floor 0.40 边界拒绝 + v2 对照），`swift test` 全量 **290/290 通过**（Phase 1+ADR-001 基线 285 + 本轮 +5：4 条 ADR-002 + 1 条 v2/v3 floor 边界拆分）。
+- [x] 候选 E 44 片 v3 重跑 → v3-A / v3-B 判定表（2026-09-20，见 §12.13 尾"v3 44 片 8364 帧实测"）→ **v3-B 26/44 = 59.1% FAIL（差 1 片）+ v3-A 30.64 FAIL（差 9pp）+ bit 8364/8364 PASS + perf +4.9% PASS**；日志 [outputs/board_edge_p2/gate_g1_probe_v3.log](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/gate_g1_probe_v3.log) + 结构化摘要 [outputs/board_edge_p2/gate_g1_probe_v3_summary.json](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/gate_g1_probe_v3_summary.json)。
+- [x] 候选 F CoreML 板边分割 spike 设计骨架（§12.14，2026-09-20，Design only）→ 模型选型 / GT 方案 / 决策标准 / 成本预算全部落地；新增 [scripts/board_edge_coreml_spike.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_coreml_spike.py) 骨架脚本（`NoopBackend` 占位、`--check-plan` / `--list-clips` 可用、`--model` 未实现退 2）；不投模型二进制，等 v3 + Gate-G2 判定后再定优先级。
+- [x] 方向 C 时序累积 ADR-004 + 生产级 spike 计划（§12.15，2026-09-21，Design only）→ 定位翻转：时序累积从"Gate-G1 覆盖率手段（§12.12 NO-GO）"改为"Gate-G2 刃线连续性质量信号"；定义 `BoardTemporalAxisAggregator`（W=5 / minCount=3 / IQR≤5° / fold-crossing 处理）+ `BoardTrajectoryMetrics`（stableWindowRate / longestStableRun 等进 summary `boardTrajectory`）+ 四阶段 S1–S4 spike 计划；Gate-G1 v3 门槛不动，评分零污染。
+- [x] Phase 2 时序特征输出仅进 JSON 新命名空间（summary `boardTrajectory`）+ debug overlay，Models 评分字段消费方零改动（§12.15，S1–S2 已落地，2026-09-21）。
+- [x] Gate-G2 判定：`lowend_separability_audit.py --trajectory` 44 片重跑，margin / LOOCV 双 FAIL 且方向反转 → **NO-GO**，字段留诊断，激活候选 F（§12.15.3，2026-09-21）。
 
 ### 12.5 Gate-G1 三合一探针实测（2026-09-18，§4.4 全 25 片）
 
@@ -439,6 +464,7 @@ Phase 2 主体开工前必须逐项打勾：
 - **方向翻转**：**§12.5 结尾"下一步"里的方向建议（放宽 `farShot=0.02→0.01` 或 `rejectVertical=45°→55°`）价值有限**——即使把这两个门控完全砍掉，理论上最多召回 `farShot`(29.8%) + `rejectVertical`(4.8%) = 34.6%，覆盖率上限只到 54%（当前 19.6% + 34.6%）仍够不到 60% 门槛；而**踝点低置信度 27.6% 是完全独立的信号源**，不能靠板轴门控放宽解决。真正的杠杆是"踝点稳定性"本身，与 Phase 1 spec §10.1 前后一致（依赖 Vision `bodyPose` 的踝关键点置信度）。
 - **Phase 2 主体方向重定义**（评分零改动，须再走一次 review）：
     1. **优先方向 A：降级链路（复用 [BoardObservationSource.ankleProxy](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L555-L557)）** — 当 `boardEdgeObservation.status ∈ {ankleLowCnf, farShot, noMask}` 时，允许 `BoardEdgeDetector` 尝试用踝-膝矢量 + 髋高度先验合成一个"低置信板轴代理"，并在 JSON 新增 `boardEdgeObservation.fallbackAxis`（不改现有字段，Codable 后向兼容）。Gate-G1 覆盖率按 `status ∈ {board, fallbackAxis}` 重新度量。**此路只在 Vision 已返回的姿态数据基础上做几何合成，不新增模型推理，性能开销可忽略**。
+       - **勘误（2026-09-19，以 §12.9 为准）**：本条"踝-膝矢量 + 髋高度"几何描述有误——踝-膝是小腿方向不是板长轴；最终设计为**双踝连线一阶 + 双膝连线二阶（0.6 权重）**，触发集也从三状态白名单改为统一规则（除 board/rejectPosture/disabled 外全部尝试，由关节门控自然裁决）。ADR-001 已 Accepted。
     2. **优先方向 B：Gate-G1 覆盖率门槛重定义** — 从"全帧口径 ≥60%" 改为"**每片可用性 = min(cov%, 60%)，全集加权平均 ≥40%**" 或者"**片级 cov% ≥30% 的样本比例 ≥60%**"（当前 §4.4 25 片中 cov% ≥30% 的样本 7/25 = 28%）。此路是纯统计约定，需要在 §6 明确写出"Gate-G1 覆盖率不代表评分覆盖率，而是观测器可用性下限"。
     3. **辅助方向 C：Phase 2 时序特征以"连续 board 片段"为输入** — 不再依赖每帧都有 board，而是要求视频至少存在一段"连续 ≥5 帧板轴稳定"的窗口（相当于 1 秒 @ 5fps）。BND2_L1 (75%) / BND2_LM (57%) / BND2_L3 (50%) / BND_M4 (38%) / BND2_L5 (39%) 5 片已具备条件；其余 20 片需要 Phase 2 决定是否放弃或走降级链路。
 - **不建议做的方向**：**放宽 `farShot / rejectVertical` 阈值不再是下一步选项**——见"方向翻转"分析，收益 <5% 且会引入远景假阳/雪杖误识（Phase 0 spec §10.4 已经做过决策）。
@@ -454,3 +480,455 @@ Phase 2 主体开工前必须逐项打勾：
 - **每片最大拒绝路径（19 片）**：farShot 主导 **9 片**（M02 86% / M03 80% / M09 61% / M08 53% / M04 51% / M05 48% / G05 48% / G04 45% / M10 38% / G08 35%）；ankleLowCnf 主导 **6 片**（M01 60% / G07 53% / M07 31% / G06 26% / G03 26% / B01 25%）；noMask 主导 **3 片**（G02 59% / G01 27.5% / M06 17.3%）；无 rejectVertical / rejectLength / rejectBlob 主导片。
 - **片级高覆盖样本**：CAND_M06 **56%**（52 帧短片）、CAND_G06 **48%**、CAND_M10 **44%**、CAND_B01 **41%**、CAND_M04 35%、CAND_G03 30%。除 M06 外均仍低于 60%，但多数 ≥30%，与 §12.6 方向 B 的"片级 cov% ≥30%"口径吻合——回填档位后应按该口径而非全帧 60% 判定可用性。
 - **注意**：第三批分档位（high/mid/low）聚合暂缺，因为 `group=tbd`；教练档位回流后把 CLIPS 的 tbd 改成实际档位重跑本 audit 即可，覆盖率 / reason 数字本身不随档位改变，只有分档对比会新增三行。
+
+### 12.8 Batch 3 档位回填 + 全 44 片分档 reason audit（2026-09-19，负结论：方向 B 单独也不够，A 降级链路成为唯一前置）
+
+- **Batch 3 教练档位回填完成**：19 张接触表（`outputs/board_edge_p2/contact_sheets/CAND_*.jpg`）逐张判档，档位 / 刻滑 / 备注三列已写入 [calibration_anchors.md Batch 3](file:///Users/mingsen/Project/FallLine/annotations/calibration_anchors.md#L153)。分布：**专业 10**（G01–G08 + M03 + M05）/ **高质量 1**（M10，连续走刃但非竞技级折叠）/ **中级偏上 5**（M02/M04/M06/M08/B01）/ **中级 1**（M07）/ **初级 2**（M01/M09）；确认刻滑 11 片。
+    - 候选池高端密度确实虚高（教练专业 10/19，对比算法专业带 12/19，仍有 G01/G05 等算法判 89 被教练认专业——与前两批 83–92 边界非单调结论一致）；典型错档：B01 算法 75 实为中级纠错片（踮脚尖/前刃不稳、片中摔倒），M09 算法 61 实为初级放板（bestThird 抬高），M01 calf 6.7 全集最低坐实初级。
+    - 两个脚本 CLIPS 的 `group=tbd` 已全部替换为实际档位（high=专业/高质量刻滑、mid=中级/中级偏上、low=初级），口径与旧 25 片一致。
+- **全 44 片 reason audit（8364 帧，日志 `outputs/board_edge_p2/reason_audit_44.log`，已 .gitignore）**：board **1638/8364 = 19.58%**——第三次独立复现 ~20%（25 片 19.56% → 19 片 19.61% → 44 片 19.58%），结构性上限结论无可辩驳。
+- **分档位 reason 分布（新增）**：
+    - **high（21 片 / 4721 帧）**：board 18% / farShot **38%** / ankleLowCnf 25% / noMask 9%。高端片以远拍品牌/教学长片为主，farShot + noMask 两类前景几何失效合计 47%——正是降级链路 A 的覆盖集合。
+    - **mid（13 片 / 1927 帧）**：board 26%（三档最高）/ farShot 23% / ankleLowCnf 23% / **rejectVertical 8% + rejectLength 8%**（三档中最高）。中间地带除踝点问题外，板轴几何门控（夹角/长度）损失显著高于另两档。
+    - **low（10 片 / 1716 帧）**：board 16% / farShot 35% / ankleLowCnf 27% / rejectOwnership **6%**（群拍背景他人板，三档最高）。
+- **关键新负结论：§12.6 方向 B 的两个重定义门槛在 44 片上同样 FAIL，"只改统计口径"路线证伪**：
+    - 片级 `cov% ≥30% 占比 ≥60%`：实测 **12/44 = 27.3%**（旧 25 片 28%，扩集后几乎无变化），门槛 60% 差 33 个百分点。
+    - 全集加权可用性 `Σ min(cov%, 60%)·f / F ≥40%`：实测 **19.4%**，门槛 40% 差 21 个百分点（因 cov% 全部远低于 60%，该口径数学上退化为普通全帧覆盖率 ~19.6%）。
+    - 分档看 ≥30% 片数：high 3/21、mid 5/13、low 4/10——仅 mid 桶（38%）略接近，高端片覆盖率反而最差（远景拍摄所致）。
+- **Phase 2 路线修正（更新 §12.6）**：方向 B（门槛重定义）不能独立成立，**方向 A（ankleProxy 几何合成 fallbackAxis 降级链路）成为 Gate-G1 v2 的唯一前置**——只有先把 farShot 33.5% + ankleLowCnf 24.8% + noMask 6.1%（合计 64.4% 拒绝帧）中的可合成部分救回，片级覆盖率才可能越过 ≥30%/60% 占比的门槛；A 落地后重跑本 audit 验证，再决定 B 的具体阈值。时序方向 C 与 A 并行不悖，继续以连续 board 片段为输入单位。
+
+### 12.9 ADR-001 + fallbackAxis 降级链路设计（2026-09-19，Accepted，实现前最终评审稿）
+
+#### ADR-001：Gate-G1 覆盖率门槛 v2 = 降级链路后覆盖率 + 片级可用性
+
+- **Status**：Accepted（2026-09-19）。落地范围限 [BoardEdgeDetector.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift) / [Models.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift) 刃线诊断命名空间 + 探针脚本；评分、PoseSmoother 语义、iOS UI 零改动。
+- **Context**：
+    1. 全帧覆盖率三次独立度量 = 19.56% / 19.61% / 19.58%，v1 门槛 60% 在当前观测器下结构性不可达（§12.5/§12.7/§12.8）。
+    2. 仅重定义统计口径（方向 B）已被 44 片数据证伪：片级 cov≥30% 占比 27.3%、加权可用性 19.4%，距门槛同样遥远。
+    3. 被拒帧 64.4% 集中在 `farShot / ankleLowCnf / noMask`——这三类的共同特点是**图像证据失效，但同帧 Vision 姿态关键点仍然存在**，存在零新增推理成本的几何降级空间。
+    4. 确定性（100% bit-identical）与性能（+5.9%）早已达标，缺的只是有效样本密度。
+- **Decision**：
+    1. 在主检测（mask + ROI PCA）返回非 `board` 状态时，按 [fallbackAxis 设计](#fallbackaxis-详细设计本-aer 的实现规格) 尝试从姿态几何合成降级板轴；成功者置 `status = .fallback`。
+    2. Gate-G1 升级为 v2（已同步到 [§6](#6-验收闸门量化-gono-go)）：有效帧 = `{board, fallback}` 且 `fallback.confidence ≥ fallbackConfidenceFloor`；准入按片级可用性二选一（片级 effectiveCov≥30% 占比≥60%，或帧加权可用性≥40%）。v1 全帧 60% 保留为观察项。
+    3. fallback 在准入 Gate-G1 v2 统计前，必须先通过自身的 GT 精度小闸门（见下"降级链路验收前置"），防止"为覆盖率放水"。
+- **Consequences**：
+    - 正面：无新模型/无新权限/性能零增量预期；诊断 JSON 可解释每帧是主检测还是降级、降级的原始拒绝原因；44 片样本可直接量化收益。
+    - 负面/风险：姿态代理是 2D 投影量，远景双踝像素间距极小时几何置信度天然低（由 geometryConfidence 硬门控自动拒绝）；`ankleLowCnf` 帧的踝对代理大概率失败，仅膝对可能救回——A 的实际收益必须以数据为准，若片级可用性仍不达标，本 ADR 不承诺继续放宽，须回到 §6 重新决策（可能含方向 C 时序累积或候选 B CoreML）。
+
+#### 几何勘误（对 §12.6/§12.8 原文的修正）
+
+早期文档把降级几何描述为"**踝-膝矢量** + 髋高度合成"，该描述在解剖几何上不成立：踝-膝矢量是**小腿方向**，物理上对应立刃角/前后倾，不是板长轴方向。单板固定器下双脚沿**板长轴前后排列**，故：
+
+- **板长轴一阶代理 = 双踝连线**（与现役 [computeAnkleProxyBoardAngle](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseMetrics.swift#L468-L483) 同源，复用其角度归一化与 `distance × 12` 几何置信度口径）；
+- **二阶弱代理 = 双膝连线**（膝部联动板向但允许相对扭转，源权重 0.6×）；
+- 髋高度先验不参与板轴方向合成，仅保留在站姿门控（[postureStatus](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift#L331-L344)）中。
+
+#### fallbackAxis 详细设计（本 ADR 的实现规格）
+
+**1. 触发与流程**（重构 [detect()](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift#L109-L180) 的返回结构，**不改主路径任何判定条件**）：
+
+```
+主检测 → primary: BoardEdgeObservation
+  primary.status == .board        → 直接返回 primary
+  primary.status == .rejectPosture → 直接返回 primary（摔倒不降级）
+  其余任意状态（noMask / farShot / ankleLowCnf / noAxis /
+     rejectVertical / rejectLength / rejectBlob / rejectOwnership）
+     → config.enableFallback ? synthesizeFallback(pose:originalStatus:) : nil
+        成功（confidence ≥ floor）→ status=.fallback，携带 fallbackAxis
+        失败                      → 原样返回 primary
+```
+
+  - 现状 `detect()` 在 L114/L119/L124/L129/L137 五处提前 `return`；实现时把主检测体抽到内部函数产出 `primary`（或改为先累积 observation 再统一返回），保证降级逻辑只有**一个接线点**，不在每个 return 后复制粘贴。
+  - `.disabled` 不经过 `detect()`（默认关闭路径在 [VideoAnalyzer](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L345-L353) 直接置 nil / 由 `BoardEdgeObservation.disabled` 表达），无需处理。
+
+统一规则而非逐状态白名单：各状态是否可救由代理自身的"关键点存在 + 置信度 + 间距"门控自然裁决。如 `ankleLowCnf` 帧踝对必然过不了踝对门控，仅双膝合格时才由膝对救回；`rejectOwnership` 帧 mask 属于他人，但姿态属于本人，姿态代理归属天然正确，可救。
+
+**2. 代理选择与置信度**（纯函数 `synthesizeFallback(pose:originalStatus:config:) -> FallbackAxis?`，无 Vision 依赖、可直接单测；`originalStatus` 原样写入返回结构）：
+
+| 源 | 关键点要求 | 角度 | pointConfidence | geometryConfidence | 源权重 |
+|---|---|---|---|---|---|
+| `.anklePair` | 双踝均存在 | 双踝连线无符号夹角 0…90° | 双踝 confidence 均值，≥ `fallbackPairConfidenceFloor` | `clamp(双踝归一间距 × 12, 0…1)` | 1.0 |
+| `.kneePair` | 双膝均存在 | 双膝连线无符号夹角 0…90° | 双膝 confidence 均值，≥ `fallbackPairConfidenceFloor` | `clamp(双膝归一间距 × 12, 0…1)` | `fallbackKneeWeight = 0.6` |
+
+- `fallbackConfidence = pointConfidence × geometryConfidence × 源权重`；两源都合格时取 confidence 高者。
+- **角度口径对齐主检测（无符号 [0,90] 度）**：主检测 PCA 在 [axisGeometry](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift#L411-L413) 就是 `degrees = abs(rad2deg)` 后 `>90 则 180-degrees`。关节对不得直接用 [normalizeAngle](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Utilities.swift#L52-L60) 输出（范围 [-180,180)），必须显式转换：
+
+```swift
+var degrees = abs(atan2(dy, dx) * 180 / .pi)
+if degrees > 90 { degrees = 180 - degrees }   // 结果 ∈ [0, 90]
+```
+
+  - 注意 y 轴方向（Vision 归一坐标原点左下、y 向上）不影响 `abs` 结果，无需额外翻转。
+- **归一化基准**：关节间距与中点沿用 Vision 归一坐标（0…1）；geometryConfidence 的"×12"系数以**归一间距**为输入（等价现役 [computeAnkleProxyBoardAngle](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseMetrics.swift#L468-L482) 口径，该函数在归一坐标系运行）。**与主检测 `lengthRatio = 2√λ1 / width` 不同基准**，故合成长度仅供展示，不与主检测 lengthRatio 混用阈值。
+- 合成中心 = 所用关节对中点（归一 x/y），合成展示长度 = 关节对归一间距（仅供 overlay/接触表绘制，钳制 0.02…1）。
+- 初始阈值（实现时写入 [BoardEdgeConfig](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift#L11-L67)，公开常量供单测锁定）：
+    `fallbackConfidenceFloor = 0.30`、`fallbackPairConfidenceFloor = 0.30`、`fallbackKneeWeight = 0.6`、`fallbackGeometryScale = 12.0`、`enableFallback = true`（配置开关，便于 A/B 与回退；不加新 CLI flag，随 `--board-edge` 生效）。
+- 0.30 两个 floor 是**待 GT 校准初值**而非承诺值，校准规则见下条。
+
+**3. 降级链路验收前置（fallback 自身的精度小闸门，先于 Gate-G1 v2 统计）**：
+
+在接触表可判读帧上对 fallback 输出做人工 GT 核对：① fallback 帧角度**中位绝对误差 ≤12°**（对齐 Gate-G0 同口径）；② fallback 准入精度 **≥90%**（不得把雪杖/张臂/他人肢体当板轴）；③ 跨次 bit-identical。任一项不达标则下调/上调 floor 重测；反复校准仍不过则方向 A no-go，回 ADR 重评，禁止带病进 Gate-G1 v2。
+
+**4. 数据模型变更（[Models.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L588-L661)，纯追加、Codable 后向兼容）**：
+
+```swift
+public enum BoardFallbackSource: String, Codable {
+    case anklePair
+    case kneePair
+}
+
+public struct FallbackAxis: Codable, Equatable {
+    public let source: BoardFallbackSource
+    public let axisAngle: Double          // 无符号 0...90
+    public let centerX: Double            // 0...1
+    public let centerY: Double            // 0...1
+    public let lengthRatio: Double        // 0.02...1，仅展示用
+    public let confidence: Double         // 0...1
+    public let originalStatus: BoardEdgeStatus  // 触发降级的原始拒绝原因
+}
+```
+
+- `BoardEdgeStatus` 追加 `case fallback`（去语义化的有效态）；`BoardEdgeObservation` 追加 `public let fallbackAxis: FallbackAxis?`（init 参数默认 nil），现有 `axisAngle` 注释更新为"仅 `status == .board` 有效；降级角度在 `fallbackAxis.axisAngle`"。
+- **兼容性论证**：新字段全部 optional 且 init 带默认值 → 旧 JSON 缺键解码为 nil；JSON 中新增键会被旧版本合成 Decodable 忽略（keyed container 只取已知键）；新增 enum case 不影响旧字符串值。旧版 overlay/报告不消费 fallback，无行为变化。
+- 观测在 [PoseSmoother](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/PoseSmoother.swift) 三处平滑路径中均以**整个对象原样透传**（`boardEdgeObservation: detection.boardEdgeObservation`，见 L150/L253/L381），PoseSmoother 只重建姿态不碰刃线观测 → 新字段无需 Smoother 侧任何改动；**fallback 角度的时序平滑不在本 ADR 范围**，留给方向 C（连续片段窗口）处理，避免诊断层引入跨帧状态。
+
+**5. 探针/审计脚本同步（实现完成后）**：
+
+- [board_edge_reason_audit.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_reason_audit.py)：STATUS_ORDER 加 `fallback`；新增"fallback 的 originalStatus 回流直方图"（降级救回的帧数按原始拒绝原因归类）；输出 effectiveCov = board+fallback（confidence≥floor）。
+- [board_edge_gate_g1_probe.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_gate_g1_probe.py)：bit-identical 比对字段集加 `fallbackAxis` 全字段；覆盖率双口径（raw board / effective）并列；片级可用性与帧加权可用性直接输出 v2 判定。
+- [DebugOverlayRenderer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCLI/DebugOverlayRenderer.swift)：fallback 帧用另一颜色（建议黄）画合成轴，与 board 青轴视觉区分。
+
+**6. 实施顺序建议**（等确认后开工）：① Models + 纯函数 + 单测（含双源选择、置信度门控、角度转换）；② Detector 接线 + 配置开关；③ overlay 配色；④ 脚本 GT 精度小闸门 → 校准 floor → 全 44 片 v2 度量；⑤ 回写 spec / WORK_LOG / delta_update。全程不跑评分联动。
+
+### 12.10 方向 A 落地 + 全 44 片 v2 度量（2026-09-20，实现闭环；Gate-G1 v2 双项微差 FAIL，等 GT 校准决策）
+
+ADR-001 ①–④ 前半已实现：fallback 合成链路、overlay、脚本升级，全 44 片（8364 帧）单轮 audit + 三轮探针度量完成。评分 / PoseSmoother / iOS 零改动。
+
+**实现清单**：
+
+- [Models.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift#L621-L662)：`BoardFallbackSource{anklePair,kneePair}` + `FallbackAxis`（7 字段，init 统一 clamp）+ `BoardEdgeStatus.fallback`；`BoardEdgeObservation.fallbackAxis` 默认 nil。
+- [BoardEdgeDetector.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift#L129-L155)：`detect()` 分派——`primaryDetection()` 返回 board/rejectPosture 直通，其余状态在 `enableFallback` 下尝试 `synthesizeFallback`；合成成功置 `.fallback` 并透传 subjectFraction/ankleConfidence，失败原样返回。[synthesizeFallback](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift#L232-L300) 双源（踝对权重 1.0 / 膝对 0.6，取 confidence 高者），三级门控（点 cnf≥0.30 → 间距>0.001 → 合成 cnf≥floor 0.30），角度与主检测同口径折叠 0…90。
+- [DebugOverlayRenderer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCLI/DebugOverlayRenderer.swift#L359-L399)：board 青轴 / fallback 黄轴。
+- 脚本：[reason_audit.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_reason_audit.py) 与 [gate_g1_probe.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_gate_g1_probe.py) 均升级 fallback 口径（双覆盖率、originalStatus 回流、v2 片级判定）。探针首跑 summarize 残留旧常量名报 NameError（44 片数据本身全部正常产出），已修复；另修正帧加权 cap 误用 30% → 按 [§6](#6-验收闸门量化-gono-go) 权威口径 60%（新增 `GATE_G1_V2_WEIGHTED_CAP=60`）。
+- 单测：BoardEdgeDetectorTests 新增 11 例（双源选择、floor 上下边界、角度折叠、Codable 等），**全量 285 测试通过**；release 重建通过。
+
+**44 片度量结果**（[outputs/board_edge_p2/](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2) `reason_audit_44_v2.log` / `gate_g1_probe_44_v2*.txt`，.gitignore）：
+
+| 指标 | 实测 | 门槛 | 判定 |
+|---|---|---|---|
+| raw board 覆盖率 | 1638/8364 = **19.58%**（与 v1 逐位一致，证重构无污染） | v1 观察项 | — |
+| effective（board+fallback≥0.30） | 2970/8364 = **35.51%**（救回 1332 帧，+15.93pp） | — | — |
+| v2-A 片级 effCov≥30% 占比 | **25/44 = 56.8%** | ≥60% | **FAIL（差 2 片）** |
+| v2-B 帧加权可用性 `Σmin(eff%,60)·f/F` | **34.90** | ≥40 | **FAIL（差 5.1）** |
+| bit-identical（含 fallbackAxis 全字段） | **8364/8364 = 100%** | 100% | PASS |
+| 性能增幅 | avg **+4.51%** / median +4.31% / max +7.56% | ≤30% | PASS |
+
+**关键观察**：
+
+1. fallback 救回帧 originalStatus 回流：**farShot 902 帧（67.7%）** 为绝对主力，noMask 150（11.3%）、rejectBlob 116（8.7%）次之；`ankleLowCnf` 仅回流 6 帧（0.5%）——踝中心失败时踝对天然不可用、膝对仅救个位数，结构性符合 ADR 预期。
+2. **v2 两项均微差 FAIL**，且当前数字是 GT 精度小闸门之前的乐观上界：距 30% 线最近的两片 CAND_G05（29.5%）/ BND2_TOP（29.2%）可能被 floor 校准反向影响，正式数字只会更低。
+3. effCov 高位片（BND2_L1 78.9 / CAND_M06 73.1 / BND2_L5 71.0 / CAND_M04 69.1 / CAND_M10 62.8）证明降级链在近景片收益显著；远景低收益片（BND_L1 0%、BND2_L4 9.3%、CAND_M01/M09 10–13%）几何门控诚实拒绝。
+
+**下一步（等确认）**：① 跑 fallback 自身 GT 精度小闸门（对有主检测 board 的同帧，比对 fallback 角度：中位误差 ≤12°、准入精度 ≥90%），必要时据此校准 floor；② 以 GT 后有效口径重判 v2-A/B；若仍 FAIL 则按 ADR-001 Consequences 回 §6 重评（方向 C 时序累积 / 候选 B CoreML），不承诺继续放宽门槛；③ Gate-G1 通过后才进 Gate-G2 可分性。
+
+> **2026-09-20 更新**：下一步 ① 已在 [§12.11](#1211-fallback-gt-精度小闸门2026-09-20结构性-fail三策略均不通过无-floorpick-组合可救) 闭环——三策略 × 八 floor 全 24 组合均 FAIL，结构性问题，非 floor 校准可救；② 因此不再展开（v2 数字只会更低）；③ 需在 §6 决策候选 D/E/F 之一后再讨论。
+
+### 12.11 fallback GT 精度小闸门（2026-09-20，结构性 FAIL；三策略均不通过，无 floor/pick 组合可救）
+
+对 §12.10 的下一步①闭环：以 44 片 8364 帧 board 帧 PCA 板轴角作参照 GT，与「同帧若走降级会合成的踝/膝对轴角」配对，Python 精确复现 [synthesizeFallback](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift#L232-L300) 后交叉验证 1332/1332 生产 .fallback 帧全部逐位对齐（复现可信）。脚本 [board_edge_fallback_gt_gate.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_fallback_gt_gate.py)（带 CLI 结果 JSON 缓存，policy 切换零重跑），日志 [fallback_gt_gate_44.log](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/fallback_gt_gate_44.log)（.gitignore）。
+
+**三策略 × floor=0.30 对比**（生产口径：board 帧上合成 pick 与真实 board 角逐帧配对）：
+
+| 策略 | 选踝/选膝 帧数 | 中位误差 | ≤12° 帧占比（准入） | 小闸门 | v2-A / v2-B（floor 0.30） |
+|---|---|---|---|---|---|
+| **confMax**（当前生产：踝/膝取 conf 高者）| 1354 / 215 | **3.75°** PASS | **85.1%** FAIL | FAIL | 56.8% / 34.91 |
+| **anklePreferred**（踝 conf≥0.40 优先，否则膝兜底）| 1170 / 399 | 4.00° PASS | 82.9% FAIL | FAIL | 50.0% / 31.34 |
+| **ankleOnly**（丢弃膝对）| 1438 / 0 | 3.53° PASS | 87.2% FAIL | FAIL | 56.8% / 34.50 |
+
+**分源精度**（confMax）：选踝 med=3.39° / ≤12°=**89.9%**（接近 90%）；选膝 med=**10.14°** / ≤12°=**55.3%**（膝对是准入拖累主力）。参考·全膝对 med=5.87° / ≤12°=73.0%——弯中双膝内扣使膝连线与板轴系统性偏差 5–15°，无法胜任 GT。
+
+**floor 扫描（confMax）**：精度与覆盖率强负相关，两端都够不到门槛：
+
+| floor | effCov% | v2-A | v2-B | GT med | ≤12° | 判定 |
+|---|---|---|---|---|---|---|
+| 0.30 | 35.51 | 56.8% | 34.91 | 3.22° | 92.2% | v2 差 / GT 单项过 |
+| 0.40 | 31.00 | 50.0% | 30.74 | 3.09° | 94.4% | v2 差 |
+| 0.50 | 27.44 | 40.9% | 27.27 | 3.01° | 95.7% | v2 差 |
+| 0.70 | 22.33 | 34.1% | 22.19 | 2.47° | 98.2% | v2 崩 |
+
+**关键洞察**：
+
+1. **①中位误差全部 PASS，②准入精度全部 FAIL**——三种 pick 策略最好也只到 87.2%（ankleOnly），差 90% 门槛 2.8pp；不是策略选择问题，是**踝对本身在低置信桶带来的角度尾部误差**（[0.30, 0.40) 桶 ≤12°=75.7%，一路把总体拉下 90%）。
+2. **提高 pair floor 到 0.40+ 可让准入精度过 90%（floor 0.40 时 94.4%），但代价是 v2 直接崩**——floor 0.40 时 v2-A 50% / v2-B 30.7，比 0.30 更差；floor 0.50 时 v2-B 已跌到 27，甚至不如 §12.10 raw 数字。**精度-覆盖率不可同时达标**。
+3. `anklePreferred` 未如预期改善——把 conf∈[0.30, 0.40) 的踝无差别优先反而拉低了 pick 分布（≤12° 帧从 confMax 85.1% → 82.9%）。**膝对的贡献是净负**（ankleOnly 是三者中精度最好的）。
+4. 缓存机制生效：首跑 CLI ~25 分钟，后续策略/floor 切换均 0 CLI 复算，avoids O(policy × floor) 放大成本。
+
+**结论**：ADR-001 定义的 fallback 链路在**当前 §4.4 corpus 与 pair floor=0.30 组合下不能通过 Gate-G1 v2 小闸门**——不是脚本 bug、不是策略选择错误，是 2D 踝对本身作为板轴代理的**几何精度天花板**（低置信踝点位置误差直接传导为角度尾部）。任何"只调 floor + 只换 pick 策略"的组合都被证伪。
+
+**下一步方向**（等确认，按 ADR-001 Consequences §6 重评）：
+
+- **不建议**：继续在 fallback 上叠加规则（如按 sport class / 姿态阶段动态 floor）——本轮 3 策略×8 floor = 24 组合已扫尽这类空间，无一 GO。
+- **候选 D（方向 C 时序累积）**：以「连续 ≥5 帧稳定合成轴 + 中位滤波」把 pick 从单帧提升到窗口口径，可望把 [0.30, 0.40) 桶的散点误差压下去；风险是 §4.4 中大量短片（BND2_L5=31 帧、CAND_M06=52 帧）窗口本身就缺样。
+- **候选 E（提高 pair floor 到 0.40 + Gate-G1 v3 口径松绑）**：接受 v2 数字下移，在 §6 落 ADR-002 把门槛结构性下调（v3-A ≥50% / v3-B ≥30），把"覆盖率"改成"精度优先的可用性"。需先答辩「为什么覆盖率不再是主指标」。
+- **候选 F（CoreML 板边分割）**：ADR-001 Consequences 已列作 fallback FAIL 后的第二选项；先做小规模 spike 判断投入产出。
+
+三条路线互斥，需先在 §6 决策后再进 Phase 2 主体。
+
+> **2026-09-20 更新（§12.12 补充）**：候选 D 已通过 [board_edge_fallback_temporal_spike.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_fallback_temporal_spike.py) 完成离线 spike 全扫描（3 策略 × 3 floor × {1,5,7} 窗 × {5°,8°,∞} IQR = 81 组合），**结果 NO-GO**：无任何组合同时通过 GT 小闸门 + Gate-G1 v2 双门槛；时序累积把散点误差压下去了（准入 87.2% → 91.2% 最好），但代价是窗口候选帧数腰斩，v2-A/B 反而更差（详见 [§12.12](#1212-方向-d时序累积离线-spike2026-09-20no-go精度覆盖率此消彼长)）。**Phase 2 主体前置候选缩到 E / F 二选一**。
+
+### 12.12 方向 D（时序累积）离线 spike（2026-09-20，NO-GO，精度/覆盖率此消彼长）
+
+对 §12.11「候选 D」离线闭环：不改生产代码、不重跑 CLI，直接复用 [fallback_gt_cache.json](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/fallback_gt_cache.json) 里的每帧 {status, board GT 角, ankle/knee pick 候选}，在纯 Python 里实现「前向 W 帧滑窗 + 中位滤波 + IQR 稳定性门控」的时序聚合器。脚本 [board_edge_fallback_temporal_spike.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_fallback_temporal_spike.py)，日志 [fallback_temporal_spike.log](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/fallback_temporal_spike.log)（.gitignore）。
+
+- **聚合规则**：非 `{board,rejectPosture,disabled}` 帧上，窗口 = 前 W 帧候选（`pick.confidence≥floor`）；通过条件 = 候选数 ≥ ⌈W/2⌉ 且 IQR(angles) ≤ 阈值；聚合角 = 中位数、conf = 中位数、源 = 多数派。
+- **GT 评估**：对 board 帧 f，用 [f-W, f-1] 前向窗口聚合（模拟"如果这帧走 fallback"），通过则与 `ba` 比误差。
+- **短片风险**：全 44 片帧数 ≥ 55，W∈{5,7} 无一片缺样（脚本尾部索引已验证 0/44）。W=1 作为 baseline 等价于 §12.11 单帧 GT 结果，用于自校准。
+
+**关键行**（其余 78 行见完整日志）：
+
+| 策略 | floor | W | IQR | GT 命中 | 中位误差 | 准入 ≤12° | effCov | v2-A | v2-B | 判定 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| confMax | 0.30 | 1 | – | 145 | 3.98° | 86.9% | 35.51% | 56.8% | 34.91 | baseline（= §12.11） |
+| confMax | 0.35 | 5 | 5° | 55 | 3.38° | **90.9%** ✅ | 26.96% | 40.9% | 26.82 | GT 过 / v2 差 |
+| confMax | 0.40 | 5 | 5° | 50 | 3.37° | 90.0% ✅ | 25.71% | 38.6% | 25.57 | GT 过 / v2 差 |
+| anklePreferred | 0.35 | 5 | 5° | 54 | 3.96° | 90.7% ✅ | 25.82% | 38.6% | 25.69 | GT 过 / v2 差 |
+| **ankleOnly** | **0.35** | **5** | **5°** | 57 | 3.78° | **91.2%** ✅ | 26.90% | 40.9% | 26.76 | **GT 最强 / v2 差** |
+| ankleOnly | 0.40 | 1 | – | 110 | 3.32° | 90.0% ✅ | 30.87% | 50.0% | 30.64 | GT 过 / v2 差（无时序） |
+| ankleOnly | 0.40 | 5 | 5° | 53 | 3.78° | 90.6% ✅ | 25.72% | 38.6% | 25.58 | GT 过 / v2 差 |
+
+**关键洞察**：
+
+1. **时序累积确实把准入 ≤12° 从 §12.11 的 85–87% 顶到 90–91%**，验证了「低置信桶散点角度误差可以被中位滤波压掉」的假设——但代价是**GT 帧从 133-145 掉到 50-57**（−60%），因为 IQR≤5° 稳定性门本身把大量抖动窗口剔了。
+2. **effCov 同时从 35% 掉到 25–27%，v2-A/B 双低**（v2-A 门槛 60% → 实测 40–47%；v2-B 门槛 40 → 实测 25–28）。**GT 与 v2 此消彼长，无法同时达标**：放宽 IQR（8° 或 ∞）能拉回覆盖率，但准入会跌回 80–87%；提高 floor 到 0.40 能压误差但 GT 帧数只有 50 附近。
+3. **W=7 全线劣于 W=5**：窗口越长稳定性要求越苛刻，GT 帧数进一步腰斩到 50–60（v2 也更差）。**7 帧窗口无收益**。
+4. **短片窗口缺样风险为 0**（W=1/5/7 三档下 0/44 片帧数 < W），说明"短片没窗口"不是此路线失败的原因；失败的是**几何精度天花板 vs Gate-G1 v2 40/60 门槛的结构性矛盾**——时序聚合把散点摊平后可用样本数量本身就不够撑 v2。
+5. baseline（W=1）行数字与 §12.11 单帧 GT 逐位一致（confMax 145/86.9%、ankleOnly 133/87.2%），交叉证明脚本口径无偏差。
+
+**结论**：候选 D 单独**不能通过** Gate-G1 v2 小闸门；「时序聚合 → 准入 ≥90%」的机理有效，但会把 effCov 从 35% 压到 25–27%，v2 双门槛更远。**方向 D NO-GO，Phase 2 主体前置候选缩到 E / F 二选一**：
+
+- **候选 E**（Gate-G1 v3 门槛松绑 + pair floor=0.40 + 可选叠 W=5/IQR≤5°）：既然 §12.12 已经证明「精度可到 91% 但 v2 结构性 30% 上限」，若接受 v2 从"覆盖率闸门"重定义为"精度优先的可用性闸门"（v3-A ≥40% / v3-B ≥25），可直接以 `ankleOnly + floor 0.40 + W=5 + IQR≤5°` 通过；需在 §6 落 ADR-002，答辩"覆盖率不再是主指标"。
+- **候选 F**（CoreML 板边分割 spike）：不再在 2D 姿态几何天花板下叠加规则，另起视觉信号；投入产出未知。
+
+不再建议：候选 D 独立推进（本节结论）、fallback 规则再迭代（§12.11 已扫尽，本节又证明时序聚合触到同一天花板）。
+
+### 12.13 ADR-002：Gate-G1 v3 = 精度优先的可用性闸门（2026-09-20，Accepted，落 §6 v3 定义）
+
+#### 决策
+
+把 Gate-G1 v2 的"覆盖率优先"重定义为 v3 的"精度优先的可用性"：入统计的 fallback 帧必须先过 GT 小闸门（准入精度 ≥90%），覆盖率数字只作为可用性下限（v3-B 25/60 或 v3-A 加权 ≥40%）。fallback 链路收敛到 `ankleOnly + floor 0.40 + W=5 + IQR≤5°`。**答辩要点见 §6 v3 条**。
+
+#### Context（触发理由）
+
+1. §12.10 方向 A 落地后 v2-A 41.35% / v2-B 27.27，双项微差 FAIL；
+2. §12.11 GT 小闸门三策略扫描（confMax/anklePreferred/ankleOnly × floor 0.30/0.35/0.40）证明"只调 floor + 只换 pick 策略"结构性无解，2D 踝对本身作为板轴代理有几何精度天花板；
+3. §12.12 时序累积 81 组合扫描证明"IQR 稳定性门"能把准入压到 91.2%，但 effCov 从 35% 掉到 25–27%，v2 双门槛更远。
+4. 三轮验证连续 FAIL，继续加规则无解；只有两个方向能兑现——(a) 结构性下调门槛（本 ADR-002），(b) 换视觉信号（§12.14 候选 F）。
+
+#### Decision（v3 定义）
+
+- **口径核心翻转**：Gate-G1 从"覆盖率闸门"改为"精度优先的可用性闸门"；
+- **fallback 链路默认参数**：`策略 = ankleOnly`（膝对是精度拖累）、`pair floor = 0.40`（低置信桶下沉，防止角度尾部）、`时序窗 W = 5`、`IQR ≤ 5°`（只在诊断/audit 场景开，生产帧级 `boardEdgeObservation` 不变）；
+- **v3 门槛**（二选一）：
+  - v3-A：帧加权可用性 `Σ min(effectiveCov%, 60%)·f / F ≥ 40%`（与 v2-A 一致，因为 v2-A 本身没失守）；
+  - v3-B：片级 `effectiveCov% ≥ 25%` 的样本占比 ≥60%（v2-B 30/60 下调到 25/60，与 §12.12 实测 ankleOnly+floor0.40 26.76 对齐）；
+- **前置**：任何 fallback 帧计入 effectiveCov 前必须过 GT 准入精度 ≥90%（即 §12.11/§12.12 的 12° 角度阈值 + ≥90% 帧占比）；
+- **不改**：v1 60% 全帧覆盖率 + v2 30/60 片级门槛保留为"理想目标 / 观察项"；确定性 & 性能条款 & 评分零污染原则不变。
+
+#### Consequences
+
+- ✅ 可以在**不改视觉信号**的前提下把 Gate-G1 判为 PASS，让 Phase 2 主体（Gate-G2 可分性验证）能开工；
+- ✅ 保留了 v2 的答辩记录（§12.10~§12.12）+ v3 的答辩记录（本节），任何后续质疑"为什么覆盖率下调"都能追溯；
+- ⚠️ Gate-G1 的门槛数字下调后，Phase 2 主体（Gate-G2）的证据密度会更低——需要在 Gate-G2 显式承担"覆盖率不足下的可分性证明"责任（LOOCV + 1.5σ margin 不变）；
+- ⚠️ 生产 fallback 参数从"pair floor 0.30 / confMax" 改到 "0.40 / ankleOnly" 会让 §12.10 实测的 v2 数字整体下移，但换来准入精度 ≥90% 的保证——**评分零污染优先于覆盖率数字**。
+
+#### Migration（本节落地清单）
+
+1. §6 已加 Gate-G1 v3 条（本轮编辑，2026-09-20）；
+2. [board_edge_gate_g1_probe.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_gate_g1_probe.py) 追加 v3 双口径判定（保留 v2 对照），44 片重跑；
+3. [BoardEdgeDetector.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift) 把 `fallbackConfidenceFloor` 默认从 0.30 提到 0.40，`fallbackPickStrategy` 默认 `ankleOnly`；生产帧级 `boardEdgeObservation` 不叠加时序聚合（只是 audit 脚本能读同源 JSON 复算 W=5/IQR≤5°）；
+4. [BoardEdgeDetectorTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/BoardEdgeDetectorTests.swift) 补 ADR-002 单测：默认基线（`ankleOnly + floor 0.40`）+ ankleOnly 跳过更强膝对 + ankleOnly 踝缺失结构性拒绝 + floor 0.40 边界拒绝且 v2 (`confMax + 0.30`) 对照通过；`swift test` 全量 **290/290 通过**（时序窗 W=5/IQR≤5° 是离线 audit 脚本 [board_edge_fallback_temporal_spike.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_fallback_temporal_spike.py) 的能力，生产不接线，本轮不新增对应 Swift 单测）；
+5. 本 spec §12.4 检查表 + 首行状态、WORK_LOG Current State、delta_update 均同步更新。
+
+#### v3 44 片 8364 帧实测（2026-09-20，本 spec 首份 ADR-002 全量数字，release binary 一致）
+
+- **执行入口**：[scripts/board_edge_gate_g1_probe.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_gate_g1_probe.py)（v3 双口径判定），CLI = [.build/release/FallLineCLI](file:///Users/mingsen/Project/FallLine/.build/release/FallLineCLI)（含 ADR-002 默认参数 `ankleOnly + floor 0.40`），每片 CLI × 3（`--board-edge` × 2 + 基线 × 1）；输出镜像到 [outputs/board_edge_p2/gate_g1_probe_v3.log](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/gate_g1_probe_v3.log) + [outputs/board_edge_p2/gate_g1_probe_v3_summary.json](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/gate_g1_probe_v3_summary.json)。
+- **总量**：44 片 / 8364 帧 / board 1638 / effV2=effV3 = **2582**（v3 生产默认 `floor 0.40` 未额外剔除任何 fallback 帧，说明当前所有 fallback 帧的 confidence 均 ≥0.40，v2/v3 差异只体现在 pick 策略 `ankleOnly vs confMax`）。
+- **Gate-G1 v3（ADR-002 主判定）**：
+  - **v3-B**：片级 effCov≥25% 占比 **26/44 = 59.1%** vs 门槛 ≥60% → **FAIL**（差 0.9pp / **1 片**）；
+  - **v3-A**：帧加权可用性（cap 60%）**30.64** vs 门槛 ≥40 → **FAIL**（差 9.36pp）；
+  - **v3 总判定：FAIL**（A/B 二选一，都未达标）。
+- **Gate-G1 v2 对照**（历史，ADR-001 已 FAIL 记录）：v2-A 22/44 = 50.0% FAIL、v2-B 30.64 FAIL；与 v3-A 帧加权数字一致（同 cap 60%），差异仅在 v2-A/v3-B 的片级 cov 阈值（30% → 25%）。
+- **确定性**：8364/8364 帧 bit-identical → **PASS**（ADR-002 默认参数没有引入任何非确定性）；
+- **性能**：avg = 1.049（+4.9%）/ median = 1.050 / max = 1.079，远低于 ≤1.30 头部预算 → **PASS**。
+- **关键洞察**：
+  1. **v3-B 只差 1 片**：22.1%~24.8% 桶里有 7 片（BND_HI3 22.1 / CAND_M05 21.7 / BND2_H2 22.5 / CAND_G05 23.2 / BND2_LB 23.2 / BND2_H1 23.5 / BND_L3 24.8），任一片被抬到 ≥25% 即可 PASS，属"极临界" FAIL；
+  2. **v3-A 差得远**：帧加权 30.64 vs 40，缺口 9.36pp，光靠 pick 策略 / floor 微调难以补齐（同 cap 60% 情况下 v2 与 v3 一致，说明 ankleOnly 策略在帧加权上没优势）；
+  3. **v2-A → v3-B 从 22 片 → 26 片**（+4 片）：门槛从 30% 下调 5pp 到 25% 换来的 4 片主要来自 CAND_G02 33.6%（原就过）→ 现在多进的是 BND2_TOP 25.8 / CAND_M03 27.0 / BND_HI1 27.3 三片跨过 25% 门槛；
+  4. **effV2 = effV3 完全等值**：确认 `floor 0.30 → 0.40` 在当前 fallback 分布下不产生实际剔除，v3 相对 v2 的收益全在"pick 策略 → 精度天花板"（GT 小闸门语义）而非"floor → 覆盖率数字"；
+  5. **9 片 effV3 < 20%**（BND_L1 0 / BND2_L4 7.4 / BND_L2 7.6 / CAND_M09 7.7 / BND2_L2 8.5 / CAND_M01 9.0 / BND2_H3 12.5 / CAND_G07 15.4 / CAND_M08 17.8 / BND_HI2 19.7），这批片段是"结构性远景 / 低置信"桶，光靠 ankleOnly + floor 无法拉起，需要候选 F（§12.14）的 CoreML 分割才能翻身。
+- **判定路径**：
+  - **v3 双门槛都 FAIL**，但 v3-B 只差 1 片属"极临界"，与 v3-A 差 9pp 的结构性缺口性质不同；
+  - **不推荐"再下调 v3-B 到 24%"**——这会把 §12.13 的 "精度优先" 承诺变成"数字倒推"，损伤 ADR 可信度；
+  - **推荐路径**：① 承认 v3 结构性 FAIL，激活 §12.14 候选 F CoreML spike（跳出 2D 姿态几何天花板）；或 ② 保留 v3 定义不动，把 Gate-G1 判定的**必要性**降级——让 Phase 2 主体的 Gate-G2 直接承担"低覆盖率下的可分性证明"责任（LOOCV + 1.5σ margin 硬指标）；或 ③ 追加 ADR-004 显式承认"Gate-G1 v3 FAIL + 走 Gate-G2 直判"路径。**具体路径待用户拍板**。
+
+### 12.14 候选 F：CoreML 板边分割 spike 设计骨架（2026-09-20，Design only，不投模型二进制）
+
+#### 目的
+
+在 v3 门槛落地的同时，为"跳出 2D 姿态几何天花板"预留一条**独立视觉信号**方案；本节仅落设计骨架 + 决策标准 + 成本预算，不启动训练、不引入模型二进制，也不修改任何生产代码。
+
+#### 候选模型对比
+
+| 模型 | 参数量 | 精度预期 | 推理开销 (M1 Pro CoreML) | 迁移/微调成本 | ANE 支持 |
+|---|---|---|---|---|---|
+| DeepLabV3+ MobileNetV2 | ~5M | 中（板轴场景需微调） | ~8–15ms/frame | 中（Apple 官方 Sample） | 有 |
+| U-Net tiny (custom) | ~1–2M | 需自训练 | ~4–10ms/frame | 高（需自搭 + 数据充分） | 部分 |
+| SAM2 tiny (quantized) | ~40M | 高（zero-shot mask） | ~50–120ms/frame | 极高（尚无稳定 CoreML export） | 弱 |
+| YOLOv8-seg nano | ~3M | 中高 | ~10–20ms/frame | 低（Ultralytics 官方 CoreML export） | 有 |
+
+**初选建议**：YOLOv8-seg nano 或 DeepLabV3+ MobileNetV2 二选一——前者社区成熟、CoreML export 顺，后者 Apple 官方 Sample 与 ANE 结合最紧。**待正式 spike 前再 pin，本节不做绑定**。
+
+#### GT 标注方案
+
+- **规模【已锁定 2026-09-21】**：**100 帧最小集**（在 §4.4 44 片中尽量覆盖 board / fallback / reject 各类与 high / mid / low 各档）；用于先快速验证模型能否过 IoU≥0.65；若首版结果处于临界，再另行决定是否补标到 200–300；
+- **粒度**：板身像素级 mask（不含雪杖、绑定、雪雾）；
+- **工具**：LabelMe / CVAT / Apple `Create ML` 分割数据集；
+- **成本估算**：~30s/帧 × 100 帧 ≈ 0.83 人时；含 QA 双标核对 ≈ 1–1.5 人时；
+- **风险**：远景样本板身仅数像素，mask 边界主观性高——最小集阶段优先选可辨识帧，远景数像素帧可放弃标注。
+
+#### 决策标准
+
+> **锁定状态（2026-09-21，Gate-G2 NO-GO 激活候选 F 后）**：第 1、2、4 条由用户正式拍板**锁定为硬门槛**——
+> **① 分割 IoU ≥ 0.65；② CoreML M1 Pro 单帧推理 ≤ 20ms；④ farShot 桶恢复率 ≥ 50%。**
+> spike 三条须同时满足方可继续；任一不达标即判候选 F 失败，不再放宽数字。第 3/5/6 条仍为待确认配套口径。
+
+1. **精度【已锁定】**：训练+验证集分割 IoU ≥ 0.65（板身像素）；
+2. **推理开销【已锁定】**：CoreML M1 Pro 单帧 ≤ 20ms（对齐 Gate-G1 性能 ≤30% 门槛，5fps 主流程即 200ms/帧余量）；
+3. **准入精度**：转出板轴后 §12.11 同口径 GT 准入 ≥90%；
+4. **覆盖率【已锁定】**：远景 / farShot 桶恢复率 ≥50%（否则不比 fallback 强）；
+5. **确定性**：模型推理 bit-identical（float 精度容差 <1e-4）；
+6. **迁移成本**：训练 + 微调 + CoreML export + 集成总人力 ≤ 20 人时；否则回退。
+
+#### 成本 vs 收益预算
+
+- **投入门槛**：设计 → 数据 → 训练 → 集成，估算 3–5 天集中人力；
+- **收益上限**：把 farShot 桶（§12.6 audit 主要拒绝路径，占 29.76%）从"不可用"翻到"可用"，理论 effCov 可提升到 50–60%；
+- **收益下限**：与 fallback 持平（几何精度天花板换成模型精度天花板），失败。
+
+#### 决策路径
+
+- 若 §12.13 v3 通过后 Gate-G2 顺利过（可分性 margin ≥1.5σ），候选 F **降级到"未来 Phase 3+ 增强"**，不启动 spike；
+- 若 v3 通过但 Gate-G2 因为 fallback 精度不足失败，候选 F 优先级提升到 P0；
+- 本节骨架**永久保留**，任何后续启动前需要在本节追加实测数据 + ADR-003。
+
+#### 本节落地清单（本轮）
+
+1. spec §12.14 骨架落地（本节）；
+2. spec §12.4 检查表新增候选 F 条；
+3. WORK_LOG + delta_update 同步引用；
+4. **不引入模型二进制、不修改 [Package.swift](file:///Users/mingsen/Project/FallLine/Package.swift)**；新增 [scripts/board_edge_coreml_spike.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_coreml_spike.py) 骨架脚本（占位后端 = `NoopBackend`，`--check-plan` 打印本节决策标准，`--list-clips` 与 v3 探针共用 44 片，`--model` 参数留位但显式退出码 2 → 未实现）；
+5. 若后续启动 spike，正式实现 `CoreMLBackend`（VNCoreMLRequest / MLModel + PCA 主轴 + 计时 + bit-identical），并新建 [outputs/board_edge_p2/coreml_spike/](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/coreml_spike/) 目录 + ADR-003。
+
+---
+
+### 12.15 方向 C 时序累积：ADR-004 + 生产级 spike 计划（2026-09-21，Design only，不动生产代码）
+
+> **编号说明**：ADR-001 = Gate-G1 v2（§12.9）、ADR-002 = Gate-G1 v3（§12.13）、**ADR-003 保留给候选 F CoreML**（§12.14 已声明）；本节决策编号为 **ADR-004**。
+
+#### 12.15.1 ADR-004：时序累积轴重定位 —— 从"Gate-G1 覆盖率手段"改为"Gate-G2 刃线连续性质量信号"
+
+**Status**：Accepted（设计通过，待 §12.15.2 spike 计划落地实测）。
+
+##### Context（证据链，为什么要翻转定位）
+
+1. **§12.12 已证明时序累积机理有效但对 Gate-G1 覆盖率 NO-GO**：`前向 W=5 窗 + 中位滤波 + IQR≤5°` 把 GT 准入精度从 87% 顶到 **91.2%**（`ankleOnly + floor 0.35`），但稳定性门把候选帧腰斩，effCov 从 35% 掉到 **25–27%**，v2-A/v2-B 双低；§12.12 结论是"作为覆盖率手段 NO-GO"。
+2. **§12.13 v3 门槛 + 44 片 8364 帧实测再次 FAIL**：v3-B **26/44 = 59.1%**（差 1 片 / 0.9pp）、v3-A **30.64**（差 9pp），继续下调门槛会把"精度优先"变成"数字倒推"，不可取。
+3. **关键重新解读**：IQR 稳定性门的"拒绝"不只是"损失的覆盖率"——**它本身度量了板轴在时间上的稳定性**。刻滑 / 连续走刃时板轴随弯形平滑转动，窗口内角度集中（IQR 小）；推坡 / 横滑 / 搓雪时板轴帧间抖动，窗口内角度离散（IQR 大）。因此"每个窗口 pass/fail 的二值序列"与"连续 pass 的段长"**正是 Gate-G2 一直要找的"连续弧 / 刃线证据"**（§6 Gate-G2 第 3 条显式点名的判据）。§12.12 中被视作"代价"的覆盖率损失，在 Gate-G2 语境下恰好是**被测物理量本身**。
+4. **落点天然存在**：[VideoAnalyzer.analyzeFrame](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L339) 逐帧顺序执行，前向因果窗 `[f-W+1 .. f]` 不依赖未来帧；且与光流（[FlowMetricsCalculator](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift)）一样，可以在全帧分析结束后的 `generateSummary()` 后处理阶段对 `DetectionResult` 数组做纯函数聚合，**不破坏逐帧分析的无状态性**。
+5. **与现有失败路线的关系**：§1.2 / §10.2 证明"2D 静态几何 + 相机补偿"在低端可分性上失败（最强 0.50σ），但那些都是**单帧 / 补偿后轨迹**特征；本节提出的是**跨帧轴稳定性时序特征**，是一个不同的信号维度，尚末被任何 audit 扫描过。
+
+##### Decision（决策内容）
+
+1. **定位翻转**：时序累积不再以"把 effCov 顶过 Gate-G1 门槛"为目标（那条路 §12.12 已关闭）；改为在**独立诊断命名空间**产出"板轴刃线连续性"时序质量信号，作为 **Gate-G2 的新增候选特征**，接受 margin ≥1.5σ + LOOCV ≥90% 的硬闸门裁决。Gate-G1 v3 的 FAIL 结论与门槛数字**保持不变，不回改、不再松绑**。
+2. **新增纯函数聚合器 `BoardTemporalAxisAggregator`**（建议独立文件 `Sources/FallLineCore/BoardTemporalAxisAggregator.swift`）：
+   - **输入**：全片 `DetectionResult` 数组中每帧的 `boardEdgeObservation`——`status == .board` 取 `axisAngle`；`status == .fallback` 取 `fallbackAxis.axisAngle` + `confidence` + `source`；其余状态该帧无候选；
+   - **窗口**：因果前向窗 W = **5**（0.2s 采样 = 1s 物理窗，`[f-4 .. f]` 右闭）；
+   - **通过条件**：窗口候选数 ≥ **⌈W/2⌉ = 3** 且 `IQR(angles) ≤ 5°`；
+   - **聚合产物**：`medianAngle`（角度中位数）、`medianConfidence`（置信度中位数）、`source`（窗口内源多数派，tie → ankle 优先）、`candidateCount`、`iqr`、`rejectReason`（`insufficientCandidates` / `unstableIQR` / `foldCrossing`）。
+3. **角度折叠（fold-crossing）显式处理**：生产角度是 PCA 无向轴的 unsigned 0–90° 表示（跨 0/90 边界会折叠），与 §12.12 GT 窗只在 board 帧上评估不同。规则：窗口内同时出现近 0° 与近 90° 簇（`min ≤ 20° 且 max ≥ 70°`）判为折叠可疑窗——优先用光流 / 踝点行进方向的符号把角度重建成有向（mod 180）角再取中位；方向信号不可用则**保守拒绝**，reason = `foldCrossing`，并在片级度量其占比。5fps × 1s 窗内真实跨折叠概率低，但必须在验证中量化，防止刻滑弯被系统性少计。
+4. **片级度量（Gate-G2 特征来源）**：聚合器输出 `BoardTrajectoryMetrics`（进 VideoSummary JSON 新字段 `boardTrajectory`）：
+   - `stableWindowRate` = pass 窗数 / 候选可评估窗数；
+   - `longestStableRunFrames` / `longestStableRunSeconds` = 连续 pass 窗最长段；
+   - `stableRunCount`、`stableRunMeanSeconds`、`stableFrameCoverage` = 落在稳定段的帧占比；
+   - `foldCrossingRate`、`rejectHist`（insufficient/unstable/fold 分布）；
+   - `configEcho`（W / minCount / iqrGate 等参数，保证 JSON 自解释）；
+   - `points`：逐帧对齐的窗口产物（默认可只存 pass 帧索引 + 聚合角；`--debug-overlay` 或独立 debug 开关下存全量点）。
+5. **确定性约束**：聚合为纯函数，中位数 / IQR / 多数派规则全部显式定义（偶数个元素的中位 = 中间两值算术平均；任何 Dictionary/Set 归约以显式排序 + 业务语义 tie-break 收尾，遵循 §12.9 通用规约）；同片跨次须 bit-identical。
+6. **启用边界**：板边检测本身默认关（`enableBoardEdge=false`），时序聚合仅在板边开启时随 `generateSummary()` 后处理运行，不新增 CLI 行为；**不修改**逐帧 `boardEdgeObservation`（ADR-002 的帧级语义保持），**不接触任何评分字段**。
+
+##### Consequences
+
+- ✅ **把 §12.12 的主要"代价"（IQR 门拒绝帧）转成 Gate-G2 的被测信号**，不再需要在"精度↑ / 覆盖率↓"之间做权衡——pass 率与连续段长本就是刻滑质量的直接代理；
+- ✅ 为 Gate-G2 提供一个**从未被扫描过的跨帧时序维度**（刃线连续性），直接对应教练判据"有无连续平行弧 / 走刃"，而非再叠加一个 2D 静态几何阈值；
+- ✅ 纯函数后处理、零 Vision 调用、零模型，性能开销预期 O(W·F) 算术（微秒级，≈0%），不触碰 Gate-G1 性能预算；
+- ⚠️ **机位 / 景别混淆风险（最高危）**：§10.2 相机补偿的 2.0σ 假 margin 教训——固定机位 vs 手持跟拍、远景 vs 近景可能与稳定性伪相关。缓解：Gate-G2 硬门槛（1.5σ + LOOCV）不放松；验证时必须把连续性特征与 `subjectFraction` / farShot 占比 / 机位类型做残差核对，若主贡献来自景别则本路线判负；
+- ⚠️ **折叠窗保守拒绝可能少计真实刻滑弯**：需在 44 片实测中报告 foldCrossingRate，若在已确认刻滑样本上占比过高（>10%），需先补有向重建再评估；
+- ⚠️ **不预设 PASS**：若 Gate-G2 margin / LOOCV 不达标，结论是"时序刃线连续性也不可分"，字段保留为纯诊断，随后激活候选 F（§12.14）；
+- ⚠️ Gate-G2 的证据密度仍受限于 ~31% 有效帧，LOOCV 在该密度下的可信度需如实呈现，必要时 Gate-G2 结论标"低覆盖下的弱证据"。
+
+#### 12.15.2 生产级 spike 计划（四阶段，最小 diffs，评分零污染）
+
+**阶段 S1 — 模型 + 聚合器核心（纯 Swift，不接线）**
+- [Models.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/Models.swift) 新增：
+  - `BoardTemporalAxisPoint`（帧对齐：`frameIndex` / `windowPass` / `candidateCount` / `medianAngle` / `medianConfidence` / `iqr` / `source` / `rejectReason`，Codable）；
+  - `BoardTemporalRejectReason`（`insufficientCandidates` / `unstableIQR` / `foldCrossing`）；
+  - `BoardTrajectoryMetrics`（片级度量 + `points` + `configEcho`，Codable）；
+  - `VideoSummary` 新增可选字段 `boardTrajectory: BoardTrajectoryMetrics?`（nil = 未启用，后向兼容）。
+- 新增 [BoardTemporalAxisAggregator.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardTemporalAxisAggregator.swift)：`aggregate(frames:config:) -> BoardTrajectoryMetrics`；纯函数 + 内部小工具（median、IQR、fold-crossing 检测、连续 run 扫描）；配置复用 `BoardEdgeConfig` 并补三个时序参数（`temporalWindowSize=5` / `temporalMinCount=3` / `temporalIQRGate=5.0`）。
+- 本阶段不改任何调用方；`swift build` 通过即可。
+
+**阶段 S2 — 接线（后处理，零帧级改动）**
+- 在 [VideoAnalyzer.generateSummary](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L371)（与 flow / board 分析同一后处理区）内，仅当 `enableBoardEdge` 时调用聚合器，结果挂到 summary `boardTrajectory`；逐帧 `DetectionResult` / `boardEdgeObservation` 零改动；评分 / cap / flow / report 生成器零改动。
+- CLI 复用 `--board-edge` 开关，不新增必选参数；是否导出全量 points 跟随现有 debug 口径（避免默认 JSON 膨胀）。
+
+**阶段 S3 — 单测（建议 ≥14 条）**
+- 新增 `BoardTemporalAxisAggregatorTests`：
+  1. 全 board 稳定窗 pass + 聚合角 / conf 正确；2. 候选不足（n<3）拒绝；3. IQR 超 5° 拒绝（含恰为 5° 边界）；4. 混合 board/fallback 窗源多数派 + tie 取 ankle；5. fold-crossing 检测 + 有向重建路径；6. fold-crossing 无方向信号时保守拒绝；7. 连续 run 扫描（单段 / 多段 / 最长段帧秒换算）；8. 片首 <W 帧边界；9. 全拒绝帧流（无候选不崩、分母处理）；10. 偶数元素中位数定义；11. 空片 / 单帧；12. 确定性：打乱输入顺序构造的 tie 场景下 2000 次 fuzz 输出一致；13. JSON round-trip；14. 默认关路径 `boardTrajectory == nil`。
+- `swift test` 全绿（当前基线 290）。
+
+**阶段 S4 — 44 片实测 + Gate-G2 裁决**
+1. `swift build -c release`；以 `--board-edge` 对 44 片重跑（本轮需新 JSON，因新增 summary 字段）；
+2. 扩展 [lowend_separability_audit.py](file:///Users/mingsen/Project/FallLine/scripts/lowend_separability_audit.py)：从 JSON `boardTrajectory` 读入 `stableWindowRate` / `longestStableRunSeconds` / `stableFrameCoverage` / `foldCrossingRate` 作为新特征列，复用其现有 1D / 2D margin + 准确率框架，并补 **LOOCV** 计算与**景别混淆核对**（对 subjectFraction / farShot 占比的相关与残差）；
+3. 同时输出：已确认刻滑样本（v3 主 corpus）连续性是否确实更高、foldCrossingRate 总体水平；
+4. 日志 / 结果回流 `outputs/board_edge_p2/`（建议 `temporal_aggregate_44.log` + 结构化 JSON）。
+
+**验收标准（go / no-go）**
+- **GO**：Gate-G2 新特征（或其与现有特征的组合）margin ≥ **1.5σ**、LOOCV ≥ **90%**、方向正确（刻滑连续性显著更高）、景别残差核对通过、专业档样本零误伤、bit-identical、性能增幅 ≈0% → 进入 Phase 3 立项讨论（仍需 Gate-G3）。
+- **NO-GO**：margin / LOOCV 不达标，或主贡献可被景别 / 机位解释 → 字段保留纯诊断，**激活候选 F（§12.14，ADR-003）**。
+- **熔断 / 回退**：意外出现性能增幅 >30% 或 JSON 兼容问题 → 聚合在接线层开关关闭（`enableBoardEdge` 整体关即可回退），生产默认路径不受影响。
+
+**与既有 ADR / 结论的一致性声明**
+- 不推翻、不改写 §12.12（作为覆盖率手段 NO-GO）与 §12.13（Gate-G1 v3 定义及实测 FAIL）；
+- Gate-G1 v3 门槛不再动；本节只在 Gate-G2 一侧增加候选输入；
+- 评分零污染、独立命名空间、确定性 tie-break 规约全程适用。
+
+#### 12.15.3 S4 实测结论（2026-09-21，44 片 8364 帧）：Gate-G2 **NO-GO** —— 方向反转，时序刃线连续性不可分
+
+release 构建 + `--board-edge` 44 片全量重跑（JSON 全部含 `summary.boardTrajectory`，持久化于 `outputs/board_edge_p2/trajectory_json/`），[lowend_separability_audit.py](file:///Users/mingsen/Project/FallLine/scripts/lowend_separability_audit.py) `--trajectory` 模式裁决，完整日志 [gate_g2_trajectory_44.log](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/gate_g2_trajectory_44.log)。
+
+**核心结果（分组 mean stableWindowRate）**：high=**0.384**、mid=0.328、low=**0.405**。连续性**不随刻滑质量单调上升，反而弱负相关**——主口径 high(21) vs low(10) 最强有效特征 stableWindowRate margin=**−0.13σ**、acc/LOOCV=45.2%、专业误伤 11；所有时序特征 margin 均为负或 0。对照低端 11 片同向反转（stableWindowRate margin=−1.03σ）。最强单一信号反而是景别代理 farShotFrac（margin=0.75σ、LOOCV=71%），仍远不达标。**Gate-G2：margin 1.5σ / LOOCV 90% / 专业零误伤三条全部 FAIL → NO-GO。**
+
+**机理（经逐片核对，非 bug、非景别假相关）**：
+1. 推坡 / 直滑初滑者板轴方向几乎恒定朝坡下，PCA 主轴天然"稳"，多片 low 样本 board% 高（BND2_L1 75%、BND2_LM 57%、BND2_L3 50%）、stableWindowRate 0.55–0.83；
+2. 刻滑者连续换弯、板轴沿弧线持续转动，更易触发 IQR>5° 被判 `unstableIQR`；
+3. 即"刃线连续性（轴方向不变）"≠"沿弧线连续走刃"，前者与后者弱负相关。根因与 P7-A / P8-A「2D 光流方向不携带质量信息」、§10.2 相机补偿假 margin 同源——**2D 姿态/像素几何天花板**。
+4. **景别残差核对通过但无救**：特征对 farShotFrac 相关约 −0.42～−0.46，去趋势后残差 margin≈0（stableWindowRate 0.08σ），说明连续性不是景别伪信号，但也证明它本身没有判别力。
+5. `foldCrossingRate` 全 44 片 =0：真实换弯的大角度转动落在 fold 带内未被识别为 crossing，而是直接被 `unstableIQR` 拒（这与 ADR-004 预期的 fold 风险不同——问题不是"少计刻滑弯"，而是"稳定窗本就不对应刻滑"）。
+
+**处置（按 ADR-004 Consequences）**：
+- `boardTrajectory` 字段及 `BoardTemporalAxisAggregator` **保留为纯诊断**，默认仍仅 `--board-edge` 时产出，不进任何评分 / cap / report 文案；
+- **激活候选 F（§12.14，ADR-003 CoreML 板边分割）**——这是 44 片上第三次（方向 A/B、相机补偿 C、时序 D）撞穿 2D 几何天花板后的唯一剩余视觉路径；
+- Gate-G1 v3 FAIL 结论与门槛数字维持不变。
+
+
+

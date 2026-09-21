@@ -19,6 +19,7 @@ edge-evidence cap 62 硬地板顶进中级带（60-65），而 4 片真"中级�
 
 from __future__ import annotations
 
+import argparse
 import itertools
 import json
 import math
@@ -355,5 +356,239 @@ def main():
         print(f"{alias:10s} {cells}  {tag}")
 
 
+# ==========================================================================
+# Gate-G2（ADR-004，§12.15 S4）：板轴刃线连续性时序信号裁决
+# ==========================================================================
+
+TRAJ_FEATURES = [
+    "stableWindowRate",
+    "longestStableRunSeconds",
+    "stableFrameCoverage",
+    "stableRunMeanSeconds",
+    "foldCrossingRate",
+]
+
+
+def _load_traj_clip(path: Path) -> dict:
+    d = json.loads(path.read_text())
+    bt = (d.get("summary") or {}).get("boardTrajectory") or {}
+    frames = d.get("frames") or []
+    far = sum(
+        1 for f in frames
+        if (f.get("boardEdgeObservation") or {}).get("status") == "farShot"
+    )
+    feats = {k: bt.get(k, float("nan")) for k in TRAJ_FEATURES}
+    feats["farShotFrac"] = far / len(frames) if frames else float("nan")
+    feats["foldCrossingRate"] = feats["foldCrossingRate"] or 0.0
+    return feats
+
+
+def _mean_std(xs):
+    n = len(xs)
+    mu = sum(xs) / n
+    sd = math.sqrt(sum((z - mu) ** 2 for z in xs) / n)
+    return mu, sd
+
+
+def _linreg_resid(xs, ys):
+    """y 对 x 的最小二乘回归残差。"""
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    if sxx == 0:
+        return [0.0] * n
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    slope = sxy / sxx
+    intercept = my - slope * mx
+    return [y - (slope * x + intercept) for x, y in zip(xs, ys)]
+
+
+def _corr(xs, ys):
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    sx = math.sqrt(sum((x - mx) ** 2 for x in xs))
+    sy = math.sqrt(sum((y - my) ** 2 for y in ys))
+    return cov / (sx * sy) if sx and sy else 0.0
+
+
+def _zspace(values, names, idxs):
+    """对 idxs 子集逐特征标准化（用子集统计），返回 {alias: [z...]}。"""
+    z = {}
+    for j, name in enumerate(names):
+        col = [values[i][j] for i in idxs]
+        mu, sd = _mean_std(col)
+        sd = sd or 1.0
+        for i in idxs:
+            z.setdefault(i, []).append((values[i][j] - mu) / sd)
+    return z
+
+
+def _eval_contrast(title, aliases, pos_set, values, names):
+    """对一组样本做 1D margin / 最优阈值 / LOOCV；返回最佳结果描述。"""
+    idxs = list(range(len(aliases)))
+    pos = [i for i in idxs if aliases[i] in pos_set]
+    neg = [i for i in idxs if aliases[i] not in pos_set]
+    if not pos or not neg:
+        print(f"\n== {title} == 标签不全，跳过")
+        return None
+
+    z = _zspace(values, names, idxs)
+    print(f"\n== {title}（{len(pos)} 刻滑/正 vs {len(neg)} 负，n={len(idxs)}）==")
+    print(f"{'feature':24s} {'marginσ':>8s} {'全样本acc':>9s} {'LOOCV':>7s} {'专业误伤':>8s}")
+
+    best = None
+    for j, name in enumerate(names):
+        gp = [z[i][j] for i in pos]
+        gn = [z[i][j] for i in neg]
+        margin = (sum(gp) / len(gp)) - (sum(gn) / len(gn))
+        # 阈值取两簇中点（标准化空间），正类应在高侧；若方向相反 margin 为负
+        thr = ((sum(gp) / len(gp)) + (sum(gn) / len(gn))) / 2
+        correct = []
+        for i in idxs:
+            pred_pos = z[i][j] > thr
+            correct.append(pred_pos == (i in pos))
+        acc = sum(correct) / len(idxs)
+
+        # LOOCV：fold 内重算均值/std 与阈值
+        loo_ok = 0
+        for h in idxs:
+            tr = [i for i in idxs if i != h]
+            col = [values[i][j] for i in tr]
+            mu, sd = _mean_std(col)
+            sd = sd or 1.0
+            tp = [i for i in tr if i in pos]
+            tn = [i for i in tr if i not in pos]
+            mp = sum((values[i][j] - mu) / sd for i in tp) / len(tp)
+            mn = sum((values[i][j] - mu) / sd for i in tn) / len(tn)
+            t = (mp + mn) / 2
+            zh = (values[h][j] - mu) / sd
+            pred_pos = zh > t
+            if pred_pos == (h in pos):
+                loo_ok += 1
+        loo = loo_ok / len(idxs)
+
+        fp_pro = sum(1 for i in pos if not correct[i])  # 专业档被判负（误伤）
+        key = (margin, acc, loo)
+        if best is None or key > best[0]:
+            best = (key, name, fp_pro)
+        if name == "farShotFrac":
+            continue
+        print(f"{name:24s} {margin:8.2f} {acc*100:8.1f}% {loo*100:6.1f}% {fp_pro:8d}")
+
+    (margin, acc, loo), bname, fp_pro = best
+    print(f"-> 最强：{bname} margin={margin:.2f}σ acc={acc*100:.1f}% "
+          f"LOOCV={loo*100:.1f}% 专业误伤={fp_pro}")
+    return margin, acc, loo, bname, fp_pro
+
+
+def _camera_residual(title, aliases, pos_set, values, names):
+    """景别/机位混淆核对：特征对 farShotFrac 的相关与去趋势残差 margin。"""
+    idxs = list(range(len(aliases)))
+    pos = [i for i in idxs if aliases[i] in pos_set]
+    neg = [i for i in idxs if aliases[i] not in pos]
+    far = [values[i][names.index("farShotFrac")] for i in idxs]
+    print(f"\n-- 景别混淆核对：{title} --")
+    print(f"{'feature':24s} {'corr(far)':>10s} {'残差marginσ':>12s} {'方向':>6s}")
+    rows = []
+    for j, name in enumerate(names):
+        if name == "farShotFrac":
+            continue
+        ys = [values[i][j] for i in idxs]
+        corr = _corr(far, ys)
+        resid = _linreg_resid(far, ys)
+        rp = [resid[i] for i in pos]
+        rn = [resid[i] for i in neg]
+        _, sd = _mean_std(resid)
+        sd = sd or 1.0
+        rmargin = ((sum(rp) / len(rp)) - (sum(rn) / len(rn))) / sd
+        rows.append((name, corr, rmargin))
+        print(f"{name:24s} {corr:10.2f} {rmargin:12.2f} "
+              f"{'正确' if rmargin > 0 else '反转'}")
+    return rows
+
+
+def trajectory_gate(traj_dir: Path):
+    probe_spec = importlib.util.spec_from_file_location(
+        "g1probe", ROOT / "scripts" / "board_edge_gate_g1_probe.py")
+    g1 = importlib.util.module_from_spec(probe_spec)
+    probe_spec.loader.exec_module(g1)
+
+    group_of = {alias: group for alias, group, _ in g1.CLIPS}
+    high = {a for a, g in group_of.items() if g == "high"}
+
+    aliases, values = [], []
+    for alias, _, _ in g1.CLIPS:
+        p = traj_dir / f"{alias}.json"
+        if not p.exists():
+            continue
+        f = _load_traj_clip(p)
+        aliases.append(alias)
+        values.append([f[k] for k in TRAJ_FEATURES + ["farShotFrac"]])
+    names = TRAJ_FEATURES + ["farShotFrac"]
+    missing = [a for a, _, _ in g1.CLIPS if a not in aliases]
+    print(f"已加载 {len(aliases)} 片；缺 {len(missing)}：{','.join(missing)}")
+
+    # 全组分布速览（foldCrossingRate / farShot）
+    print("\n== 分组连续性速览 ==")
+    for gname in ("high", "mid", "low"):
+        members = [i for i, a in enumerate(aliases) if group_of.get(a) == gname]
+        if not members:
+            continue
+        j = names.index("stableWindowRate")
+        k = names.index("foldCrossingRate")
+        swr = sum(values[i][j] for i in members) / len(members)
+        fold = sum(values[i][k] for i in members) / len(members)
+        print(f"  {gname:4s} n={len(members):2d}  mean stableWindowRate={swr:.3f} "
+              f"mean foldCrossingRate={fold:.3f}")
+
+    # 主口径：已确认刻滑（high）vs 初级（low）
+    low = {a for a, g in group_of.items() if g == "low"}
+    hl_aliases = [a for a in aliases if a in high or a in low]
+    hl_values = [values[aliases.index(a)] for a in hl_aliases]
+    r_hl = _eval_contrast("主口径：已确认刻滑 high vs 初级 low",
+                          hl_aliases, high, hl_values, names)
+    _camera_residual("high vs low", hl_aliases, high, hl_values, names)
+
+    # 对照口径：原低端 11 片（推坡初级 vs 中级雏形）
+    if all((traj_dir / f"{a}.json").exists() for a in BOUNDARY):
+        b_aliases = list(BOUNDARY)
+        b_values = [values[aliases.index(a)] for a in b_aliases]
+        emerging_set = set(EMERGING)
+        r_b = _eval_contrast("对照：推坡初级 vs 中级雏形（原低端 11 片）",
+                             b_aliases, emerging_set, b_values, names)
+        _camera_residual("低端11片", b_aliases, emerging_set, b_values, names)
+    else:
+        r_b = None
+        print("\n对照低端 11 片 JSON 不全，跳过")
+
+    # ---- Gate-G2 裁决 ----
+    print("\n" + "=" * 60)
+    print("Gate-G2 裁决（margin≥1.5σ 且 LOOCV≥90%，方向正确，专业零误伤）")
+    verdict = "NO-GO"
+    if r_hl is not None:
+        margin, acc, loo, bname, fp_pro = r_hl
+        cond = (margin >= 1.5 and loo >= 0.90 and fp_pro == 0)
+        print(f"主口径 high vs low：margin={margin:.2f}σ LOOCV={loo*100:.1f}% "
+              f"误伤={fp_pro} 特征={bname} -> {'达标' if cond else '不达标'}")
+        if cond:
+            verdict = "GO"
+    if r_b is not None:
+        margin, acc, loo, bname, fp_pro = r_b
+        print(f"对照低端11片：margin={margin:.2f}σ LOOCV={loo*100:.1f}% "
+              f"特征={bname}（参考，不单独决定 GO）")
+    print(f"==> {verdict}")
+    print("=" * 60)
+
+
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--trajectory", action="store_true",
+                        help="Gate-G2：读 boardTrajectory 刃线连续性特征做 margin/LOOCV/景别残差裁决")
+    parser.add_argument("--trajectory-dir",
+                        default="outputs/board_edge_p2/trajectory_json")
+    args = parser.parse_args()
+    if args.trajectory:
+        trajectory_gate(Path(args.trajectory_dir))
+    else:
+        main()

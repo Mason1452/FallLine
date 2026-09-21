@@ -5,6 +5,14 @@ import Vision
 
 // MARK: - 板身刃线检测器（Phase 1 诊断能力，候选 A）
 
+/// 降级候选选择策略（ADR-002，2026-09-20）。
+public enum BoardFallbackPickStrategy: String, Codable {
+    /// 踝对与膝对同时算，按 confidence 取高（v2 历史行为）。
+    case confMax
+    /// 只用踝对；膝对是精度拖累主力（§12.11 三策略扫描 + §12.12 时序累积扫描证）。
+    case ankleOnly
+}
+
 /// 板身刃线检测配置（Phase 0 GT 校准后的阈值）。
 ///
 /// 阈值为公开常量，便于单测锁定边界；默认值对应 spec §10 Gate-G0 的量化结果。
@@ -33,6 +41,29 @@ public struct BoardEdgeConfig {
     public var maxTrunkTilt: Double
     /// 实例主体框与姿态框最小重叠（IoU），低于判实例不归属本滑者。
     public var minInstanceOverlap: Double
+    /// 主检测失败时是否启用姿态几何降级（ADR-001）。
+    public var enableFallback: Bool
+    /// 降级合成置信度下限（低于则保留原始拒绝状态）。
+    /// ADR-002 (2026-09-20)：从 0.30 提到 0.40，配合 ankleOnly 策略保证准入精度 ≥90%。
+    public var fallbackConfidenceFloor: Double
+    /// 降级关节对关键点置信度下限。
+    public var fallbackPairConfidenceFloor: Double
+    /// 双膝连线源相对踝对的权重（膝可相对板扭转）。
+    public var fallbackKneeWeight: Double
+    /// 几何置信度的间距缩放系数（归一间距 × 该系数）。
+    public var fallbackGeometryScale: Double
+    /// 降级候选选择策略（ADR-002，2026-09-20）：ankleOnly 是 §12.11/§12.12 联合唯一解。
+    public var fallbackPickStrategy: BoardFallbackPickStrategy
+    /// 时序聚合因果前向窗大小（帧；ADR-004，§12.15；0.2s 采样下 5 = 1s 物理窗）。
+    public var temporalWindowSize: Int
+    /// 时序窗通过所需的最少有效候选数（ADR-004；⌈W/2⌉）。
+    public var temporalMinCount: Int
+    /// 时序窗角度 IQR 上限（度，ADR-004）。
+    public var temporalIQRGate: Double
+    /// fold-crossing 检测：窗口角度最小值不高于此值且最大值不低于 temporalFoldHighAngle 判为跨折叠。
+    public var temporalFoldLowAngle: Double
+    /// fold-crossing 检测上界（度）。
+    public var temporalFoldHighAngle: Double
 
     public init(
         minSubjectFraction: Double = 0.02,
@@ -46,7 +77,18 @@ public struct BoardEdgeConfig {
         roiBottomOffset: Double = 0.16,
         minAxisPixels: Int = 30,
         maxTrunkTilt: Double = 50.0,
-        minInstanceOverlap: Double = 0.15
+        minInstanceOverlap: Double = 0.15,
+        enableFallback: Bool = true,
+        fallbackConfidenceFloor: Double = 0.40,
+        fallbackPairConfidenceFloor: Double = 0.30,
+        fallbackKneeWeight: Double = 0.6,
+        fallbackGeometryScale: Double = 12.0,
+        fallbackPickStrategy: BoardFallbackPickStrategy = .ankleOnly,
+        temporalWindowSize: Int = 5,
+        temporalMinCount: Int = 3,
+        temporalIQRGate: Double = 5.0,
+        temporalFoldLowAngle: Double = 20.0,
+        temporalFoldHighAngle: Double = 70.0
     ) {
         self.minSubjectFraction = minSubjectFraction
         self.minAnkleConfidence = minAnkleConfidence
@@ -60,6 +102,17 @@ public struct BoardEdgeConfig {
         self.minAxisPixels = minAxisPixels
         self.maxTrunkTilt = maxTrunkTilt
         self.minInstanceOverlap = minInstanceOverlap
+        self.enableFallback = enableFallback
+        self.fallbackConfidenceFloor = fallbackConfidenceFloor
+        self.fallbackPairConfidenceFloor = fallbackPairConfidenceFloor
+        self.fallbackKneeWeight = fallbackKneeWeight
+        self.fallbackGeometryScale = fallbackGeometryScale
+        self.fallbackPickStrategy = fallbackPickStrategy
+        self.temporalWindowSize = max(1, temporalWindowSize)
+        self.temporalMinCount = max(1, temporalMinCount)
+        self.temporalIQRGate = max(0, temporalIQRGate)
+        self.temporalFoldLowAngle = temporalFoldLowAngle
+        self.temporalFoldHighAngle = temporalFoldHighAngle
     }
 
     /// Phase 1 默认配置（Gate-G0 校准值）。
@@ -110,6 +163,34 @@ public enum BoardEdgeDetector {
         cgImage: CGImage,
         pose: BodyPoseData,
         config: BoardEdgeConfig = .standard
+    ) throws -> BoardEdgeObservation {
+        let primary = try primaryDetection(cgImage: cgImage, pose: pose, config: config)
+
+        switch primary.status {
+        case .board, .rejectPosture, .disabled:
+            return primary
+        default:
+            guard config.enableFallback,
+                  let fallback = synthesizeFallback(
+                    pose: pose,
+                    originalStatus: primary.status,
+                    config: config
+                  ) else {
+                return primary
+            }
+            return BoardEdgeObservation(
+                status: .fallback,
+                subjectFraction: primary.subjectFraction,
+                ankleConfidence: primary.ankleConfidence,
+                fallbackAxis: fallback
+            )
+        }
+    }
+
+    private static func primaryDetection(
+        cgImage: CGImage,
+        pose: BodyPoseData,
+        config: BoardEdgeConfig
     ) throws -> BoardEdgeObservation {
         guard let ankle = ankleCenter(from: pose, config: config) else {
             return BoardEdgeObservation(status: .ankleLowCnf)
@@ -176,6 +257,85 @@ public enum BoardEdgeDetector {
             elongation: geometry.elongation,
             subjectFraction: subjectFraction,
             ankleConfidence: ankle.confidence
+        )
+    }
+
+    // MARK: - 姿态几何降级（ADR-001）
+
+    static func synthesizeFallback(
+        pose: BodyPoseData,
+        originalStatus: BoardEdgeStatus,
+        config: BoardEdgeConfig
+    ) -> FallbackAxis? {
+        let ankleCandidate = fallbackAxis(
+            source: .anklePair,
+            first: pose.leftAnklePoint,
+            second: pose.rightAnklePoint,
+            sourceWeight: 1.0,
+            originalStatus: originalStatus,
+            config: config
+        )
+        // ADR-002 (2026-09-20)：ankleOnly 策略下跳过膝对，避免 §12.11 精度拖累。
+        let kneeCandidate: FallbackAxis?
+        switch config.fallbackPickStrategy {
+        case .ankleOnly:
+            kneeCandidate = nil
+        case .confMax:
+            kneeCandidate = fallbackAxis(
+                source: .kneePair,
+                first: pose.leftKneePoint,
+                second: pose.rightKneePoint,
+                sourceWeight: config.fallbackKneeWeight,
+                originalStatus: originalStatus,
+                config: config
+            )
+        }
+
+        switch (ankleCandidate, kneeCandidate) {
+        case let (ankle?, knee?):
+            return ankle.confidence >= knee.confidence ? ankle : knee
+        case let (ankle?, nil):
+            return ankle
+        case let (nil, knee?):
+            return knee
+        case (nil, nil):
+            return nil
+        }
+    }
+
+    private static func fallbackAxis(
+        source: BoardFallbackSource,
+        first: PoseJointPoint?,
+        second: PoseJointPoint?,
+        sourceWeight: Double,
+        originalStatus: BoardEdgeStatus,
+        config: BoardEdgeConfig
+    ) -> FallbackAxis? {
+        guard let first, let second else { return nil }
+
+        let pointConfidence = (first.confidence + second.confidence) / 2
+        guard pointConfidence >= config.fallbackPairConfidenceFloor else { return nil }
+
+        let dx = second.x - first.x
+        let dy = second.y - first.y
+        let distance = sqrt(dx * dx + dy * dy)
+        guard distance > 0.001 else { return nil }
+
+        let geometryConfidence = min(1, max(0, distance * config.fallbackGeometryScale))
+        let confidence = pointConfidence * geometryConfidence * sourceWeight
+        guard confidence >= config.fallbackConfidenceFloor else { return nil }
+
+        var degrees = abs(atan2(dy, dx) * 180 / Double.pi)
+        if degrees > 90 { degrees = 180 - degrees }
+
+        return FallbackAxis(
+            source: source,
+            axisAngle: degrees,
+            centerX: (first.x + second.x) / 2,
+            centerY: (first.y + second.y) / 2,
+            lengthRatio: distance,
+            confidence: confidence,
+            originalStatus: originalStatus
         )
     }
 
