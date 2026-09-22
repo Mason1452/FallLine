@@ -153,6 +153,11 @@ public struct AxisGeometry: Equatable {
 /// 远景 / 非站立 / 跨实例等情况诚实输出对应状态，绝不猜测。
 public enum BoardEdgeDetector {
 
+    /// 复用的 Core Image 上下文。board-edge 路径在多帧并行任务中被调用，
+    /// 旧实现每帧每实例 `CIContext()` 反复重建（内部建 Metal/缓存池）。
+    /// `static let` 由 dispatch_once 惰性初始化、CIContext 渲染线程安全。
+    private static let sharedCIContext = CIContext()
+
     /// 对单帧执行板身刃线检测。
     /// - Parameters:
     ///   - cgImage: 全分辨率帧（mask/PCA 需要足部细节）。
@@ -373,7 +378,9 @@ public enum BoardEdgeDetector {
     static func foregroundInstances(cgImage: CGImage) throws -> [InstanceMask] {
         let request = VNGenerateForegroundInstanceMaskRequest()
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-        try handler.perform([request])
+        try autoreleasepool {
+            try handler.perform([request])
+        }
         guard let observation = request.results?.first else { return [] }
 
         var masks: [InstanceMask] = []
@@ -415,28 +422,31 @@ public enum BoardEdgeDetector {
         width: Int,
         height: Int
     ) -> [UInt8]? {
-        guard let pixelBuffer = try? observation.generateMaskedImage(
-            ofInstances: IndexSet(integer: instance),
-            from: handler,
-            croppedToInstancesExtent: false
-        ) else { return nil }
-        let ci = CIImage(cvPixelBuffer: pixelBuffer).oriented(.downMirrored)
-        guard let masked = CIContext().createCGImage(
-            ci,
-            from: CGRect(x: 0, y: 0, width: width, height: height)
-        ) else { return nil }
         var data = [UInt8](repeating: 0, count: width * height * 4)
-        guard let context = CGContext(
-            data: &data,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-        context.draw(masked, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return data
+        let drew: Bool = autoreleasepool {
+            guard let pixelBuffer = try? observation.generateMaskedImage(
+                ofInstances: IndexSet(integer: instance),
+                from: handler,
+                croppedToInstancesExtent: false
+            ) else { return false }
+            let ci = CIImage(cvPixelBuffer: pixelBuffer).oriented(.downMirrored)
+            guard let masked = sharedCIContext.createCGImage(
+                ci,
+                from: CGRect(x: 0, y: 0, width: width, height: height)
+            ) else { return false }
+            guard let context = CGContext(
+                data: &data,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return false }
+            context.draw(masked, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        return drew ? data : nil
     }
 
     // MARK: - 实例归属

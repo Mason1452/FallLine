@@ -929,6 +929,17 @@ release 构建 + `--board-edge` 44 片全量重跑（JSON 全部含 `summary.boa
 - `boardTrajectory` 字段及 `BoardTemporalAxisAggregator` **保留为纯诊断**，默认仍仅 `--board-edge` 时产出，不进任何评分 / cap / report 文案；
 - **激活候选 F（§12.14，ADR-003 CoreML 板边分割）**——这是 44 片上第三次（方向 A/B、相机补偿 C、时序 D）撞穿 2D 几何天花板后的唯一剩余视觉路径；
 - Gate-G1 v3 FAIL 结论与门槛数字维持不变。
+```
 
+#### 12.15.4 ADR-005（2026-09-22）：光流改流式滑动窗，修复 iOS OOM
+
+- **背景**：用户在真机跑 iOS App 时启动分析即被系统 jetsam 终止、无崩溃日志——典型 OOM。定位为 `VideoAnalyzer.frameCache` 把**全片每帧 CGImage 全程驻留**；默认 `sampleInterval` 已从 0.2(5fps) 升到 1/30(30fps)，帧数 ×6，60s 视频缓存峰值约 2GB（640×480 光流图 ×1800 帧），超出真机上限。macOS CLI 内存宽松故长期未暴露。
+- **决策**：光流天然是因果逐对累积，仅含求均值 / circular 求和 / median 三个归约。改为：
+  - `FlowMetricsCalculator` 新增有状态 `FlowAccumulator`（`addPair` 逐帧喂入 + `finalize` 归约），公式与喂入顺序逐行对齐原 `computeWithDirections`；
+  - `VideoAnalyzer` 删除全片 `frameCache` / `frameCacheTimes`，改为只保留相邻一帧的 `previousFlowFrame` 滑动缓冲，抽帧时算完一对即释放前帧；指标与方向在 analyze 收尾时 finalize 缓存，`generateSummary` 直接读缓存。
+  - 新增 `flowSampleRadius` init 参数透传（默认 3）。
+- **内存效果**：光流相关常驻内存从 O(帧数 × 图大小) 降到 O(1)（两张相邻光流图，数 MB 级），与视频时长无关。
+- **评分零变化（已验证）**：`swift test` 314/314；对 BND2_TOP / BND2_L1 / BND_HI2 三片用新 release 与 3b860da 旧缓存版产出 JSON 比对，除 `videoPath` 临时目录名外 **bit-identical**。
+- **不影响**：评分公式、JSON 结构（无字段增减）、CLI / iOS 对外接口、Gate-G1 v3 结论。
 
 

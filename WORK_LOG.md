@@ -1,6 +1,29 @@
 # FallLine Work Log
 
-## Current State (2026-09-21 方向 C 时序聚合 S4 完成：44 片实测 Gate-G2 **NO-GO**（方向反转），字段留诊断，下一步激活候选 F CoreML 板边分割)
+## Current State (2026-09-22 全局性能优化：流式光流消除全片帧缓存 + 3D 两阶段按需 + 复用 CIContext + autoreleasepool + 并发批默认 8→4。对真实提交版 HEAD：峰值 RSS 417→295MB（-29%）、user 39.7→34.6s（-13%）、sys 11.9→6.7s（-44%）；314/314 + 两片 JSON bit-identical，评分零变化)
+
+**证据驱动的热点审计**：对同一片（1080×1920，CLI 5fps，205 次抽帧）隔离测量——默认 2D+3D 35.0s/user 37.6s/RSS 217MB；`--no-3d` 仅 2D 25.7s/**user 2.8s**/RSS 93MB；关光流 28.0s/user 36.5s；光流 medium 精度几乎不省 CPU。**结论：3D 姿态请求是 CPU/内存绝对大头（约 34s user、~124MB），2D 走 ANE/GPU；全片 CGImage 帧缓存是常驻内存与 OOM 根因；光流非 CPU 瓶颈**。
+
+**本轮降本（相对真实提交版 HEAD，全部零评分变化）**：
+1. **光流改流式滑动窗（内存主收益）**：删除旧 `frameCache` 全片 CGImage 驻留，只留相邻一帧的 `previousFlowFrame`，经有状态 `FlowAccumulator`（addPair/finalize）逐对算完即释放，常驻 O(帧数×图)→**O(1)**。修复 iOS 30fps 下 60s 约 2GB 触发 jetsam 的崩溃。
+2. **3D 改两阶段按需调用（CPU 主收益）**：旧实现 2D/3D 同一 handler 一次批量发出，但 `PoseMetrics3DAdapter.fuse` 只在 2D 也检出姿态的帧采用 3D，2D 未检出（本片 61/205 ≈ 30%）的 3D 结果被丢弃、纯属浪费。改为先跑 2D，**仅当 2D 检出才补跑 3D**，同一图像独立推理输出一致；并显式固定 `revision = .revision1`，跳过每帧 revision 枚举。
+3. **autoreleasepool** 包裹抽帧 / 姿态 perform / 光流 perform，回收 AVFoundation/Vision 临时对象，压低瞬时内存（iOS 关键）。
+4. **复用 CIContext（两处）**：`downscaleImageForFlow` 不再每帧新建，改 analyzer 级 `lazy sharedCIContext`；另修掉 [BoardEdgeDetector.instanceAlpha](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift#L429)（board-edge 前景 mask→CGImage）漏网的每实例 `CIContext()`，改枚举级 `static let sharedCIContext`（44 片 `--board-edge` 数千次重建消除）。
+5. **并发批 8→4（默认值调优）**：对 43.6s 片（218 帧）扫 batch 1/2/4/8——8: 36.2s/user 39.6s/**RSS 236MB**；4: 38.6s/user 33.7s/**RSS 193MB**；2: 45.8s/177MB；1: 58.9s/168MB。4→8 墙钟仅快 7% 却 RSS **+22%**、user **+18%**，故取拐点 **4**。
+
+**曾尝试后放弃（记录以免重复踩坑）**：① 复用 `VNDetectHumanBodyPose3DRequest` —— 3D 请求带时序跟踪状态，复用会改变关键点置信度/坐标，放弃（改为两阶段 + 固定 revision）；② 复用 2D `VNDetectHumanBodyPoseRequest`（对象池+串行锁）—— 省 CPU 有限且与批量并发锁竞争，回退为每帧新建；③ visual 候选线只解码踝下 ROI 瓦片 —— 瓦片边缘裁掉线端点采样，使 lengthRatio/center 漂移、boardAngle 融合角变化（非 bit-identical），而全帧 PixelImage 缓冲在流式帧流下只活单帧、不累积，故整体回退 ROI，恢复全帧解码。
+
+**验证（权威口径）**：`swift test` **314/314**、`swift build -c release` 过；用 `git stash` 临时回退到真实提交版 HEAD 构建取基线，最终版两片（good 43.6s / middle 10.5s）JSON 与真实 HEAD **bit-identical**（非与被污染中间态比）。总量收益：峰值 RSS **417→295MB（-29%）**、user **39.7→34.6s（-13%）**、sys **11.9→6.7s（-44%）**、墙钟 40.1→39.0s（-2.7%）。iOS 经 `import FallLineCore` 直接消费包依赖（`VideoAnalyzer(videoURL:)` 走默认 batch=4 + 流式光流），全部优化自动生效、无需同步副本。调参钩子 `FALLLINE_BATCH_SIZE`、`FALLLINE_FLOW_ACCURACY=medium`（均非默认）。详见 [delta_update 2026-09-22](file:///Users/mingsen/Project/FallLine/delta_update.md)。
+
+**下一步（待用户，更大降本属评分权衡）**：若要向 2D-only（user 2.8s/RSS 93MB）进一步靠拢，需默认关 3D 或自适应按需 3D，但 3D 以 0.9 置信覆盖膝角、默认关会改评分（本片 84→76），须重校锚点；放松抽帧 zero-tolerance 可压 25s 墙钟硬底但帧会偏移。候选 F 决策标准维持，模型选型等用户测试结论。
+
+## Previous State (2026-09-22 光流改流式滑动窗，修复 iOS OOM：frameCache 全片驻留消除，314/314 + 真实视频 bit-identical)
+
+**iOS OOM 修复（架构性变更，评分零变化）**：用户真机跑 App 启动分析即被 jetsam 杀、无崩溃日志。根因是旧 `VideoAnalyzer.frameCache` 把全片每帧 CGImage 全程驻留；默认 `sampleInterval` 已升到 1/30(30fps)，帧数 ×6，60s 视频光流图缓存峰值约 **2GB** 超真机上限（macOS 内存宽松未暴露）。改造：[FlowMetricsCalculator](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift) 新增有状态 `FlowAccumulator`（addPair/finalize，归约逐行对齐原实现）；[VideoAnalyzer](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift) 删除全片 frameCache/frameCacheTimes/computeFlowMetrics()，改为只留相邻一帧的 `previousFlowFrame` 滑动缓冲，算完一对即释放，analyze 收尾 finalize、generateSummary 读缓存；新增 `flowSampleRadius` 参数透传（默认 3）。光流常驻内存 O(帧数×图)→**O(1)**（两张相邻图，数 MB）。验证：`swift build` debug+release 过、`swift test` **314/314**、零诊断；BND2_TOP/BND2_L1/BND_HI2 新 release 与 3b860da 旧版 JSON 除 `videoPath` 临时路径外 **bit-identical**。无 JSON 字段增减、对外接口不变。详见 [spec §12.15.4 ADR-005](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md#L934) 与 [delta_update 2026-09-22](file:///Users/mingsen/Project/FallLine/delta_update.md#L30)。
+
+**下一步（待用户）**：真机重跑确认不再 OOM；候选 F 决策标准（IoU≥0.65 / 推理≤20ms / farShot 恢复率≥50%）与 100 帧 GT 最小集维持，模型选型继续等用户测试结论。
+
+## Previous State (2026-09-21 方向 C 时序聚合 S4 完成：44 片实测 Gate-G2 **NO-GO**（方向反转），字段留诊断，下一步激活候选 F CoreML 板边分割)
 
 **刃线/轨迹检测 Phase 2 — §12.15 S4 落地，Gate-G2 硬闸门判 NO-GO（评分零污染）**：release 构建 + `--board-edge` 44 片 8364 帧全量重跑（JSON 全部含 `summary.boardTrajectory`，持久化 `outputs/board_edge_p2/trajectory_json/`）；扩展 [lowend_separability_audit.py](file:///Users/mingsen/Project/FallLine/scripts/lowend_separability_audit.py) 新增 `--trajectory`（margin + LOOCV + 景别残差）。核心结果 mean stableWindowRate：high=0.384 / mid=0.328 / low=**0.405**——连续性不随刻滑质量上升、反而弱负相关；主口径 high(21) vs low(10) 最强时序特征 margin=−0.13σ、LOOCV=45.2%、专业误伤 11，低端11片对照 −1.03σ 同向反转；最强单一信号 farShotFrac 0.75σ/71% 仍不达标。**margin 1.5σ / LOOCV 90% / 专业零误伤三 FAIL → NO-GO**，日志 [gate_g2_trajectory_44.log](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/gate_g2_trajectory_44.log)，详见 [spec §12.15.3](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md#L911) 与 [delta_update S4](file:///Users/mingsen/Project/FallLine/delta_update.md#L17)。
 

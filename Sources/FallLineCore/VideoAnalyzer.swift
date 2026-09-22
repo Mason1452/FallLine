@@ -49,6 +49,8 @@ public class VideoAnalyzer {
     private let batchSize: Int
     /// 光流缓存帧的最大尺寸，超过则下采样（nil = 不限制）
     private let flowFrameMaxSize: CGSize?
+    /// 光流采样窗半径（透传给 FlowMetricsCalculator，默认 3 = 7×7 窗均值）
+    private let flowSampleRadius: Int
 
     /// 是否启用板身刃线检测（Phase 1 诊断能力，默认关）。
     /// 启用后逐帧在抽帧原图上跑前景分割 + 踝下 ROI PCA，结果写入
@@ -57,12 +59,20 @@ public class VideoAnalyzer {
     /// 板身刃线检测门控配置（仅 `enableBoardEdge` 时使用）。
     private let boardEdgeConfig: BoardEdgeConfig
 
-    /// 光流分析用帧缓存（仅缓存姿态检测成功的帧）
-    private var frameCache: [(image: CGImage, pose: BodyPoseData)] = []
-    /// 帧缓存对应的时间（与 frameCache 一一对应）
-    private var frameCacheTimes: [Double] = []
-    /// 光流行进方向缓存（由 computeFlowMetrics() 在一次光流遍历中填充）
+    /// 流式光流的上一帧滑动缓冲（仅保留相邻一帧，算完一对即释放）。
+    /// 替代旧的全片 frameCache，避免 30fps 下全片 CGImage 驻留导致 iOS OOM。
+    private var previousFlowFrame: (image: CGImage, pose: BodyPoseData, time: Double)?
+    /// 每个已喂入光流对的"后帧时间"，与累加器内 directions 一一对应。
+    private var pairNextTimes: [Double] = []
+    /// 光流指标缓存（analyze 流式计算完成后填充，供 generateSummary 读取）
+    private var cachedFlowMetrics: FlowMetrics?
+    /// 光流行进方向缓存（流式光流 finalize 后填充）
     private var cachedTravelDirections: [(time: Double, angle: Double, confidence: Double)] = []
+
+    /// 复用的 Core Image 上下文。CIContext 初始化开销大（内部建立 Metal/缓存池），
+    /// 旧实现每帧 `CIContext()` 会反复重建；此处全局只建一个。
+    /// downscaleImageForFlow 在批次结果收集后的串行循环中调用，无需加锁。
+    private lazy var sharedCIContext = CIContext()
 
     /// 初始化分析器
     /// - Parameters:
@@ -72,16 +82,19 @@ public class VideoAnalyzer {
     ///     20ms 事件偏差 → 20° 膝角误差，故升至 30fps）
     ///   - maxFrameSize: 最大帧分辨率，nil 使用视频原始尺寸（默认 1920x1080）
     ///   - visionOptions: Vision 请求选项（默认仅姿态检测）
-    ///   - batchSize: 并行分析批次大小（默认 8）
+    ///   - batchSize: 并行分析批次大小（默认 4；实测 4→8 墙钟仅快 7% 但峰值 RSS +22%、
+    ///     user +18%，故取内存/CPU 更优的 4。可用 FALLLINE_BATCH_SIZE 覆盖）
     ///   - flowFrameMaxSize: 光流缓存帧最大尺寸（默认 640x480）
+    ///   - flowSampleRadius: 光流采样窗半径（默认 3 = 7×7，0 = 单点）
     public init(
         videoURL: URL,
         pointConfidenceThreshold: VNConfidence = 0.3,
         sampleInterval: Double = 1.0 / 30.0,
         maxFrameSize: CGSize? = CGSize(width: 1920, height: 1080),
         visionOptions: VisionAnalysisOptions = .skiAnalysis,
-        batchSize: Int = 8,
+        batchSize: Int = 4,
         flowFrameMaxSize: CGSize? = CGSize(width: 640, height: 480),
+        flowSampleRadius: Int = 3,
         enableBoardEdge: Bool = false,
         boardEdgeConfig: BoardEdgeConfig = .standard
     ) {
@@ -89,8 +102,12 @@ public class VideoAnalyzer {
         self.asset = AVAsset(url: videoURL)
         self.sampleInterval = max(1.0 / 60.0, sampleInterval)
         self.maxFrameSize = maxFrameSize
-        self.batchSize = max(1, batchSize)
+        // 实验调参：FALLLINE_BATCH_SIZE 覆盖并发度（测量内存/耗时权衡用，未设置则用显式入参）。
+        let envBatch = ProcessInfo.processInfo.environment["FALLLINE_BATCH_SIZE"]
+            .flatMap(Int.init)
+        self.batchSize = max(1, envBatch ?? batchSize)
         self.flowFrameMaxSize = flowFrameMaxSize
+        self.flowSampleRadius = max(0, flowSampleRadius)
         self.enableBoardEdge = enableBoardEdge
         self.boardEdgeConfig = boardEdgeConfig
         self.frameAnalyzer = VisionFrameAnalyzer(options: visionOptions)
@@ -155,8 +172,16 @@ public class VideoAnalyzer {
     /// - Parameter progressHandler: 进度回调（0.0~1.0），可选
     /// - Returns: 每帧的检测结果数组
     public func analyze(progressHandler: ((Double) -> Void)? = nil) async throws -> [DetectionResult] {
-        frameCache.removeAll(keepingCapacity: true)
-        frameCacheTimes.removeAll(keepingCapacity: true)
+        previousFlowFrame = nil
+        pairNextTimes.removeAll(keepingCapacity: true)
+        cachedFlowMetrics = nil
+        cachedTravelDirections.removeAll(keepingCapacity: true)
+
+        let flowCalculator = FlowMetricsCalculator(
+            sampleInterval: sampleInterval,
+            flowSampleRadius: flowSampleRadius
+        )
+        let flowAccumulator = flowCalculator.makeAccumulator()
 
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
         guard !videoTracks.isEmpty else {
@@ -186,7 +211,9 @@ public class VideoAnalyzer {
             for _ in 0..<batchSize where currentTime < totalSeconds {
                 let time = CMTime(seconds: currentTime, preferredTimescale: 600)
                 do {
-                    let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
+                    let cgImage = try autoreleasepool {
+                        try imageGenerator.copyCGImage(at: time, actualTime: nil)
+                    }
                     batch.append((globalIndex, cgImage, time))
                 } catch {
                     results.append(DetectionResult(
@@ -242,19 +269,41 @@ public class VideoAnalyzer {
                 return collected.sorted(by: { $0.0 < $1.0 })
             }
 
-            // 3. 按时间顺序追加结果并更新帧缓存
+            // 3. 按时间顺序追加结果，并以相邻帧滑动缓冲流式喂入光流累加器
             for (index, result) in batchResults {
                 results.append(result)
-                if result.bodyPose.detected && result.bodyPose.visibility != .none,
-                   let item = batch.first(where: { $0.index == index }) {
-                    let cachedImage = downscaleImageForFlow(item.cgImage)
-                    frameCache.append((cachedImage, result.bodyPose))
-                    frameCacheTimes.append(result.time)
+                guard result.bodyPose.detected && result.bodyPose.visibility != .none,
+                      let item = batch.first(where: { $0.index == index }) else {
+                    continue
                 }
+                let profNoFlow = ["1", "true", "yes"].contains(
+                    (ProcessInfo.processInfo.environment["FALLLINE_PROF_NO_FLOW"] ?? "").lowercased())
+                guard !profNoFlow else { continue }
+                let flowImage = downscaleImageForFlow(item.cgImage)
+                let current = (image: flowImage, pose: result.bodyPose, time: result.time)
+                if let prev = previousFlowFrame {
+                    await flowAccumulator.addPair(
+                        prevImage: prev.image,
+                        prevPose: prev.pose,
+                        nextImage: current.image,
+                        nextPose: current.pose
+                    )
+                    pairNextTimes.append(current.time)
+                }
+                previousFlowFrame = current
             }
 
             progressHandler?(min(currentTime / totalSeconds, 1.0))
         }
+
+        // 流式光流收尾：产出指标 + 行进方向缓存（供 generateSummary / CLI 使用）
+        let finalized = flowAccumulator.finalize()
+        cachedFlowMetrics = finalized.metrics
+        var travelDirs: [(time: Double, angle: Double, confidence: Double)] = []
+        for (i, dir) in finalized.directions.enumerated() where dir.confidence > 0 && i < pairNextTimes.count {
+            travelDirs.append((time: pairNextTimes[i], angle: dir.angle, confidence: dir.confidence))
+        }
+        cachedTravelDirections = travelDirs
 
         // 时序平滑：对全部帧的姿态角度应用 1€ Filter，再重新计算评分
         // 消除 Vision 逐帧检测抖动，避免 motionStability 惩罚被抖动放大
@@ -338,7 +387,12 @@ public class VideoAnalyzer {
 
         // Step 4: 评分
         let poseScore = poseScorer.score(pose: bodyPose)
-        let visualBoardObservation = BoardVisualLineDetector.detect(cgImage: cgImage, pose: bodyPose)
+        // 视觉候选线对全帧逐像素解码（约 8MB/帧 1080p）。帧流已是流式滑动窗、
+        // 不再全片缓存帧，故该缓冲只在单帧分析期间存活；用 autoreleasepool 包裹，
+        // 帧结束即释放，不会随帧数累积而抬高峰值。
+        let visualBoardObservation: BoardObservation? = autoreleasepool {
+            BoardVisualLineDetector.detect(cgImage: cgImage, pose: bodyPose)
+        }
 
         // Phase 1 诊断：板身刃线检测（默认关）。仅写诊断字段，不接触评分。
         // 诊断失败须局部隔离，不能拖垮同帧已成功的姿态/评分结果。
@@ -401,9 +455,12 @@ public class VideoAnalyzer {
             reliableFrames: reliableFrames
         )
 
-        // 光流调制
-        let flowMetrics = await computeFlowMetrics()
-        let flowCalculator = FlowMetricsCalculator(sampleInterval: sampleInterval)
+        // 光流调制（流式光流已在 analyze 阶段算好并缓存）
+        let flowMetrics = cachedFlowMetrics ?? .empty
+        let flowCalculator = FlowMetricsCalculator(
+            sampleInterval: sampleInterval,
+            flowSampleRadius: flowSampleRadius
+        )
 
         // P0 (2026-09-15) Flow Modulation Edge-Confidence Gating：走刃证据置信度门控
         // - boardKinematicConfidence < 0.30 时，令 modulation = min(mod, 1.0)——只允许向下修正
@@ -776,35 +833,7 @@ public class VideoAnalyzer {
 
     // MARK: - 光流指标计算
 
-    /// 基于缓存的帧对计算光流指标，同时缓存行进方向供后续查询。
-    private func computeFlowMetrics() async -> FlowMetrics {
-        guard frameCache.count >= 2 else { return .empty }
-
-        let calculator = FlowMetricsCalculator(sampleInterval: sampleInterval)
-
-        var pairs: [(prevImage: CGImage, prevPose: BodyPoseData, nextImage: CGImage, nextPose: BodyPoseData)] = []
-        for i in 0..<(frameCache.count - 1) {
-            pairs.append((
-                prevImage: frameCache[i].image,
-                prevPose: frameCache[i].pose,
-                nextImage: frameCache[i + 1].image,
-                nextPose: frameCache[i + 1].pose
-            ))
-        }
-
-        let result = await calculator.computeWithDirections(from: pairs)
-
-        // 填充行进方向缓存
-        var travelDirs: [(time: Double, angle: Double, confidence: Double)] = []
-        for (i, dir) in result.directions.enumerated() where dir.confidence > 0 {
-            travelDirs.append((time: frameCacheTimes[i + 1], angle: dir.angle, confidence: dir.confidence))
-        }
-        cachedTravelDirections = travelDirs
-
-        return result.metrics
-    }
-
-    /// 返回由 computeFlowMetrics() 缓存的光流行进方向。
+    /// 返回流式光流缓存的行进方向。
     public func flowTravelDirections() -> [(time: Double, angle: Double, confidence: Double)] {
         return cachedTravelDirections
     }
@@ -855,8 +884,7 @@ public class VideoAnalyzer {
         let ciImage = CIImage(cgImage: image)
         let scale = min(maxSize.width / CGFloat(width), maxSize.height / CGFloat(height))
         let filtered = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        let context = CIContext()
-        return context.createCGImage(filtered, from: filtered.extent) ?? image
+        return sharedCIContext.createCGImage(filtered, from: filtered.extent) ?? image
     }
 
     // MARK: - 工具

@@ -118,28 +118,35 @@ public class VisionFrameAnalyzer {
             ? VNDetectHumanBodyPoseRequest() : nil
         if let r = bodyPoseRequest { r.usesCPUOnly = usesCPUOnly; requests.append(r) }
 
-        // 3D 姿态请求（macOS 14+）。与 2D 并行发出，由同一个 VNImageRequestHandler 一次批量执行。
-        let bodyPose3DRequest: VNDetectHumanBodyPose3DRequest? = {
-            guard options.contains(.bodyPose3D) else { return nil }
-            if #available(macOS 14.0, iOS 17.0, *) {
-                return VNDetectHumanBodyPose3DRequest()
-            } else {
-                return nil
-            }
+        // 3D 姿态请求（macOS 14+）：不与 2D 同批，改为下方「2D 检出姿态后再补跑」。
+        let wantsBodyPose3D: Bool = {
+            guard options.contains(.bodyPose3D) else { return false }
+            if #available(macOS 14.0, iOS 17.0, *) { return true } else { return false }
         }()
-        if let r = bodyPose3DRequest { r.usesCPUOnly = usesCPUOnly; requests.append(r) }
 
+        // 第一阶段：除 3D 外的全部请求（含 2D 姿态），一次批量执行。
         if !requests.isEmpty {
-            try requestHandler.perform(requests)
+            try autoreleasepool {
+                try requestHandler.perform(requests)
+            }
         }
 
-        let bodyPose3DObservation: VNHumanBodyPose3DObservation? = {
-            if #available(macOS 14.0, iOS 17.0, *) {
-                return bodyPose3DRequest?.results?.first
-            } else {
-                return nil
+        // 第二阶段：仅当 2D 检出姿态时才在同一图像上补跑 3D。
+        // 3D 结果只在 PoseMetrics3DAdapter.fuse（且 2D 也检测到姿态）时被采用，
+        // 2D 未检出时跑 3D 纯属浪费（约占三成调用）。两阶段在同一图像上独立推理，
+        // 3D 输出与旧的「单次批量双路」一致，故结果不变、成本下降。
+        var bodyPose3DObservation: VNHumanBodyPose3DObservation?
+        if wantsBodyPose3D, bodyPoseRequest?.results?.first != nil {
+            let bodyPose3DRequest = VNDetectHumanBodyPose3DRequest()
+            bodyPose3DRequest.revision = VNDetectHumanBodyPose3DRequestRevision1
+            bodyPose3DRequest.usesCPUOnly = usesCPUOnly
+            try autoreleasepool {
+                try requestHandler.perform([bodyPose3DRequest])
             }
-        }()
+            if #available(macOS 14.0, iOS 17.0, *) {
+                bodyPose3DObservation = bodyPose3DRequest.results?.first
+            }
+        }
 
         return RawVisionResult(
             humanDetections: humanDetectionRequest?.results ?? [],

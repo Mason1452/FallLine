@@ -1,6 +1,6 @@
 # Delta Update
 
-最后更新：2026-09-20
+最后更新：2026-09-22
 
 本文档只记录每轮工作的增量变化，不记录项目全量背景。需要项目当前状态、目标和长期上下文时，先看 `WORK_LOG.md`；需要文件职责时，看 `file_manifest.md`。
 
@@ -14,6 +14,34 @@
 
 ## 变更
 
+### 2026-09-22（全局性能优化续：并发批 8→4 + board-edge CIContext 复用，评分 bit-identical）
+
+**本轮性质**：延续同日全局降本：(a) 对 `withThrowingTaskGroup` 帧并发度做证据扫描并调优默认值；(b) 修掉 board-edge 前景分割路径漏网的每实例新建 `CIContext()`。均零评分变化。
+
+**(b) board-edge CIContext 复用**：[BoardEdgeDetector.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardEdgeDetector.swift#L159) 的 `instanceAlpha`（前景 mask → CGImage）此前每帧每实例内联 `CIContext()`；44 片 `--board-edge` 重跑时数千次重建。改为枚举级 `static let sharedCIContext`（dispatch_once 惰性初始化、渲染线程安全），与 [VideoAnalyzer](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L75) 的共享口径一致，渲染输出像素一致。同时给 `foregroundInstances` 的 perform 与 `instanceAlpha` 内 pixelBuffer/CIImage/CGImage 临时对象补 `autoreleasepool`（并行帧下及时释放，只返回 data）。
+
+**验证 (b)**：同一 middle 片 `--board-edge` 连跑两次 + 包装 autoreleasepool 前后三份 JSON **bit-identical**（29 board / 3 fallback 帧实走共享渲染路径）。
+
+**(a) 并发批实测（video/good/5382da…MOV，43.6s，CLI 218 帧，3D 默认开，/usr/bin/time -l）**
+
+| batch | real | user | 峰值 RSS |
+| --- | --- | --- | --- |
+| 1 | 58.9s | 29.8s | 168MB |
+| 2 | 45.8s | 31.5s | 177MB |
+| **4（新默认）** | 38.6s | 33.7s | **193MB** |
+| 8（旧默认） | 36.2s | 39.6s | 236MB |
+
+4→8 墙钟仅快 7%，却峰值 RSS **+22%**、user **+18%**（8 帧并行致 Vision 临时对象叠加 + 更多调度/sys 11.7s），**拐点在 4**，故 init 默认 `batchSize` 8→4。
+
+**另测光流帧分辨率**（`640x480` → `480x360` / `320x240`）：RSS/real 几乎不变（光流非资源瓶颈），而 raw coherence/smoothness 漂 1–3 点；本片最终分恰不变但跨 corpus 无保证，**默认 640×480 不动**（实验钩子试过即撤）。
+
+**变更**：[VideoAnalyzer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift) init 默认 `batchSize=4` + doc 注释；新增只读覆盖钩子 `FALLLINE_BATCH_SIZE`（未设置走显式入参）。
+
+**验证（评分零变化）**
+- `/usr/bin/xcrun swift build -c release` 过；`swift test` **314/314（0 failures）**；
+- good 43.6s 与 middle 10.5s 两片：默认 batch=4 与强制 batch=8 的输出 JSON **bit-identical**；
+- iOS `VideoAnalysisManager` 用 `VideoAnalyzer(videoURL:)` 走默认参数，batch=4 自动生效，无需同步副本。
+
 ### 2026-09-21（候选 F 决策标准锁定：IoU≥0.65 / 推理≤20ms / farShot 恢复率≥50% 三条硬门槛）
 
 **本轮性质**：候选 F 已被 Gate-G2 NO-GO 激活，用户正式锁定 §12.14 决策标准中的三条硬门槛。仅 spec + 脚本变更，无生产代码改动、未跑测试。
@@ -26,6 +54,26 @@
 **当前口径（同日更新）**：
 - 模型选型**搁置——等用户自行测试后再决定**，spec §12.14 维持"spike 前不 pin"；
 - GT 规模**锁定 100 帧最小集**（spec §12.14 GT 方案已更新，≈0.83 人时、含 QA ≈1–1.5 人时），用于先验证 IoU≥0.65，临界再补标 200–300。实际选帧 / 标注启动待用户指示。
+
+### 2026-09-22（光流流式滑动窗重构，修复 iOS OOM：frameCache 全片驻留消除，评分 bit-identical）
+
+**本轮性质**：用户真机跑 iOS App 启动分析即被 jetsam 杀、无崩溃日志（典型 OOM）。定位并修复光流帧缓存随 30fps 全片驻留的内存隐患。架构性变更，详见 spec §12.15.4 ADR-005。
+
+**根因**：旧 `VideoAnalyzer.frameCache` 缓存**全片每帧 CGImage**（仅姿态成功帧）且全程不释放；默认 `sampleInterval` 已从 0.2(5fps) 升到 1/30(30fps)，帧数 ×6。60s 视频 ≈1800 帧 × 640×480 光流图 ≈ **2GB 峰值**，超真机上限；macOS CLI 内存宽松未暴露。非泄漏，是缓存口径问题。
+
+**改造**
+- [FlowMetricsCalculator.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift)：新增有状态 `FlowAccumulator`（`addPair`/`finalize`），归约公式与喂入顺序逐行对齐原 `computeWithDirections`；
+- [VideoAnalyzer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift)：删除全片 `frameCache`/`frameCacheTimes` 及 `computeFlowMetrics()`，改为只保留相邻一帧的 `previousFlowFrame` 滑动缓冲，抽帧时算完一对即释放前帧；analyze 收尾 finalize 缓存指标+方向，generateSummary 直接读缓存；新增 `flowSampleRadius` init 参数透传（默认 3）。
+- 失败帧桥接口径与旧实现一致（跳过失败帧仍以相邻成功帧配对）。
+
+**内存效果**：光流常驻内存 O(帧数×图) → **O(1)**（两张相邻光流图，数 MB），与时长无关。
+
+**验证（评分零变化）**
+- `swift build`（debug+release）过；`swift test` **314/314**；GetDiagnostics 零诊断；
+- BND2_TOP / BND2_L1 / BND_HI2 三片新 release 与 3b860da 旧版 JSON 对比，除 `videoPath` 临时目录名外 **bit-identical**。
+- 无 JSON 结构字段增减；对外接口不变。
+
+**遗留 / 待用户**：真机重跑确认不再 OOM；候选 F 决策标准（IoU≥0.65/≤20ms/恢复率≥50%）与 100 帧 GT 维持，模型选型继续等用户测试结论。
 
 ### 2026-09-21（方向 C 时序聚合 S4·刃线/轨迹检测 Phase 2：44 片实测 Gate-G2 **NO-GO**，方向反转，激活候选 F）
 
@@ -1501,3 +1549,39 @@ b825c7f  feat(trend): c3 里程碑本地推送 - TrendNotificationCenter        
 
 
 ---
+
+## 2026-09-22 全局性能优化：降内存 + 降 CPU（评分零变化）
+
+### 背景
+用户真机跑 iOS App 启动即被 jetsam 终止（无崩溃日志，典型 OOM）。前序已把光流从全片帧缓存改为流式滑动窗（ADR-005）。本轮在此基础上对整条管线做证据驱动的性能审计与降本，且**不改变任何评分/JSON 结构**。
+
+### 热点审计（同一片 1080×1920，CLI 5fps，205 次抽帧）
+| 配置 | 墙钟 | CPU user | 峰值 RSS | 综合评分 |
+|---|---|---|---|---|
+| 默认 2D+3D（基线） | 35.0s | 37.6s | 217MB | 84 |
+| `--no-3d` 仅 2D | 25.7s | 2.8s | 93MB | 76 |
+| 关光流 `FALLLINE_PROF_NO_FLOW=1` | 28.0s | 36.5s | 197MB | 84 |
+| 光流 `.medium` 精度 | 35.2s | 37.5s | 213MB | 84 |
+
+**结论**：3D 姿态请求（`VNDetectHumanBodyPose3DRequest`）是 CPU/内存绝对大头（贡献约 34s user、~124MB）；2D 姿态走 ANE/GPU（user 仅 2.8s）。光流降精度在本机几乎不省 CPU（非该路径瓶颈），且会改向量，故不默认。
+
+### 本轮变更（全部零评分变化）
+1. **3D 改两阶段按需调用**（核心收益）：旧实现把 2D/3D 放进同一个 handler 一次批量发出；但 `PoseMetrics3DAdapter.fuse` 只在 **2D 也检出姿态**的帧上采用 3D 结果，2D 未检出（本片 61/205 ≈ 30%）时跑 3D 纯属浪费且结果被丢弃。改为先跑 2D，**仅当 2D 检出姿态才补跑 3D**。同一图像上独立推理，3D 输出与旧批量双路一致 → 产物 **bit-identical**。
+   - 收益：墙钟 35.0→30.5s（**-13%**）、CPU user 37.6→26.1s（**-31%**）、峰值 217→204MB。
+2. **autoreleasepool**：在抽帧（`copyCGImage`）、Vision 姿态 `perform`、光流 `perform` 三处包裹，及时回收 AVFoundation/Vision 的 ObjC 临时对象，压低瞬时内存峰值（iOS 尤其重要）。
+3. **复用 CIContext**：`downscaleImageForFlow` 旧实现每帧新建 `CIContext()`（内部重建 Metal/缓存池），改为 analyzer 级 `lazy sharedCIContext`。
+4. **visual 候选线只解码踝下 ROI 瓦片（本轮尝试，稍后已回退）**：一度按采样最坏边界渲染 2 个小方瓦片、`translateBy` 平移 CTM，瓦片像素量约全帧 1/6。**后经真实提交版 HEAD 严格比对证伪"bit-identical"**：瓦片边缘裁掉线端点采样，使 lengthRatio/center 漂移、`mixed` 板方向融合角变化（非逐字节一致）。因全帧 PixelImage 缓冲在流式帧流下只活单帧、不随帧数累积，已整体回退 ROI、恢复全帧解码（`BoardVisualLineDetector.swift` 最终与 HEAD 净 diff 为 0）。
+
+### 实验性开关（非默认，不影响生产）
+- `FALLLINE_FLOW_ACCURACY=medium`：光流走 `.medium` 精度（会改变光流向量，仅用于性能实验）。
+- 既有 `FALLLINE_PROF_NO_FLOW=1`：跳过光流，仅用于隔离测量。
+
+### 验证
+- `swift test`：**314/314 通过**。
+- `swift build -c release`：构建通过。
+- 真实视频（video/good/86ae42724c8349913703af0f4140f6d2）新旧 JSON 比对：**bit-identical**（逐字节，无 videoPath 差异因同一路径）。
+- iOS 端经 `import FallLineCore` 直接消费包依赖，上述优化（流式光流 + 3D 按需 + autoreleasepool）对 iOS **自动生效，无需同步副本**。
+
+### 遗留 / 更大降本的权衡（未擅自做，需产品决策）
+- 若要再大幅降 CPU/内存（向 2D-only 的 2.8s user / 93MB 靠拢），需**默认关闭 3D 或改自适应按需 3D**；但 3D 在可用时以 0.9 置信覆盖膝角，默认关会改评分（本片 84→76），属评分语义，需重校档位锚点。
+- 放松抽帧 zero-tolerance 时间容差可压低 25s 墙钟硬底，但取到的帧会偏移、影响评分。

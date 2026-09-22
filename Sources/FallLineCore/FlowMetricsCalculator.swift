@@ -125,6 +125,102 @@ public struct FlowMetricsCalculator {
         self.flowSampleRadius = max(0, flowSampleRadius)
     }
 
+    // MARK: - 流式累加器
+
+    /// 有状态光流累加器：逐帧对喂入，内部因果累积，finalize 时产出与
+    /// [computeWithDirections](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/FlowMetricsCalculator.swift#L155) 完全一致的结果。
+    ///
+    /// 用途：VideoAnalyzer 流式抽帧时只需保留相邻两帧，算完一对即释放前帧，
+    /// 不再把全片 CGImage 缓存进内存（修复 30fps 下 frameCache 全片驻留导致的 iOS OOM）。
+    /// 归约公式与喂入顺序与一次性实现严格一致，评分零变化。
+    public final class FlowAccumulator {
+        private let owner: FlowMetricsCalculator
+
+        private var pairCount = 0
+        private var coherenceSum: Double = 0
+        private var coherenceCount = 0
+        private var hipFlowDirections: [Double] = []
+        private var velocityChanges: [Double] = []
+        private var previousVelocity: Double?
+        private var directions: [(angle: Double, confidence: Double)] = []
+
+        init(owner: FlowMetricsCalculator) {
+            self.owner = owner
+        }
+
+        /// 喂入一个相邻帧对。
+        public func addPair(
+            prevImage: CGImage,
+            prevPose: BodyPoseData,
+            nextImage: CGImage,
+            nextPose: BodyPoseData
+        ) async {
+            pairCount += 1
+
+            guard let flowVectors = await owner.sampleFlowVectors(
+                prevImage: prevImage,
+                nextImage: nextImage,
+                prevPose: prevPose,
+                nextPose: nextPose
+            ) else {
+                directions.append((angle: 0, confidence: 0))
+                return
+            }
+
+            let hipDir = atan2(flowVectors.hip.dy, flowVectors.hip.dx)
+            let ankleDir = atan2(flowVectors.ankle.dy, flowVectors.ankle.dx)
+            let dirDiff = abs(owner.angleDifferenceDegrees(hipDir, ankleDir))
+            let coherence = linearMap(dirDiff, inMin: 15, inMax: 60, outMin: 100, outMax: 0)
+            coherenceSum += coherence
+            coherenceCount += 1
+
+            hipFlowDirections.append(hipDir)
+
+            let velocity = sqrt(flowVectors.hip.dx * flowVectors.hip.dx + flowVectors.hip.dy * flowVectors.hip.dy)
+            if let prev = previousVelocity {
+                let changeRate = prev > 0 ? abs(velocity - prev) / prev : 0
+                velocityChanges.append(changeRate)
+            }
+            previousVelocity = velocity
+
+            let dx = (flowVectors.hip.dx + flowVectors.ankle.dx) / 2
+            let dy = (flowVectors.hip.dy + flowVectors.ankle.dy) / 2
+            let magnitude = sqrt(dx * dx + dy * dy)
+            if magnitude > 0 {
+                let angle = normalizeAngle(atan2(dy, dx) * 180 / Double.pi)
+                let conf = owner.flowConfidence(magnitude: magnitude)
+                directions.append((angle: angle, confidence: conf))
+            } else {
+                directions.append((angle: 0, confidence: 0))
+            }
+        }
+
+        /// 产出最终结果。口径与 `computeWithDirections` 完全相同。
+        public func finalize() -> (metrics: FlowMetrics, directions: [(angle: Double, confidence: Double)]) {
+            guard pairCount >= 2 else { return (.empty, []) }
+            guard coherenceCount > 0 else { return (.empty, directions) }
+
+            let motionCoherence = clamp(coherenceSum / Double(coherenceCount), lower: 0, upper: 100)
+            let directionalStability = owner.computeCircularStability(hipFlowDirections)
+            let velocitySmoothness = owner.computeVelocitySmoothness(fromChangeRates: velocityChanges)
+
+            return (
+                metrics: FlowMetrics(
+                    motionCoherence: motionCoherence,
+                    directionalStability: directionalStability,
+                    velocitySmoothness: velocitySmoothness,
+                    framePairsUsed: pairCount
+                ),
+                directions: directions
+            )
+        }
+    }
+
+    /// 创建一个绑定到本计算器配置的流式累加器。
+    public func makeAccumulator() -> FlowAccumulator {
+        return FlowAccumulator(owner: self)
+    }
+
     /// 按当前帧率归一化的等价 5fps magnitude
     @inline(__always)
     private func normalizedMagnitude(_ magnitude: Double) -> Double {
@@ -417,10 +513,18 @@ public struct FlowMetricsCalculator {
 
         return await withCheckedContinuation { continuation in
             let request = VNGenerateOpticalFlowRequest(targetedCGImage: nextImage, options: [:])
+            // 精度门控（默认 veryHigh 不变；FALLLINE_FLOW_ACCURACY=medium 走 CPU 降本路径，
+            // 仅用于性能实验，会改变光流向量，故非默认）。
+            let accuracyRaw = (ProcessInfo.processInfo.environment["FALLLINE_FLOW_ACCURACY"] ?? "").lowercased()
+            if accuracyRaw == "medium" {
+                request.computationAccuracy = .medium
+            }
             let handler = VNImageRequestHandler(cgImage: prevImage, options: [:])
 
             do {
-                try handler.perform([request])
+                try autoreleasepool {
+                    try handler.perform([request])
+                }
                 guard let result = request.results?.first as? VNPixelBufferObservation else {
                     continuation.resume(returning: nil)
                     return
