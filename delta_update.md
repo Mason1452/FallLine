@@ -1,6 +1,6 @@
 # Delta Update
 
-最后更新：2026-09-22
+最后更新：2026-09-24
 
 本文档只记录每轮工作的增量变化，不记录项目全量背景。需要项目当前状态、目标和长期上下文时，先看 `WORK_LOG.md`；需要文件职责时，看 `file_manifest.md`。
 
@@ -13,6 +13,41 @@
 - 同一轮没有代码变更时，明确写”仅文档变更”或”未运行测试”的原因。
 
 ## 变更
+
+### 2026-09-24（项目体积优化：outputs 746M 移出版本库 + 重写历史清除，.git 1.6G→888M；视频保留）
+
+**本轮性质**：用户 `/goal 优化项目体积`。审计 → 拍板 → 落地 + 历史重写 + force push。未改任何 Swift 源码，评分/JSON 零影响。
+
+**审计结论（工作区 3.3G）**：
+- `.git` 1.6G（单 pack 1.6G，114 commits）、`video` 829M（tracked 807M）、`outputs` 824M（tracked 746M）、`.build` 450M（已忽略）、`testvideo` 196M（tracked 68M）。
+- `git rev-list --objects` 历史最大 blob 与当前文件一致 → `.git` 大不是删错残留，而是 746M outputs debug/review 产物（748 PNG/293 log/6 mp4/39 tsv/31 jpg）在历史中反复堆积。
+- `outputs` tracked 子目录：`edge_debug_review` 399M、`misjudgment_review_20260506` 242M、`misjudgment_review…round2` 77M 等，全部可由脚本/CLI 重跑再生。
+
+**变更**：
+- 删本地可再生目录：`.build`（450M）、`outputs/board_edge_p2`（66M 未跟踪）、`outputs/perf_3d_baseline`（20K）。
+- 还原被本地分析污染的 tracked 报告 `video/middle/1c5771fc7dd1ea546eb5bc3e4e01bc48.md`（`git checkout`）。
+- `git rm -r --cached outputs`：1156 文件（tracked 746M）移出索引，磁盘文件保留。
+- [.gitignore](file:///Users/mingsen/Project/FallLine/.gitignore)：以单条 `outputs/` 替换原 `outputs/**/*.MP4|MOV|…`、`outputs/board_edge_p2/contact_sheets/`、`*.log|*.json` 等分散子规则（整个 outputs 命名空间不入库）。
+- 历史重写：仓库外先备份 `git bundle create ../FallLine_backup_before_slim.bundle --all`（1.6G）；`brew install git-filter-repo`（2.47.0）；`git filter-repo --path outputs/ --invert-paths --force`。
+- 重加被 filter-repo 移除的 origin（`git@github.com:Mason1452/FallLine.git`）并 `git push --force origin main`。
+
+**量化收益**：
+- `.git`：**1.6G → 888M（pack 877M，-44%）**；历史 outputs 对象归零（`rev-list --objects | grep outputs/` = 0）。
+- 视频：90 个 tracked 文件完整保留（本轮明确不做视频外移）；剩余 877M pack 主要即视频语料。
+- commit hash 全部重写（perf 提交 `1fd2dc2`→`9e8df0c`；结构提交 `3cfdd04`）。
+- 本地工作区（删 .build + 未跟踪产物）约回收 516M。
+
+**验证**：
+- `/usr/bin/xcrun swift build -c release` Build complete（从零编译，19.4s）。
+- `/usr/bin/xcrun swift test` **314/314（0 failures）**。
+- `git ls-remote origin main` = `3cfdd04173ab572b7d83fe734ad12f1a78dd2f71`；force push 记录 `1fd2dc2...3cfdd04 forced update`。
+- GitHub GH001 对 70.4M/53.6M 两个视频仅警告（硬限 100M，未阻止推送）。
+
+**遗留 / 待用户**：
+- 旧历史作废，其他机器/协作者需重新 clone。
+- 仓库外备份 `/Users/mingsen/Project/FallLine_backup_before_slim.bundle`（1.6G）保留，确认稳定后可由用户删除。
+- 若未来要把 `.git` 再降到几十 M，需把视频语料也外移 + fetch 脚本（同 [models/fetch.sh](file:///Users/mingsen/Project/FallLine/models/fetch.sh)），本轮不做。
+- `output/`（单数，5 个 20K 老 md）与 `outputs/` 不同，仍 tracked、未处理。
 
 ### 2026-09-22（候选 F 骨架落地：yolov8n-seg + .pt + fetch.sh + 项目开源；models/ 目录 + CoreMLBackend 实现，无模型二进制、未跑推理）
 

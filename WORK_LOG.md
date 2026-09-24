@@ -1,6 +1,25 @@
 # FallLine Work Log
 
-## Current State (2026-09-22 候选 F 骨架落地：yolov8n-seg + .pt + fetch.sh + 项目开源；models/ 目录 + CoreMLBackend 实现就绪，不投模型二进制、未跑推理)
+## Current State (2026-09-24 项目体积优化：outputs 746M 移出版本库 + git-filter-repo 重写历史清除 outputs，.git 1.6G→888M；视频语料按决策保留。314/314 + release build 通过，force push 完成)
+
+**审计 → 决策 → 落地**：工作区原 3.3G，大头为 `.git` 1.6G、`video` 829M、`outputs` 824M、`.build` 450M、`testvideo` 196M。关键发现：`.git` 的大并非"删错残留"，而是 746M outputs 历史 debug/review 产物（748 PNG + 293 log + 6 mp4）在 114 commits 反复堆积；历史最大 blob 与当前文件一致。用户拍板：**outputs 移出跟踪 + 整体忽略 + 重写历史清除；视频语料保留在仓库；清理本地 .build/未跟踪产物**。
+
+**本地清理（约 516M，可再生）**：删除 `.build`（450M Swift 缓存）、`outputs/board_edge_p2`（66M）、`outputs/perf_3d_baseline`（20K）；还原被本地分析污染的陈旧报告 `video/middle/1c…48.md`。
+
+**outputs 移出版本库**：`git rm -r --cached outputs`（1156 文件、tracked 746M），磁盘文件保留；[.gitignore](file:///Users/mingsen/Project/FallLine/.gitignore) 用单条 `outputs/` 替换此前分散的 outputs 规则（视频符号链 / 接触表 / 日志等子规则合并）。
+
+**历史重写（破坏性，已备份）**：
+- 重写前先 `git bundle create ../FallLine_backup_before_slim.bundle --all`（1.6G 全历史备份，位于仓库外）。
+- `brew install git-filter-repo`（2.47.0）；`git filter-repo --path outputs/ --invert-paths --force` 清除 outputs 的**全部历史版本**，视频与代码不动。
+- 结果：`.git` **1.6G → 888M**（pack 877M）；`git rev-list --objects --all` 中 outputs 对象归零；视频 90 个 tracked 文件完整保留。
+- **所有 commit hash 已重写**（原 `1fd2dc2`→`9e8df0c`、新结构提交 `3cfdd04`）。剩余 877M pack 主要是保留的视频语料——若未来要把 `.git` 再压到几十 M，需把视频也外移并配 fetch 脚本（同 [models/fetch.sh](file:///Users/mingsen/Project/FallLine/models/fetch.sh) 思路），但本轮明确不做。
+- filter-repo 自动移除 origin，已重加 `git@github.com:Mason1452/FallLine.git` 并 `git push --force origin main` 成功（`1fd2dc2...3cfdd04 forced update`）。GitHub 对 70.4M / 53.6M 两个视频仅 GH001 大文件警告（未阻止，硬限 100M）。
+
+**验证**：`swift build -c release` Build complete（从零编译 19.4s）；`swift test` **314/314（0 failures）**；远端 `ls-origin/main` = `3cfdd04173ab572b7d83fe734ad12f1a78dd2f71`。源码 / 评分 / JSON 零改动（本次仅删产物与重写历史，未碰任何 Swift 源文件）。
+
+**下一步（待用户）**：确认其他机器 / 协作者需重新 clone（旧历史作废）；确认无误后可删除仓库外备份 `../FallLine_backup_before_slim.bundle`；候选 F zero-shot 流程不变（fetch 模型 → export → dry-run）。
+
+## Previous State (2026-09-22 候选 F 骨架落地：yolov8n-seg + .pt + fetch.sh + 项目开源；models/ 目录 + CoreMLBackend 实现就绪，不投模型二进制、未跑推理)
 
 **用户拍板骨架配置（"1n 2pt 3fetch 4 开源"）**：候选 F CoreML 板边分割 spike 选用 **YOLOv8-seg nano**（3.4M 参数、M1 Pro 约 10–15ms/帧、COCO mask mAP 30.5），format = `.pt`（fetch）+ `.mlpackage`（本机 export），走 `fetch.sh` 一键补齐 + SHA256 校验，SkiAnaylze 项目开源可承接 **AGPL-3.0**（若切闭源商用改 YOLO-NAS-seg 或 DeepLabV3+ MobileNetV2）。本轮**只落骨架、不下载模型、不跑推理、不触碰生产代码**（评分/JSON 零变化）。
 
