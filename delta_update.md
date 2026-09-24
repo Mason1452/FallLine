@@ -14,6 +14,38 @@
 
 ## 变更
 
+### 2026-09-22（候选 F 骨架落地：yolov8n-seg + .pt + fetch.sh + 项目开源；models/ 目录 + CoreMLBackend 实现，无模型二进制、未跑推理）
+
+**本轮性质**：Gate-G2 NO-GO 后候选 F 已激活，用户按"1n 2pt 3fetch 4 开源"锁定骨架接入策略。本轮**只落目录 / 脚本 / gitignore / 文档，不下载模型、不跑推理、不改任何 Swift 生产代码**——评分/JSON 零变化。
+
+**变更**：
+- 新增 [models/README.md](file:///Users/mingsen/Project/FallLine/models/README.md)：目录清单（`yolov8n-seg/` → Ultralytics YOLOv8-seg nano、AGPL-3.0、~7 MB）、许可与项目定位（开源承接 AGPL-3.0，闭源商用切 YOLO-NAS-seg / DeepLabV3+）、`fetch.sh` 用法、**SHA256 哈希清单**（首次 fetch 后回填）、本机 `yolo export` 命令、zero-shot 判据（≥0.55 有希望 / 0.30–0.55 视预算微调 / <0.30 换骨架）、`ultralytics 8.2.x` + `coremltools ≥7.1` 版本 pin。
+- 新增 [models/fetch.sh](file:///Users/mingsen/Project/FallLine/models/fetch.sh)：`curl -L` 从 Ultralytics `v8.2.0` GitHub Release 拉 `yolov8n-seg.pt` + `shasum -a 256` 校验；`--verify` 仅校验（不重下）、`--model <name>` 切换骨架（`MODELS` associative array 可扩展）、首次 fetch 打印 SHA256 供 README 回填；退出码 0（成功）/1（网络）/2（哈希失配已删档）/3（参数错）；SHA256 mismatch 自动 `rm` 避免中毒。
+- 新增 [models/yolov8n-seg/.gitkeep](file:///Users/mingsen/Project/FallLine/models/yolov8n-seg/.gitkeep)：确保空目录被 Git 跟踪（模型 .pt/.mlpackage 由 .gitignore 排除）。
+- 更新 [.gitignore](file:///Users/mingsen/Project/FallLine/.gitignore)：`models/**/*.pt`、`models/**/*.mlpackage/`、`models/**/*.mlmodel`、`models/**/*.onnx`、`.venv-coreml/` 全部排除。
+- 升级 [board_edge_coreml_spike.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_coreml_spike.py) `CoreMLBackend`（从占位骨架 → 真实实现）：
+  - **lazy import**：`coremltools` / `numpy` / `Pillow` 只在 `predict()` 触发时 import，`--check-plan` / `--list-clips` 在无 venv 环境仍可跑。
+  - **ffmpeg 抽帧**：`/opt/homebrew/bin/ffmpeg` → `/usr/local/bin/ffmpeg` 回退，`-ss {frame_index/5.0}` 按 5fps 索引定位单帧。
+  - **predict**：resize 到 640×640、`MLModel.predict({"image": img})`，per-frame 计时（不含 IO/preprocess），扫描 out dict 抓 `*mask*` / `*class*`；按 COCO **snowboard(30)/skis(31)** 联合 mask；可选 `gt_mask` 出 IoU（intersection/union，union=0→0.0）；返回 `SegmentationSample`（含 class_ids / mask_pixel_count / inference_ms / board_iou）。
+  - **SegmentationReport 扩表**：新增 `median_inference_ms`、`p95_inference_ms`（自研 `_percentile`）、`max_inference_ms`、`inference_le_20ms_ratio`；`notes` 自动附 [PASS]/[FAIL] 提示（IoU≥0.65 与 medianInferenceMs≤20ms 两条硬门槛）。
+  - **--dry-run**：每片 5 帧 zero-shot 快检（`--frames` 可调），不写 report 只打屏；`default_frames_for_dryrun` 用 5fps 索引 [3,8,13,18,23]（0.5s–4.5s）。
+  - **PCA 主轴/fallback 对齐仍 TODO**：过 IoU≥0.65 门槛后再补，`axis_angle_deg` / `axis_confidence` 依旧 `None`；`compare_against_fallback` 仍是 TODO 占位。
+- 更新 [spec §12.14.1](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md#L833)：新增"骨架 → 待投运（2026-09-22）"小节，记录目录 / 脚本 / gitignore / 拍板配置 / 未做项。
+- 更新 [spec §12.4 检查表](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md#L422)：候选 F 条目下追加"骨架 → 待投运的过渡态"进展条。
+- 更新 [WORK_LOG Current State](file:///Users/mingsen/Project/FallLine/WORK_LOG.md#L3)：替换为本轮"候选 F 骨架落地"状态；旧全局性能优化状态挂到 Previous State。
+
+**验证**：
+- `python3 scripts/board_edge_coreml_spike.py --check-plan` 打印六条决策标准 + 拍板配置 + 状态"已激活（Gate-G2 NO-GO，§12.15.3）+ models/ 目录就绪 + CoreMLBackend 实现"（exit 0）。
+- `models/` 目录结构 + `.gitignore` 联合验证：`.pt`/`.mlpackage/`/`.venv-coreml/` 均不会被 Git 跟踪；只有 `README.md` + `fetch.sh` + `yolov8n-seg/.gitkeep` 入库。
+- **未运行 `swift test`**（Swift 侧零改动，评分/JSON bit-identical 由前轮 314/314 覆盖）。
+
+**下一步（待用户）**：
+1. 本机 `bash models/fetch.sh` 拉 `.pt`（首次运行会打印 SHA256，回填进 [README 哈希表](file:///Users/mingsen/Project/FallLine/models/README.md#L36-L38) + [fetch.sh MODELS](file:///Users/mingsen/Project/FallLine/models/fetch.sh#L23)）。
+2. `python3 -m venv .venv-coreml && source .venv-coreml/bin/activate && pip install 'ultralytics>=8.2,<8.3' 'coremltools>=7.1' Pillow numpy`。
+3. `cd models/yolov8n-seg && yolo export model=yolov8n-seg.pt format=coreml half=True nms=True imgsz=640` 生成 `.mlpackage`。
+4. `python3 scripts/board_edge_coreml_spike.py --model models/yolov8n-seg/yolov8n-seg.mlpackage --dry-run` 跑 44 片 × 5 帧 zero-shot 快检，看 medianIoU / medianInferenceMs 是否过硬门槛。
+5. 若 zero-shot IoU 落在 30–55 → 标 100 帧 GT 微调冲 0.65；<30 → 切 YOLO-NAS-seg / DeepLabV3+（`CoreMLBackend` 类分支 + `models/` 并列目录）。
+
 ### 2026-09-22（全局性能优化续：并发批 8→4 + board-edge CIContext 复用，评分 bit-identical）
 
 **本轮性质**：延续同日全局降本：(a) 对 `withThrowingTaskGroup` 帧并发度做证据扫描并调优默认值；(b) 修掉 board-edge 前景分割路径漏网的每实例新建 `CIContext()`。均零评分变化。

@@ -10,15 +10,14 @@ xcuserdata/
 # 主线 B SPM 化产物：iOS 复制文件备份 + pbxproj 修改前快照
 .ios_migration_backup/
 *.pbxproj.bak_before_spm_link
-# outputs 复核产物：忽略视频符号链（大文件指向源目录），只保留 md/log/txt
-outputs/**/*.MP4
-outputs/**/*.MOV
-outputs/**/*.mp4
-outputs/**/*.mov
+# outputs 全部为可由脚本/CLI 重跑生成的本地产物（debug/review/接触表/日志等），整体不入库
+outputs/
 # --debug-overlay 临时覆盖图（体量大，按需本地生成）
 *.debug_frames/
-# Phase 2 接触表 JPG（本地生成，按需重跑，不入库）
-outputs/board_edge_p2/contact_sheets/
-# Phase 2 Gate-G1 探针日志与 JSON 中间产物（本地生成，按需重跑，不入库）
-outputs/board_edge_p2/*.log
-outputs/board_edge_p2/*.json
+# 候选 F CoreML spike：开源骨架权重与本机 export 出的 CoreML 二进制，走 models/fetch.sh 补齐，不入库
+models/**/*.pt
+models/**/*.mlpackage/
+models/**/*.mlmodel
+models/**/*.onnx
+# 候选 F Python venv（用户按 models/README.md 建 .venv-coreml 时用）
+.venv-coreml/

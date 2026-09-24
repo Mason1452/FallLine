@@ -1,6 +1,17 @@
 # FallLine Work Log
 
-## Current State (2026-09-22 全局性能优化：流式光流消除全片帧缓存 + 3D 两阶段按需 + 复用 CIContext + autoreleasepool + 并发批默认 8→4。对真实提交版 HEAD：峰值 RSS 417→295MB（-29%）、user 39.7→34.6s（-13%）、sys 11.9→6.7s（-44%）；314/314 + 两片 JSON bit-identical，评分零变化)
+## Current State (2026-09-22 候选 F 骨架落地：yolov8n-seg + .pt + fetch.sh + 项目开源；models/ 目录 + CoreMLBackend 实现就绪，不投模型二进制、未跑推理)
+
+**用户拍板骨架配置（"1n 2pt 3fetch 4 开源"）**：候选 F CoreML 板边分割 spike 选用 **YOLOv8-seg nano**（3.4M 参数、M1 Pro 约 10–15ms/帧、COCO mask mAP 30.5），format = `.pt`（fetch）+ `.mlpackage`（本机 export），走 `fetch.sh` 一键补齐 + SHA256 校验，SkiAnaylze 项目开源可承接 **AGPL-3.0**（若切闭源商用改 YOLO-NAS-seg 或 DeepLabV3+ MobileNetV2）。本轮**只落骨架、不下载模型、不跑推理、不触碰生产代码**（评分/JSON 零变化）。
+
+**目录 / 脚本**（详见 [spec §12.14.1](file:///Users/mingsen/Project/FallLine/docs/superpowers/specs/2026-09-18-board-edge-trajectory-detection-design.md#L833) 与 [delta_update 2026-09-22](file:///Users/mingsen/Project/FallLine/delta_update.md)）：
+- 新增 [models/](file:///Users/mingsen/Project/FallLine/models/)：[README.md](file:///Users/mingsen/Project/FallLine/models/README.md)（目录清单、许可、fetch 用法、SHA256 表待回填、`yolo export` 命令、zero-shot 判据、版本 pin）+ [fetch.sh](file:///Users/mingsen/Project/FallLine/models/fetch.sh)（`curl -L` 拉 Ultralytics v8.2.0 tag 的 `yolov8n-seg.pt` + `shasum -a 256`、`--verify`、`--model <name>` 切换骨架、退出码 0/1/2/3）+ `yolov8n-seg/.gitkeep`。
+- 更新 [.gitignore](file:///Users/mingsen/Project/FallLine/.gitignore)：`models/**/*.pt`、`models/**/*.mlpackage/`、`.mlmodel`、`.onnx`、`.venv-coreml/` 全部排除，**模型二进制永不入库**。
+- 升级 [board_edge_coreml_spike.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_coreml_spike.py) 的 `CoreMLBackend` 从占位换为真实实现：`coremltools` lazy import（`--check-plan` 在无 venv 环境仍可跑）、ffmpeg 抽帧（`/opt/homebrew` → `/usr/local` 回退）、单帧 predict、COCO 30/31（skis+snowboard）联合 mask、可选 `gt_mask` 出 IoU、per-frame 推理耗时；`SegmentationReport` 加 `median/p95/max_inference_ms` + `inference_le_20ms_ratio`；新增 `--dry-run`（每片 5 帧 zero-shot 快检）与 IoU≥0.65 / medianInferenceMs≤20ms 自检门槛提示。**PCA 主轴与 fallback 逐帧对齐仍留 TODO**，等 IoU 门槛过后再补。
+
+**下一步（待用户）**：本机 `bash models/fetch.sh` → 建 `.venv-coreml` 装 `ultralytics/coremltools` → `yolo export model=yolov8n-seg.pt format=coreml half=True nms=True imgsz=640` → `python3 scripts/board_edge_coreml_spike.py --model models/yolov8n-seg/yolov8n-seg.mlpackage --dry-run`。首版 IoU ≥0.55 有希望 → 投 100 帧 GT 微调冲 0.65；<0.30 换骨架。三条硬门槛（IoU≥0.65 / 推理≤20ms / farShot 恢复率≥50%）与 100 帧 GT 最小集维持。
+
+## Previous State (2026-09-22 全局性能优化：流式光流消除全片帧缓存 + 3D 两阶段按需 + 复用 CIContext + autoreleasepool + 并发批默认 8→4。对真实提交版 HEAD：峰值 RSS 417→295MB（-29%）、user 39.7→34.6s（-13%）、sys 11.9→6.7s（-44%）；314/314 + 两片 JSON bit-identical，评分零变化)
 
 **证据驱动的热点审计**：对同一片（1080×1920，CLI 5fps，205 次抽帧）隔离测量——默认 2D+3D 35.0s/user 37.6s/RSS 217MB；`--no-3d` 仅 2D 25.7s/**user 2.8s**/RSS 93MB；关光流 28.0s/user 36.5s；光流 medium 精度几乎不省 CPU。**结论：3D 姿态请求是 CPU/内存绝对大头（约 34s user、~124MB），2D 走 ANE/GPU；全片 CGImage 帧缓存是常驻内存与 OOM 根因；光流非 CPU 瓶颈**。
 

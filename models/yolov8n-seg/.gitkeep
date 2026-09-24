@@ -1,0 +1,1 @@
+# 占位：保持 models/yolov8n-seg/ 目录进 Git；真正的 .pt / .mlpackage 走 fetch.sh + 本机 export，不入库。

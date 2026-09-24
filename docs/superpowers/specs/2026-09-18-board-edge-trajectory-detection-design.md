@@ -420,6 +420,7 @@ Phase 2 主体开工前必须逐项打勾：
 - [x] 候选 E 单测：[BoardEdgeDetectorTests.swift](file:///Users/mingsen/Project/FallLine/Tests/FallLineCoreTests/BoardEdgeDetectorTests.swift) 新增 4 条 ADR-002 用例（默认基线 = ankleOnly+floor 0.40、ankleOnly 跳过更强膝对、踝缺失 ankleOnly 结构性拒绝、floor 0.40 边界拒绝 + v2 对照），`swift test` 全量 **290/290 通过**（Phase 1+ADR-001 基线 285 + 本轮 +5：4 条 ADR-002 + 1 条 v2/v3 floor 边界拆分）。
 - [x] 候选 E 44 片 v3 重跑 → v3-A / v3-B 判定表（2026-09-20，见 §12.13 尾"v3 44 片 8364 帧实测"）→ **v3-B 26/44 = 59.1% FAIL（差 1 片）+ v3-A 30.64 FAIL（差 9pp）+ bit 8364/8364 PASS + perf +4.9% PASS**；日志 [outputs/board_edge_p2/gate_g1_probe_v3.log](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/gate_g1_probe_v3.log) + 结构化摘要 [outputs/board_edge_p2/gate_g1_probe_v3_summary.json](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/gate_g1_probe_v3_summary.json)。
 - [x] 候选 F CoreML 板边分割 spike 设计骨架（§12.14，2026-09-20，Design only）→ 模型选型 / GT 方案 / 决策标准 / 成本预算全部落地；新增 [scripts/board_edge_coreml_spike.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_coreml_spike.py) 骨架脚本（`NoopBackend` 占位、`--check-plan` / `--list-clips` 可用、`--model` 未实现退 2）；不投模型二进制，等 v3 + Gate-G2 判定后再定优先级。
+- [x] 候选 F 骨架 → 待投运的过渡态（§12.14.1，2026-09-22）：用户拍板 **yolov8n-seg + .pt + fetch.sh + 项目开源（AGPL-3.0 合规）**。新增 [models/](file:///Users/mingsen/Project/FallLine/models/)（[README.md](file:///Users/mingsen/Project/FallLine/models/README.md) + [fetch.sh](file:///Users/mingsen/Project/FallLine/models/fetch.sh) + `yolov8n-seg/.gitkeep`）；`.gitignore` 加 `models/**/*.pt|.mlpackage/|.mlmodel|.onnx` + `.venv-coreml/`；[board_edge_coreml_spike.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_coreml_spike.py) 的 `CoreMLBackend` 从占位换成真实实现（`coremltools` lazy 加载 `.mlpackage`、ffmpeg 抽帧、单帧 predict、板身 COCO 30/31 mask 联合、推理耗时 & IoU、可选 `gt_mask`），并加 `--dry-run` 每片 5 帧 zero-shot 快检；模型二进制**仍不入库**，未跑推理（等用户本机 `bash models/fetch.sh` + `yolo export`）。
 - [x] 方向 C 时序累积 ADR-004 + 生产级 spike 计划（§12.15，2026-09-21，Design only）→ 定位翻转：时序累积从"Gate-G1 覆盖率手段（§12.12 NO-GO）"改为"Gate-G2 刃线连续性质量信号"；定义 `BoardTemporalAxisAggregator`（W=5 / minCount=3 / IQR≤5° / fold-crossing 处理）+ `BoardTrajectoryMetrics`（stableWindowRate / longestStableRun 等进 summary `boardTrajectory`）+ 四阶段 S1–S4 spike 计划；Gate-G1 v3 门槛不动，评分零污染。
 - [x] Phase 2 时序特征输出仅进 JSON 新命名空间（summary `boardTrajectory`）+ debug overlay，Models 评分字段消费方零改动（§12.15，S1–S2 已落地，2026-09-21）。
 - [x] Gate-G2 判定：`lowend_separability_audit.py --trajectory` 44 片重跑，margin / LOOCV 双 FAIL 且方向反转 → **NO-GO**，字段留诊断，激活候选 F（§12.15.3，2026-09-21）。
@@ -828,6 +829,31 @@ ADR-001 ①–④ 前半已实现：fallback 合成链路、overlay、脚本升�
 3. WORK_LOG + delta_update 同步引用；
 4. **不引入模型二进制、不修改 [Package.swift](file:///Users/mingsen/Project/FallLine/Package.swift)**；新增 [scripts/board_edge_coreml_spike.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_coreml_spike.py) 骨架脚本（占位后端 = `NoopBackend`，`--check-plan` 打印本节决策标准，`--list-clips` 与 v3 探针共用 44 片，`--model` 参数留位但显式退出码 2 → 未实现）；
 5. 若后续启动 spike，正式实现 `CoreMLBackend`（VNCoreMLRequest / MLModel + PCA 主轴 + 计时 + bit-identical），并新建 [outputs/board_edge_p2/coreml_spike/](file:///Users/mingsen/Project/FallLine/outputs/board_edge_p2/coreml_spike/) 目录 + ADR-003。
+
+#### 12.14.1 骨架 → 待投运（2026-09-22，用户拍板骨架配置，不投推理）
+
+用户按"1n / 2pt / 3fetch / 4 开源"四点确定候选 F 的骨架接入策略：**1**=nano、**2**=`.pt`（fetch 后本机 export CoreML）、**3**=`fetch.sh` 脚本、**4**=项目开源（可承接 AGPL-3.0）。本轮只落骨架，**不下载模型、不跑推理、不触碰生产代码**。
+
+**目录 / 脚本**：
+- 新增 [models/README.md](file:///Users/mingsen/Project/FallLine/models/README.md)：目录清单、许可与项目定位、`fetch.sh` 用法、SHA256 哈希清单（首次 fetch 后回填）、本机 `yolo export` 命令、zero-shot 判据、`ultralytics` / `coremltools` 版本 pin。
+- 新增 [models/fetch.sh](file:///Users/mingsen/Project/FallLine/models/fetch.sh)：`curl -L` 从 Ultralytics v8.2.0 tag 拉 `yolov8n-seg.pt` + `shasum -a 256` 校验；`--verify` 仅校验、`--model <name>` 切换骨架；退出码 0/1/2/3。
+- 新增 [models/yolov8n-seg/.gitkeep](file:///Users/mingsen/Project/FallLine/models/yolov8n-seg/.gitkeep)：确保目录被 Git 跟踪。
+- 更新 [.gitignore](file:///Users/mingsen/Project/FallLine/.gitignore)：`models/**/*.pt`、`models/**/*.mlpackage/`、`.mlmodel`、`.onnx`、`.venv-coreml/` 全部排除，**模型二进制不入库**。
+
+**脚本升级**：
+- [board_edge_coreml_spike.py](file:///Users/mingsen/Project/FallLine/scripts/board_edge_coreml_spike.py) 的 `CoreMLBackend` 从占位换为真实实现——`coremltools` **lazy import**（`--check-plan` / `--list-clips` 在无 venv 环境下仍可用）；`_extract_frame` 走 `/opt/homebrew/bin/ffmpeg` → `/usr/local/bin/ffmpeg` 回退；`predict` 按 COCO 30/31（skis + snowboard）联合 mask、可选 `gt_mask` 出 IoU、per-frame 推理耗时；`SegmentationReport` 加 `median/p95/max_inference_ms` 与 `inference_le_20ms_ratio`；新增 `--dry-run`（每片 5 帧 zero-shot 快检、`--frames` 可调）与自检门槛提示（IoU≥0.65 / medianInferenceMs≤20ms 用户可直接读判定）。
+- `LOCKED_CONFIG` 常量记录本轮拍板（backbone/format/license/storage/default_model_path），`print_plan()` 打印状态"已激活 + models/ 目录就绪 + CoreMLBackend 实现"。
+- **PCA 主轴与 fallback 逐帧对齐仍留 TODO**：过完 IoU≥0.65 门槛后再补，`axis_angle_deg` / `axis_confidence` 依旧为 `None`。
+
+**未做 / 待用户**：
+- 未 `bash models/fetch.sh`（模型不入库、需用户本机拉）；未跑 `yolo export`；未跑 `--model` 实测。
+- 100 帧 GT 尚未采样（沿用 §12.14 GT 方案）。
+- 若首版 zero-shot IoU 在 30–55 需微调；<30 直接换骨架（YOLO-NAS-seg / DeepLabV3+），切换点为 `models/` 并列新增子目录 + `CoreMLBackend` 分支。
+
+**验证（本轮零代码变更影响评分/JSON）**：
+- 运行 `python3 scripts/board_edge_coreml_spike.py --check-plan` 输出六条决策标准 + 拍板配置 + 状态"已激活 + models/ 目录就绪 + CoreMLBackend 实现"（[命令记录](file:///Users/mingsen/Project/FallLine/models/README.md#L61-L70)）；
+- `models/` 目录结构与 `.gitignore` 规则联合验证：`.pt`/`.mlpackage`/`.venv-coreml` 不会被 Git 跟踪；
+- 未运行 `swift test`（无 Swift 侧改动）。
 
 ---
 
