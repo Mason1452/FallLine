@@ -14,6 +14,32 @@
 
 ## 变更
 
+### 2026-09-25（单帧 profiling → 抽帧顺序异步解码：50ms→1.4ms/帧，分数/帧时刻 bit 不变）
+
+**本轮性质**：接续上一轮帧数优化，用户判断"还有提升空间"。对**单帧各阶段**做 profiling 定位下一个热点，仅改解码方式，评分与帧时刻零变化。
+
+**单帧 profiling（1080p，testvideo/3，临时探针跑完即删）**：
+
+| 阶段 | 中位耗时 |
+|---|---|
+| 抽帧（零容差 `copyCGImage(at:)` 精确 seek）| **~50ms** |
+| 光流 veryHigh 640×480 | ~29ms |
+| 2D 姿态（NE）| ~7ms |
+| 姿态 CPUOnly 降级 | 55ms |
+
+- 光流降分辨率（320 仍 ~31ms）/降精度（low 23 vs veryHigh 29ms）收益小且牺牲质量，排除。
+- 大头是抽帧的**随机 seek**：每批次都强制精确 seek 解码。
+
+**方案验证**：`generateCGImagesAsynchronously(forTimes:)` 对单调递增时间点顺序解码、复用解码器、就近取帧 → **1.4ms/帧**（57ms/40 帧）。零容差下回调 `actualTime` 与请求时间 **Δ=0.0ms（bit 一致）**，帧时刻/确定性/CLI 基线均保持。
+
+**变更（仅 [VideoAnalyzer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift)）**：
+- 批次内 4 次同步 `copyCGImage(at:)` → 一次 [decodeFramesSequentially](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L349-L378)（`generateCGImagesAsynchronously`）。回调可乱序/跨线程，按请求时间匹配回索引 + `NSLock`，仅单批次内累积（保留 batchSize 内存上界）。
+- 解码失败帧行为保留（`error="帧提取失败"` 空结果）。
+
+**量化 / 验证**：testvideo/3 墙钟 12.3s→**9.0s**、testvideo/4 **5.3s**；avgScore 与基线完全一致（**88.1317 / 72.0000**），帧数 100/108、前 6 帧时刻 0/0.2/0.4… 精确。`swift test` **314/314（0 failures）**；release Build complete；iOS 模拟器 **BUILD SUCCEEDED**。
+
+**遗留**：抽帧已非瓶颈，剩余为真正需要 NE 的姿态+光流。若要再降，方向是抽帧/计算生产者-消费者流水线，或光流隔帧，需重新权衡收益。
+
 ### 2026-09-25（分析性能：iOS 默认 30fps→5fps + 视觉候选线改 debug-only 默认关，iOS 路径帧数降 6 倍）
 
 **本轮性质**：用户 `/goal 提升分析视频性能，现在太卡了`。先实测量化定位，再改默认值；评分正确性以帧率扫描守护，全量测试零回归。

@@ -1,6 +1,24 @@
 # FallLine Work Log
 
-## Current State (2026-09-25 分析性能优化：iOS 默认 30fps→5fps、视觉候选线改 debug-only 默认关，iOS 路径分析帧数降 6 倍；314/314 + release build + 模拟器 BUILD SUCCEEDED)
+## Current State (2026-09-25 单帧 profiling → 抽帧顺序异步解码：50ms→1.4ms/帧（约 30 倍），分数/帧时刻 bit 不变；314/314 + release + 模拟器 BUILD SUCCEEDED)
+
+用户"感觉还有提升空间"，于是对**单帧各阶段做 profiling**，不再只调帧数。
+
+**单帧 profiling（1080p，testvideo/3，临时探针跑完即删）**：抽帧（零容差精确 seek）**~50ms**、光流 veryHigh 640×480 **~29ms**、2D 姿态（NE）**~7ms**、姿态 CPUOnly 降级 55ms。光流降分辨率（320 仍 ~31ms）/降精度（low 23 vs veryHigh 29ms）收益都很小且牺牲质量，排除。**真正大头是抽帧的随机 seek**——此前每批次都调用 `copyCGImage(at:)` 强制精确 seek 解码。
+
+**顺序异步解码验证**：`generateCGImagesAsynchronously(forTimes:)` 对单调递增时间点内部顺序解码、复用解码器并就近取帧——总耗时 57ms/40 帧 = **1.4ms/帧**。关键正确性：零容差下回调 `actualTime` 与请求时间 **Δ=0.0ms（bit 一致）**，故帧时刻、确定性、CLI/校准基线全部保持，仅解码方式改变。
+
+**变更（仅 [VideoAnalyzer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift)）**：
+- 批次内 4 次同步 `copyCGImage(at:)`（精确 seek）→ 一次 [decodeFramesSequentially](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L349-L378)，内部用 `generateCGImagesAsynchronously` 顺序解码；回调可能乱序/跨线程，按请求时间匹配回索引、`NSLock` 保护，仅在单批次内累积（保留 batchSize 内存上界）。
+- 解码失败的帧行为保留（追加 `error="帧提取失败"` 的空结果）。
+
+**量化**：testvideo/3 墙钟 12.3s→**9.0s**、testvideo/4 **5.3s**；avgScore 两片与基线完全一致（**88.1317 / 72.0000**），帧数 100/108、前 6 帧时刻 0/0.2/0.4… 精确。抽帧不再是瓶颈，剩余耗时是真正需要 NE 的姿态+光流，已接近当前方案地板。
+
+**验证**：release Build complete；`swift test` **314/314（0 failures）**；iOS 模拟器 **BUILD SUCCEEDED**。
+
+**下一步（待用户）**：真机复核本轮墙钟；若还要更低，方向是把抽帧与计算做成生产者-消费者流水线（进一步重叠）或评估光流是否可降为隔帧，但收益与复杂度需重新权衡。
+
+## Previous State (2026-09-25 分析性能优化：iOS 默认 30fps→5fps、视觉候选线改 debug-only 默认关，iOS 路径分析帧数降 6 倍；314/314 + release build + 模拟器 BUILD SUCCEEDED)
 
 用户 `/goal 提升分析视频性能，现在太卡了`。**先实测定位再改默认值**，评分正确性用帧率扫描守护。
 
@@ -16,6 +34,7 @@
 **验证**：release Build complete；`swift test` **314/314（0 failures）**；iOS 模拟器 **BUILD SUCCEEDED**。CLI 行为不变（本就显式 0.2）。
 
 **下一步（待用户）**：iOS 真机实测墙钟与内存（模拟器不反映 NE/真机 CPU），确认卡顿消失；需要更密时序时由调用方显式覆盖或设 `FALLLINE_SAMPLE_INTERVAL`。
+
 
 ## Previous State (2026-09-24 项目体积优化：outputs 746M 移出版本库 + git-filter-repo 重写历史清除 outputs，.git 1.6G→888M；视频语料按决策保留。314/314 + release build 通过，force push 完成)
 
