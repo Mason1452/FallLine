@@ -25,6 +25,106 @@ public enum AnalysisError: LocalizedError {
     }
 }
 
+// MARK: - 顺序抽帧生产者（全片时间点一次提交 + 有界背压）
+
+/// 单个已抽取帧：含全片序号、请求时刻、解码出的图像（失败为 nil）。
+struct ProducedFrame {
+    let index: Int
+    let time: CMTime
+    let cgImage: CGImage?
+}
+
+/// 全片采样时间点一次提交、按回调顺序出帧的生产者。
+///
+/// 相比"每 `batchSize` 点提交一次"，单次提交消除了 `generateCGImagesAsynchronously`
+/// 每次调用约 50ms 的固定开销（重建解码会话），让解码器在整段时间轴上顺序解码、复用
+/// 解码器并就近取帧，抽帧边际成本从约 17ms/帧降到约 1.4ms/帧。
+///
+/// 背压：用有界队列限制在途帧数，消费慢于解码时阻塞解码回调，避免一次性解码整段视频
+/// 造成的内存峰值（实测全片提交无背压时峰值在途约 35 帧 1080p ≈ 数百 MB）。
+///
+/// 实测（testvideo/3、4）回调严格按请求顺序到达，因此内部用 FIFO 即可保证按序出帧。
+final class SequentialFrameProducer {
+    private let generator: AVAssetImageGenerator
+    private let times: [CMTime]
+    private let capacity: Int
+
+    private let condition = NSCondition()
+    private var buffer: [ProducedFrame] = []
+    private var receivedCount = 0
+    private var started = false
+
+    /// - Parameters:
+    ///   - generator: 已配置容差与最大尺寸的图像生成器。
+    ///   - times: 全片采样时间点（须单调递增）。
+    ///   - bufferCapacity: 在途帧队列容量（背压上限）。
+    init(generator: AVAssetImageGenerator, times: [CMTime], bufferCapacity: Int) {
+        self.generator = generator
+        self.times = times
+        self.capacity = max(1, bufferCapacity)
+    }
+
+    /// 启动解码（全片时间点一次提交）。重复调用无效。须在任何 `next()` 之前调用。
+    func start() {
+        condition.lock()
+        guard !started else {
+            condition.unlock()
+            return
+        }
+        started = true
+        condition.unlock()
+
+        guard !times.isEmpty else { return }
+
+        generator.generateCGImagesAsynchronously(
+            forTimes: times.map { NSValue(time: $0) }
+        ) { [weak self] requestedTime, image, _, resultCode, _ in
+            guard let self else { return }
+            self.condition.lock()
+            let index = self.times.firstIndex { CMTimeCompare($0, requestedTime) == 0 }
+                ?? self.receivedCount
+            let frame = ProducedFrame(
+                index: index,
+                time: self.times[index],
+                cgImage: resultCode == .succeeded ? image : nil
+            )
+            // 背压：队列满时阻塞解码回调，直到消费者取走帧。
+            while self.buffer.count >= self.capacity {
+                self.condition.wait()
+            }
+            self.buffer.append(frame)
+            self.receivedCount += 1
+            self.condition.broadcast()
+            self.condition.unlock()
+        }
+    }
+
+    /// 取下一帧（按请求顺序）；全部帧已消费完时返回 nil。
+    func next() -> ProducedFrame? {
+        condition.lock()
+        while buffer.isEmpty && receivedCount < times.count {
+            condition.wait()
+        }
+        guard !buffer.isEmpty else {
+            condition.unlock()
+            return nil
+        }
+        let frame = buffer.removeFirst()
+        // 唤醒可能因背压阻塞的解码回调。
+        condition.broadcast()
+        condition.unlock()
+        return frame
+    }
+
+    /// 取消尚未完成的解码（分析中断时调用）。
+    func cancel() {
+        generator.cancelAllCGImageGeneration()
+        condition.lock()
+        condition.broadcast()
+        condition.unlock()
+    }
+}
+
 // MARK: - 视频分析器（纯库版本，无控制台输出）
 
 /// 负责视频抽帧、组装分析流程、生成全视频总结
@@ -107,7 +207,10 @@ public class VideoAnalyzer {
             .flatMap(Double.init)
         let resolvedInterval = max(1.0 / 60.0, envInterval ?? sampleInterval)
         self.sampleInterval = resolvedInterval
-        self.maxFrameSize = maxFrameSize
+        // 实验调参：FALLLINE_MAX_FRAME_SIZE=WxH 覆盖解码目标尺寸（测量分辨率-耗时-评分权衡用，
+        // 如 960x540；未设置则用显式入参）。
+        let envMaxSize = Self.parseFrameSize(ProcessInfo.processInfo.environment["FALLLINE_MAX_FRAME_SIZE"])
+        self.maxFrameSize = envMaxSize ?? maxFrameSize
         // 实验调参：FALLLINE_BATCH_SIZE 覆盖并发度（测量内存/耗时权衡用，未设置则用显式入参）。
         let envBatch = ProcessInfo.processInfo.environment["FALLLINE_BATCH_SIZE"]
             .flatMap(Int.init)
@@ -119,6 +222,17 @@ public class VideoAnalyzer {
         self.frameAnalyzer = VisionFrameAnalyzer(options: visionOptions)
         self.metricsCalculator = PoseMetricsCalculator(pointConfidenceThreshold: pointConfidenceThreshold)
         self.poseScorer = PoseScorer()
+    }
+
+    /// 解析 "宽x高" 形式的帧尺寸字符串（如 "960x540"），非法输入返回 nil。
+    private static func parseFrameSize(_ raw: String?) -> CGSize? {
+        guard let raw = raw?.lowercased().trimmingCharacters(in: .whitespaces),
+              raw != "none", raw != "nil" else { return nil }
+        let parts = raw.split(whereSeparator: { $0 == "x" || $0 == "×" || $0 == "," })
+        guard parts.count == 2,
+              let w = Double(parts[0]), let h = Double(parts[1]),
+              w > 0, h > 0 else { return nil }
+        return CGSize(width: w, height: h)
     }
 
     // MARK: - 主分析流程
@@ -200,6 +314,16 @@ public class VideoAnalyzer {
 
         var results: [DetectionResult] = []
 
+        // 预生成全片采样时间点（与旧的逐批 currentTime 推进完全一致的口径）。
+        var sampleTimes: [CMTime] = []
+        do {
+            var t = 0.0
+            while t < totalSeconds {
+                sampleTimes.append(CMTime(seconds: t, preferredTimescale: 600))
+                t += sampleInterval
+            }
+        }
+
         let imageGenerator = AVAssetImageGenerator(asset: asset)
         imageGenerator.appliesPreferredTrackTransform = true
         imageGenerator.requestedTimeToleranceBefore = .zero
@@ -208,34 +332,29 @@ public class VideoAnalyzer {
             imageGenerator.maximumSize = maxSize
         }
 
-        var currentTime: Double = 0.0
-        var globalIndex = 0
+        // 全片时间点一次提交，有界队列背压（允许解码领先分析约一批）。
+        // 回调严格按序，故按 batchSize 拉取即为按时间顺序的连续帧。
+        let producer = SequentialFrameProducer(
+            generator: imageGenerator,
+            times: sampleTimes,
+            bufferCapacity: max(batchSize * 2, 8)
+        )
+        producer.start()
+        defer { producer.cancel() }
 
-        while currentTime < totalSeconds {
-            // 1. 批次内顺序异步解码（AVAssetImageGenerator 非线程安全）。
-            //    时间点单调递增，generateCGImagesAsynchronously 内部顺序解码、复用解码器
-            //    并就近取已解码帧：实测 1080p 约 1.4ms/帧，而零容差 copyCGImage(at:) 每次
-            //    强制精确 seek、约 45~52ms/帧（30 倍差距）。零容差下回调 actualTime 与请求
-            //    时间 bit 一致（Δ=0.0ms），故帧时刻、确定性与 CLI 基线均保持不变。
-            var requests: [(index: Int, time: CMTime)] = []
-            for _ in 0..<batchSize where currentTime < totalSeconds {
-                requests.append((globalIndex, CMTime(seconds: currentTime, preferredTimescale: 600)))
-                currentTime += sampleInterval
-                globalIndex += 1
-            }
+        var consumed = 0
+        let totalToConsume = sampleTimes.count
 
-            guard !requests.isEmpty else { continue }
-
-            let decoded = await decodeFramesSequentially(
-                generator: imageGenerator, times: requests.map { $0.time })
-
+        while consumed < totalToConsume {
+            // 1. 从生产者按序拉取一批已解码帧。
             var batch: [(index: Int, cgImage: CGImage, time: CMTime)] = []
-            for (offset, request) in requests.enumerated() {
-                if let cgImage = decoded[offset] {
-                    batch.append((request.index, cgImage, request.time))
+            var batchCount = 0
+            while batchCount < batchSize, let frame = producer.next() {
+                if let cgImage = frame.cgImage {
+                    batch.append((frame.index, cgImage, frame.time))
                 } else {
                     results.append(DetectionResult(
-                        time: CMTimeGetSeconds(request.time),
+                        time: CMTimeGetSeconds(frame.time),
                         objects: [], faces: [], textObservations: [], sceneClassifications: [],
                         bodyPose: BodyPoseData(
                             detected: false, visibility: .none,
@@ -248,9 +367,14 @@ public class VideoAnalyzer {
                         error: "帧提取失败"
                     ))
                 }
+                batchCount += 1
+                consumed += 1
             }
 
-            guard !batch.isEmpty else { continue }
+            guard !batch.isEmpty else {
+                progressHandler?(1.0)
+                continue
+            }
 
             // 2. 批次内并行分析
             let batchResults: [(Int, DetectionResult)] = try await withThrowingTaskGroup(
@@ -286,16 +410,19 @@ public class VideoAnalyzer {
             }
 
             // 3. 按时间顺序追加结果，并以相邻帧滑动缓冲流式喂入光流累加器
+            var batchImages: [Int: CGImage] = [:]
+            for item in batch { batchImages[item.index] = item.cgImage }
+
             for (index, result) in batchResults {
                 results.append(result)
                 guard result.bodyPose.detected && result.bodyPose.visibility != .none,
-                      let item = batch.first(where: { $0.index == index }) else {
+                      let cgImage = batchImages[index] else {
                     continue
                 }
                 let profNoFlow = ["1", "true", "yes"].contains(
                     (ProcessInfo.processInfo.environment["FALLLINE_PROF_NO_FLOW"] ?? "").lowercased())
                 guard !profNoFlow else { continue }
-                let flowImage = downscaleImageForFlow(item.cgImage)
+                let flowImage = downscaleImageForFlow(cgImage)
                 let current = (image: flowImage, pose: result.bodyPose, time: result.time)
                 if let prev = previousFlowFrame {
                     await flowAccumulator.addPair(
@@ -309,7 +436,7 @@ public class VideoAnalyzer {
                 previousFlowFrame = current
             }
 
-            progressHandler?(min(currentTime / totalSeconds, 1.0))
+            progressHandler?(min(Double(consumed) / Double(totalToConsume), 1.0))
         }
 
         // 流式光流收尾：产出指标 + 行进方向缓存（供 generateSummary / CLI 使用）
@@ -337,44 +464,6 @@ public class VideoAnalyzer {
         }()
         let smoothed = PoseSmoother.smooth(results, scorer: poseScorer, config: smoothingConfig)
         return smoothed
-    }
-
-    // MARK: - 顺序异步解码
-
-    /// 对一批单调递增的时间点做顺序异步解码，返回与 `times` 同序的帧（解码失败为 nil）。
-    ///
-    /// `generateCGImagesAsynchronously` 的回调不保证严格按请求顺序、且可能落在非主线程，
-    /// 因此按请求时间匹配回索引，并用锁保护共享数组。仅用于单批次内部（`batchSize` 张），
-    /// 不跨批次累积，保留原有的内存上界。
-    private func decodeFramesSequentially(
-        generator: AVAssetImageGenerator,
-        times: [CMTime]
-    ) async -> [CGImage?] {
-        let count = times.count
-        var frames: [CGImage?] = Array(repeating: nil, count: count)
-        let lock = NSLock()
-        var finished = 0
-
-        return await withCheckedContinuation { continuation in
-            generator.generateCGImagesAsynchronously(
-                forTimes: times.map { NSValue(time: $0) }
-            ) { requestedTime, image, _, resultCode, _ in
-                let index = times.firstIndex { CMTimeCompare($0, requestedTime) == 0 }
-                lock.lock()
-                if let index = index, let image = image, resultCode == .succeeded {
-                    frames[index] = image
-                }
-                finished += 1
-                let done = finished >= count
-                if done {
-                    let snapshot = frames
-                    lock.unlock()
-                    continuation.resume(returning: snapshot)
-                } else {
-                    lock.unlock()
-                }
-            }
-        }
     }
 
     // MARK: - 单帧分析

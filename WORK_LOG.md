@@ -1,6 +1,34 @@
 # FallLine Work Log
 
-## Current State (2026-09-25 单帧 profiling → 抽帧顺序异步解码：50ms→1.4ms/帧（约 30 倍），分数/帧时刻 bit 不变；314/314 + release + 模拟器 BUILD SUCCEEDED)
+## Current State (2026-09-25 抽帧再优化：全片时间点一次提交 + 有界背压生产者，端到端 video3 −14.5% / video4 −23.0%，分数/帧时刻/逐帧分 bit 不变；314/314 + release)
+
+延续上轮"抽帧顺序异步解码"，用户判断"视频抽帧还是有优化空间"。先做三个探针定位（跑完即删），再重构。
+
+**探针定位**：
+1. **每次调用固定开销**：`generateCGImagesAsynchronously` 每次调用约 **50ms 固定开销**（重建解码会话）。上轮按 `batchSize=4` 分批提交，摊到约 **17ms/帧**，并非留痕里写的 1.4ms/帧。
+2. **全片一次提交**：把全片时间点一次提交，解码器在整段时间轴上连续顺序解码、无需反复建会话，边际成本降到约 **1.4ms/帧**（1080p，testvideo/3）。
+3. **回调严格有序**：testvideo/3、4 实测 100/108 帧回调**乱序=0**，故用 FIFO 即可按序出帧，无需乱序重排。
+4. **背压验证**：全片提交若无背压，峰值在途约 35 帧 1080p（数百 MB）；有界队列（NSCondition）把在途帧钉死在容量上限，消费慢即阻塞解码回调，无 OOM 风险。
+
+**关键正确性核查（防止"就近取帧"回归）**：全片提交时回调 `actualTime` 与请求时间有 **18–32ms 偏差**，但对比实测——**分批提交与全片提交偏差完全相同（均 18.33ms）**，说明这是上轮已引入的异步解码固有行为（已随 00ca41b 上线、实测分数不变），全片提交**不引入任何新的帧选择回归**，只去掉每次调用的固定开销。
+
+**变更（仅 [VideoAnalyzer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift)）**：
+- 新增 [SequentialFrameProducer](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L47-L126)：全片时间点一次提交 + NSCondition 有界队列（容量 `max(batchSize*2, 8)`）背压 + 按序出帧，含 `start()/next()/cancel()`。
+- 预生成全片采样时间点（口径与旧的逐批 currentTime 推进一致），主循环从生产者按 `batchSize` 拉批，保留批次并行分析与流式光流（FlowAccumulator）全部逻辑；帧解码失败仍追加 `error="帧提取失败"` 空结果。
+- 删除不再使用的 `decodeFramesSequentially`（分批版）。
+
+**量化（release，git worktree 检 HEAD 旧码、同一视频、各跑 3 次取中位数，已清理）**：
+- video3：9.06s → **7.74s（−14.5%）**；video4：5.83s → **4.49s（−23.0%）**。
+- 正确性：两片 totalFrames（100/108）、全部帧时刻、**逐帧 poseScore（最大 Δ=0.0000）**、summary 全字段（avgScore 88.1317 / 72.0000、raw/bestThird/evidenceCapped/flowModulation/stability）全部 **bit 一致**。
+
+**验证**：`swift build` / `-c release` Build complete；`swift test` **314/314（0 failures）**。iOS 工程经本地 Swift Package（relativePath=`..`）引用 FallLineCore，本轮改动 Xcode 下次构建自动生效，仅用 NSCondition/AVFoundation/async，跨平台可用。
+
+**下一步（待用户）**：真机复核墙钟与内存；抽帧固定开销已消除，剩余耗时为姿态+光流的 NE 推理，接近当前方案地板。
+
+
+## Previous State (2026-09-25 单帧 profiling → 抽帧顺序异步解码（分批提交）；314/314 + release + 模拟器 BUILD SUCCEEDED)
+
+> 口径修正见上一条 Current State：本批"50ms→1.4ms/帧"是小区间理想值；分批提交因每次调用固定开销，实际摊到约 **17ms/帧**；"actualTime Δ=0.0ms"也仅在 0.5–4.5s 小区间成立，全片为 18–32ms（分批与全片提交相同，非新引入）。
 
 用户"感觉还有提升空间"，于是对**单帧各阶段做 profiling**，不再只调帧数。
 

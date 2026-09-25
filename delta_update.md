@@ -14,7 +14,40 @@
 
 ## 变更
 
+### 2026-09-25（抽帧再优化：全片时间点一次提交 + 有界背压生产者，端到端 −14.5% / −23.0%，分数/帧时刻/逐帧分 bit 不变）
+
+**本轮性质**：接续上轮抽帧顺序异步解码，用户判断"视频抽帧还是有优化空间"。探针定位后重构为生产者，只消除每次调用的固定开销，评分与帧时刻零变化。
+
+**探针定位（临时脚本跑完即删）**：
+
+- `generateCGImagesAsynchronously` 每次调用约 **50ms 固定开销**（重建解码会话）；上轮按 batchSize=4 分批提交实际摊 **~17ms/帧**（不是上条写的 1.4ms/帧，见该条修正）。
+- **全片一次提交**：解码器在整段时间轴连续顺序解码，边际 **~1.4ms/帧**（1080p，testvideo/3）。
+- **回调严格有序**：testvideo/3、4 乱序=0，用 FIFO 即可。
+- **背压**：无背压全片提交峰值在途 ~35 帧 1080p；NSCondition 有界队列把在途帧钉在上限内，无 OOM。
+
+**就近取帧核查**：全片提交 actualTime 与请求时间偏差 18–32ms，但实测**分批与全片提交偏差完全相同（均 18.33ms）**——这是上轮已引入的异步解码固有行为，全片提交不引入新回归。
+
+**变更（仅 [VideoAnalyzer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift)）**：
+
+- 新增 [SequentialFrameProducer](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift#L47-L126)：全片时间点一次提交 + NSCondition 有界队列（容量 `max(batchSize*2,8)`）背压 + 按序 `next()`，含 `start()/cancel()`。
+- 预生成全片采样时间点（口径同旧的逐批推进），主循环按 batchSize 拉批，保留批次并行分析与流式光流；解码失败仍补空结果。
+- 删除不再使用的 `decodeFramesSequentially`（分批版）。
+
+**量化 / 验证（release，git worktree 检 HEAD 旧码、同一视频、各 3 次取中位，已清理）**：
+
+| 视频 | 旧（分批） | 新（全片） | 收益 |
+|---|---|---|---|
+| testvideo/3 | 9.06s | 7.74s | **−14.5%** |
+| testvideo/4 | 5.83s | 4.49s | **−23.0%** |
+
+- 正确性：totalFrames（100/108）、全部帧时刻、逐帧 poseScore（最大 Δ=0.0000）、summary 全字段（avg 88.1317 / 72.0000）全部 **bit 一致**。
+- `swift test` **314/314（0 failures）**；debug + release Build complete。iOS 工程经本地 Swift Package（relativePath=`..`）引用 FallLineCore，改动下次构建自动生效。
+
+**遗留**：抽帧固定开销已消除，剩余为姿态+光流 NE 推理，接近当前方案地板；待真机复核墙钟/内存。
+
 ### 2026-09-25（单帧 profiling → 抽帧顺序异步解码：50ms→1.4ms/帧，分数/帧时刻 bit 不变）
+
+> **口径修正（同日下一轮）**：本条"1.4ms/帧"是 0.5–4.5s 小区间理想值；按 batchSize=4 **分批提交**因每次调用约 50ms 固定开销，实际摊约 **17ms/帧**。"actualTime Δ=0.0ms"也仅小区间成立，全片为 18–32ms（分批与全片提交相同）。端到端真实收益以新一轮全片提交记录为准。
 
 **本轮性质**：接续上一轮帧数优化，用户判断"还有提升空间"。对**单帧各阶段**做 profiling 定位下一个热点，仅改解码方式，评分与帧时刻零变化。
 
