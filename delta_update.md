@@ -1,6 +1,6 @@
 # Delta Update
 
-最后更新：2026-09-24
+最后更新：2026-09-25
 
 本文档只记录每轮工作的增量变化，不记录项目全量背景。需要项目当前状态、目标和长期上下文时，先看 `WORK_LOG.md`；需要文件职责时，看 `file_manifest.md`。
 
@@ -13,6 +13,34 @@
 - 同一轮没有代码变更时，明确写”仅文档变更”或”未运行测试”的原因。
 
 ## 变更
+
+### 2026-09-25（分析性能：iOS 默认 30fps→5fps + 视觉候选线改 debug-only 默认关，iOS 路径帧数降 6 倍）
+
+**本轮性质**：用户 `/goal 提升分析视频性能，现在太卡了`。先实测量化定位，再改默认值；评分正确性以帧率扫描守护，全量测试零回归。
+
+**定位（CLI release / Mac，testvideo 实测）**：
+- 瓶颈不是光流或视觉线，而是**逐帧姿态推理总数**。耗时与帧数严格线性（约 130ms/帧 user）。
+- iOS 路径此前用默认 `sampleInterval=1/30`（30fps），而 CLI 显式用 0.2（5fps）。20s 视频 iOS 要分析 600 帧。
+- 光流占比小：5fps 下关光流 10.4s / 开光流 13.6s（+3.2s）。
+
+**帧率扫描（实跑两片，分数 vs 耗时）**：
+
+| 视频 | 3fps | 5fps | 10fps | 15fps | 30fps |
+|---|---|---|---|---|---|
+| testvideo/3 avgScore / real | 84.90 / 7.8s | **88.13** / 12.3s | 88.42 / 24.7s | 88.17 / 38.4s | 88.57 / 73.3s |
+| testvideo/4 avgScore / real | — | 72.00 / 9.5s | 72.00 / 18.5s | 75.64 / 27.4s | 72.00 / 52.4s |
+
+5fps 已是分数拐点；提到 10/15/30fps 总分无可复现收益（第二片在 15fps 出现 +3.6 再回落，判定为采样噪声），耗时线性翻 2~6 倍。3fps 掉 3.2 分且触发光流 0.95，不采用。
+
+**变更（仅 [VideoAnalyzer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift)）**：
+- 默认 `sampleInterval` 由 `1/30`（30fps）改为 `0.2`（5fps），与 CLI、AGENTS.md 5fps 采样、校准基线一致。iOS 无参构造路径帧数 600→100（**6 倍**）。
+- `BoardVisualLineDetector.detect`（全帧逐像素解码 ~8MB/帧 + Hough）改为**默认不跑**：其结果 `visualBoardObservation` 经核实仅在 [BoardDirectionAnalyzer.selectObservation](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardDirectionAnalyzer.swift#L136-L169) 中与踝轴一致时被半权融合进 boardAnalysis 的板轴**诊断角**（source 标为 `.mixed`），以及 debug-overlay 使用。该诊断角不回流评分（P8-A sideslip 已退役、不参与评分）；实测两片在 5fps 下视觉线开/关 avgScore **完全一致**（testvideo/3 均 88.1317、testvideo/4 均 72.0000），仅诊断角/报告文案变（如 testvideo/3 板身-行进夹角 50°→37°）。新增 `FALLLINE_ENABLE_VISUAL_LINE=1/true/yes` 可恢复旧融合。
+- 新增 `FALLLINE_SAMPLE_INTERVAL` 环境覆盖（与既有 `FALLLINE_BATCH_SIZE` 等调参开关同约定），用于帧率-耗时-评分测量。
+- 进度回调随帧率下降自动降到 ~1.25 次/秒，主线程高频刷新问题随之消失，未额外节流。
+
+**验证**：`swift build -c release` Build complete；`swift test` **314/314（0 failures）**；iOS 模拟器 `xcodebuild ... build` **BUILD SUCCEEDED**。CLI 行为不变（本就显式 0.2）；iOS 默认路径 600→100 帧、最终分在 5fps 拐点保持。
+
+**遗留**：iOS 真机实际墙钟/内存待用户实测（模拟器不反映 NE 与真机 CPU）；如需更密时序可由调用方显式传更小 interval 或设 `FALLLINE_SAMPLE_INTERVAL`。
 
 ### 2026-09-24（项目体积优化：outputs 746M 移出版本库 + 重写历史清除，.git 1.6G→888M；视频保留）
 

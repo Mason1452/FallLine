@@ -1,6 +1,23 @@
 # FallLine Work Log
 
-## Current State (2026-09-24 项目体积优化：outputs 746M 移出版本库 + git-filter-repo 重写历史清除 outputs，.git 1.6G→888M；视频语料按决策保留。314/314 + release build 通过，force push 完成)
+## Current State (2026-09-25 分析性能优化：iOS 默认 30fps→5fps、视觉候选线改 debug-only 默认关，iOS 路径分析帧数降 6 倍；314/314 + release build + 模拟器 BUILD SUCCEEDED)
+
+用户 `/goal 提升分析视频性能，现在太卡了`。**先实测定位再改默认值**，评分正确性用帧率扫描守护。
+
+**定位**：瓶颈是逐帧姿态推理**总帧数**，耗时与帧数严格线性（约 130ms/帧 user），不是光流/视觉线。iOS 路径此前用默认 `sampleInterval=1/30`（30fps），CLI 却显式 0.2（5fps）；20s 视频 iOS 要分析 600 帧。光流只占 +3.2s（5fps 下 10.4s→13.6s）。
+
+**帧率扫描（两片实跑）**：testvideo/3 — 3/5/10/15/30fps 分数为 84.90/**88.13**/88.42/88.17/88.57，耗时 7.8/12.3/24.7/38.4/73.3s；testvideo/4 — 5/10/15/30fps 为 72.00/72.00/75.64/72.00。**5fps 已是分数拐点**，更高帧率无可复现收益（15fps 的 +3.6 再回落判为采样噪声）却多花 2~6 倍时间；3fps 掉 3.2 分且触发光流 0.95。
+
+**变更（仅 [VideoAnalyzer.swift](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/VideoAnalyzer.swift)）**：
+- 默认 `sampleInterval` 由 1/30 改为 **0.2（5fps）**，与 CLI、AGENTS.md 5fps 采样、校准基线一致。iOS 无参路径帧数 600→100（**6 倍**）。
+- `BoardVisualLineDetector.detect`（全帧逐像素 ~8MB/帧 + Hough）改**默认关**：其结果仅在 [BoardDirectionAnalyzer.selectObservation](file:///Users/mingsen/Project/FallLine/Sources/FallLineCore/BoardDirectionAnalyzer.swift#L136-L169) 与踝轴一致时半权融合进 boardAnalysis 板轴**诊断角**（`.mixed`），以及 debug-overlay 使用，不回流评分；实测两片 5fps 下视觉线开/关 avgScore 完全一致（88.1317 / 72.0000）。新增 `FALLLINE_ENABLE_VISUAL_LINE=1/true/yes` 可恢复旧融合。
+- 新增 `FALLLINE_SAMPLE_INTERVAL` 环境覆盖（同 `FALLLINE_BATCH_SIZE` 调参约定）。进度回调随之降到 ~1.25 次/秒，主线程高频刷新问题消失。
+
+**验证**：release Build complete；`swift test` **314/314（0 failures）**；iOS 模拟器 **BUILD SUCCEEDED**。CLI 行为不变（本就显式 0.2）。
+
+**下一步（待用户）**：iOS 真机实测墙钟与内存（模拟器不反映 NE/真机 CPU），确认卡顿消失；需要更密时序时由调用方显式覆盖或设 `FALLLINE_SAMPLE_INTERVAL`。
+
+## Previous State (2026-09-24 项目体积优化：outputs 746M 移出版本库 + git-filter-repo 重写历史清除 outputs，.git 1.6G→888M；视频语料按决策保留。314/314 + release build 通过，force push 完成)
 
 **审计 → 决策 → 落地**：工作区原 3.3G，大头为 `.git` 1.6G、`video` 829M、`outputs` 824M、`.build` 450M、`testvideo` 196M。关键发现：`.git` 的大并非"删错残留"，而是 746M outputs 历史 debug/review 产物（748 PNG + 293 log + 6 mp4）在 114 commits 反复堆积；历史最大 blob 与当前文件一致。用户拍板：**outputs 移出跟踪 + 整体忽略 + 重写历史清除；视频语料保留在仓库；清理本地 .build/未跟踪产物**。
 

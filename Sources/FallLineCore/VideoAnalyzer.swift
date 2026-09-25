@@ -78,8 +78,10 @@ public class VideoAnalyzer {
     /// - Parameters:
     ///   - videoURL: 视频文件的 URL
     ///   - pointConfidenceThreshold: 关键点检测置信度阈值（默认 0.3）
-    ///   - sampleInterval: 采样间隔秒数（默认 1/30 秒 = 30fps；旧默认 0.2 秒 = 5fps 时序精度过低，
-    ///     20ms 事件偏差 → 20° 膝角误差，故升至 30fps）
+    ///   - sampleInterval: 采样间隔秒数（默认 0.2 秒 = 5fps）。30fps 的实测帧率扫描
+    ///     （testvideo/3、4）表明：5fps 已是分数拐点，提到 10/15/30fps 总分无可复现收益
+    ///     （88.1→88.4/88.2/88.6、72.0→72.0/75.6/72.0 抖动），耗时却线性翻 2~6 倍；
+    ///     5fps 也与 CLI 及校准基线一致。需要更密时序时由调用方显式覆盖。
     ///   - maxFrameSize: 最大帧分辨率，nil 使用视频原始尺寸（默认 1920x1080）
     ///   - visionOptions: Vision 请求选项（默认仅姿态检测）
     ///   - batchSize: 并行分析批次大小（默认 4；实测 4→8 墙钟仅快 7% 但峰值 RSS +22%、
@@ -89,7 +91,7 @@ public class VideoAnalyzer {
     public init(
         videoURL: URL,
         pointConfidenceThreshold: VNConfidence = 0.3,
-        sampleInterval: Double = 1.0 / 30.0,
+        sampleInterval: Double = 0.2,
         maxFrameSize: CGSize? = CGSize(width: 1920, height: 1080),
         visionOptions: VisionAnalysisOptions = .skiAnalysis,
         batchSize: Int = 4,
@@ -100,7 +102,11 @@ public class VideoAnalyzer {
     ) {
         self.videoURL = videoURL
         self.asset = AVAsset(url: videoURL)
-        self.sampleInterval = max(1.0 / 60.0, sampleInterval)
+        // 实验调参：FALLLINE_SAMPLE_INTERVAL 覆盖采样间隔（测量帧率-耗时-评分权衡用，未设置则用显式入参）。
+        let envInterval = ProcessInfo.processInfo.environment["FALLLINE_SAMPLE_INTERVAL"]
+            .flatMap(Double.init)
+        let resolvedInterval = max(1.0 / 60.0, envInterval ?? sampleInterval)
+        self.sampleInterval = resolvedInterval
         self.maxFrameSize = maxFrameSize
         // 实验调参：FALLLINE_BATCH_SIZE 覆盖并发度（测量内存/耗时权衡用，未设置则用显式入参）。
         let envBatch = ProcessInfo.processInfo.environment["FALLLINE_BATCH_SIZE"]
@@ -387,12 +393,17 @@ public class VideoAnalyzer {
 
         // Step 4: 评分
         let poseScore = poseScorer.score(pose: bodyPose)
-        // 视觉候选线对全帧逐像素解码（约 8MB/帧 1080p）。帧流已是流式滑动窗、
-        // 不再全片缓存帧，故该缓冲只在单帧分析期间存活；用 autoreleasepool 包裹，
-        // 帧结束即释放，不会随帧数累积而抬高峰值。
-        let visualBoardObservation: BoardObservation? = autoreleasepool {
-            BoardVisualLineDetector.detect(cgImage: cgImage, pose: bodyPose)
-        }
+        // 视觉候选线对全帧逐像素解码（约 8MB/帧 1080p）。它是 debug-only 诊断信号
+        // （AGENTS.md: near_board_false_positive，评分/总结/报告/iOS UI 均不读取），
+        // 默认不跑；仅在显式设置 FALLLINE_ENABLE_VISUAL_LINE=1/true/yes 时计算，
+        // 供 debug-overlay 旧流程按需启用。帧流已是流式滑动窗、不再全片缓存帧。
+        let visualLineEnabled = ["1", "true", "yes"].contains(
+            (ProcessInfo.processInfo.environment["FALLLINE_ENABLE_VISUAL_LINE"] ?? "").lowercased())
+        let visualBoardObservation: BoardObservation? = visualLineEnabled
+            ? autoreleasepool {
+                BoardVisualLineDetector.detect(cgImage: cgImage, pose: bodyPose)
+            }
+            : nil
 
         // Phase 1 诊断：板身刃线检测（默认关）。仅写诊断字段，不接触评分。
         // 诊断失败须局部隔离，不能拖垮同帧已成功的姿态/评分结果。
